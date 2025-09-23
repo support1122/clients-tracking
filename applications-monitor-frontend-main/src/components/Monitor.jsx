@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import ClientDetails from "./ClientDetails";
 
 const API_BASE = import.meta.env.VITE_API_URL;
@@ -932,6 +932,42 @@ export default function Monitor({ onClose, userRole = 'admin' }) {
   const [clientSearchTerm, setClientSearchTerm] = useState('');
   const [clientDetails, setClientDetails] = useState({});
 
+  // In-memory caches (TTL-based) for jobs and clients
+  const cacheRef = useRef({
+    jobs: { data: null, ts: 0 },
+    clients: { data: null, ts: 0 },
+    jobDescriptions: {} // { [id]: { text, ts } }
+  });
+  const CACHE_TTL_MS = 60 * 1000; // 1 minute TTL
+  const JD_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+  const getJobId = (job) => job?._id || job?.jobID;
+
+  const fetchJobDescriptionById = async (id) => {
+    const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error(`JD API ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    return data?.job?.jobDescription || '';
+  };
+
+  const ensureJobDescription = async (job) => {
+    const id = getJobId(job);
+    if (!id) return '';
+    const now = Date.now();
+    const entry = cacheRef.current.jobDescriptions[id];
+    if (entry && now - entry.ts < JD_CACHE_TTL_MS) {
+      return entry.text;
+    }
+    try {
+      const text = await fetchJobDescriptionById(id);
+      cacheRef.current.jobDescriptions[id] = { text, ts: now };
+      return text;
+    } catch (e) {
+      console.warn('Failed to fetch job description:', e);
+      return '';
+    }
+  };
+
   // (Auth removed)
 
   // Fetch client details
@@ -976,25 +1012,33 @@ export default function Monitor({ onClose, userRole = 'admin' }) {
         } catch (syncError) {
           console.warn('Client sync failed (non-critical):', syncError);
         }
-        
-        const data = await fetchAllJobs();
-        setJobs(data);
-        
-        // Fetch all clients directly from the API
-        const clientsResponse = await fetch(`${API_BASE}/api/clients`);
-        
-        if (clientsResponse.ok) {
-          const clientsData = await clientsResponse.json();
-          const clientDetailsMap = {};
-          
-          // Store client details for each client
-          clientsData.clients.forEach(client => {
-            clientDetailsMap[client.email] = client;
-          });
-          
-          setClientDetails(clientDetailsMap);
+
+        const now = Date.now();
+        // Jobs: serve from cache if fresh
+        if (cacheRef.current.jobs.data && now - cacheRef.current.jobs.ts < CACHE_TTL_MS) {
+          setJobs(cacheRef.current.jobs.data);
         } else {
-          setErr("Failed to fetch client data");
+          const data = await fetchAllJobs();
+          cacheRef.current.jobs = { data, ts: now };
+          setJobs(data);
+        }
+
+        // Clients: serve from cache if fresh
+        if (cacheRef.current.clients.data && now - cacheRef.current.clients.ts < CACHE_TTL_MS) {
+          setClientDetails(cacheRef.current.clients.data);
+        } else {
+          const clientsResponse = await fetch(`${API_BASE}/api/clients`);
+          if (clientsResponse.ok) {
+            const clientsData = await clientsResponse.json();
+            const clientDetailsMap = {};
+            clientsData.clients.forEach(client => {
+              clientDetailsMap[client.email] = client;
+            });
+            cacheRef.current.clients = { data: clientDetailsMap, ts: now };
+            setClientDetails(clientDetailsMap);
+          } else {
+            setErr("Failed to fetch client data");
+          }
         }
       } catch (e) {
         setErr(e.message || "Failed to fetch");
@@ -1369,9 +1413,11 @@ export default function Monitor({ onClose, userRole = 'admin' }) {
                   <JobCard 
                     key={job._id || job.jobID || `${job.userID}-${job.joblink}`} 
                     job={job} 
-                    onJobClick={(job) => {
+                    onJobClick={async (job) => {
                       setSelectedJob(job);
                       setShowJobDetails(true);
+                      const desc = await ensureJobDescription(job);
+                      setSelectedJob(prev => prev ? { ...prev, jobDescription: desc } : prev);
                     }}
                   />
                 ))}

@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 
-const API_BASE = import.meta.env.VITE_API_URL;
+const API_BASE = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' && window.__API_BASE__) || 'http://localhost:8086';
 
 // Validate required environment variables
-if (!API_BASE) {
-  console.error('❌ VITE_API_URL environment variable is required');
+if (!import.meta.env.VITE_API_URL) {
+  console.warn('ℹ️ VITE_API_URL is not set; falling back to', API_BASE);
 }
 
 export default function Login({ onLogin }) {

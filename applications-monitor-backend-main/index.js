@@ -29,10 +29,7 @@ if (!JWT_SECRET) {
 }
 
 const app = express();
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'https://dashboardtracking.vercel.app',
-  credentials: true
-}));
+app.use(cors());
 app.use(express.json());
 
 // Middleware to verify JWT token
@@ -107,14 +104,14 @@ setTimeout(async () => {
 }, 2000);
         //get all the jobdatabase data..
 const getAllJobs = async (req, res)=> {
-    const jobDB = await JobModel.find();
+    const jobDB = await JobModel.find().select('-jobDescription').lean();
     res.status(200).json({jobDB});
 }
 
 // Client management endpoints
 const getAllClients = async (req, res) => {
     try {
-        const clients = await ClientModel.find();
+        const clients = await ClientModel.find().lean();
         res.status(200).json({clients});
     } catch (error) {
         res.status(500).json({error: error.message});
@@ -124,7 +121,7 @@ const getAllClients = async (req, res) => {
 const getClientByEmail = async (req, res) => {
     try {
         const { email } = req.params;
-        const client = await ClientModel.findOne({ email: email.toLowerCase() });
+        const client = await ClientModel.findOne({ email: email.toLowerCase() }).lean();
         if (!client) {
             return res.status(404).json({error: 'Client not found'});
         }
@@ -477,11 +474,32 @@ app.post('/api/auth/cleanup-session-keys', verifyToken, verifyAdmin, cleanupSess
 app.post('/', getAllJobs);
 app.post('/api/jobs', createJob);
 
+// Get one job (with full description) by id
+app.get('/api/jobs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: 'Job id is required' });
+    const job = await JobModel.findById(id).lean();
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    // Return only fields needed by frontend, including jobDescription
+    const {
+      _id,
+      jobID,
+      jobDescription,
+      updatedAt,
+      dateAdded
+    } = job;
+    return res.status(200).json({ job: { _id, jobID, jobDescription, updatedAt, dateAdded } });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 // Auto-sync clients from jobdbs to dashboardtrackings
 const syncClientsFromJobs = async (req, res) => {
     try {
         // Get all unique userIDs from jobs
-        const jobs = await JobModel.find({}, 'userID');
+        const jobs = await JobModel.find({}, 'userID').lean();
         const uniqueUserIDs = [...new Set(jobs.map(job => job.userID).filter(id => 
             id && /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(id)
         ))];
@@ -489,7 +507,7 @@ const syncClientsFromJobs = async (req, res) => {
         console.log(`Found ${uniqueUserIDs.length} unique valid userIDs in jobs`);
 
         // Check which clients already exist in dashboardtrackings
-        const existingClients = await ClientModel.find({}, 'email');
+        const existingClients = await ClientModel.find({}, 'email').lean();
         const existingEmails = existingClients.map(client => client.email);
         
         // Find missing clients
