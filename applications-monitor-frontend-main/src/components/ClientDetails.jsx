@@ -230,8 +230,103 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin' }) => {
 
   if (loading && !client) {
     return (
-      <div className="flex items-center justify-center p-8">
-        <div className="text-slate-600">Loading client details...</div>
+      <div 
+        className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4"
+        onClick={onClose}
+      >
+        <div 
+          className="bg-white rounded-2xl shadow-2xl max-w-7xl w-full max-h-[95vh] overflow-hidden"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header Skeleton */}
+          <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-indigo-700 px-8 py-6 text-white relative overflow-hidden">
+            <div className="absolute inset-0 bg-gradient-to-r from-blue-600/20 to-indigo-700/20 animate-pulse"></div>
+            <div className="relative flex justify-between items-center">
+              <div className="space-y-3">
+                <div className="h-8 w-64 bg-white/30 rounded-lg animate-pulse"></div>
+                <div className="h-5 w-48 bg-white/20 rounded-lg animate-pulse"></div>
+              </div>
+              <button
+                onClick={onClose}
+                className="p-3 bg-white/20 text-white rounded-xl hover:bg-white/30 transition-all duration-200 backdrop-blur-sm"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Content Skeleton */}
+          <div className="flex h-[calc(95vh-120px)] bg-gradient-to-br from-slate-50 to-blue-50">
+            {/* Sidebar Skeleton */}
+            <div className="w-80 bg-white border-r border-slate-200 p-6 overflow-y-auto">
+              <div className="space-y-2">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-100 animate-pulse">
+                    <div className="w-9 h-9 bg-slate-200 rounded-lg"></div>
+                    <div className="h-4 flex-1 bg-slate-200 rounded"></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Main Content Skeleton */}
+            <div className="flex-1 p-8 overflow-y-auto">
+              <div className="bg-white rounded-2xl p-6 shadow-lg border border-slate-200">
+                {/* Loading Animation */}
+                <div className="flex flex-col items-center justify-center py-12">
+                  <div className="relative">
+                    {/* Spinning Ring */}
+                    <div className="w-20 h-20 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+                    
+                    {/* Pulsing Inner Circle */}
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-12 h-12 bg-blue-100 rounded-full animate-pulse"></div>
+                    </div>
+                  </div>
+                  
+                  {/* Loading Text */}
+                  <div className="mt-6 space-y-2 text-center">
+                    <h3 className="text-lg font-semibold text-slate-800 animate-pulse">
+                      Loading Client Details
+                    </h3>
+                    <p className="text-sm text-slate-500 animate-pulse">
+                      Please wait while we fetch the information...
+                    </p>
+                  </div>
+                  
+                  {/* Loading Bars */}
+                  <div className="mt-8 w-full max-w-md space-y-3">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="space-y-2">
+                        <div className="h-3 bg-slate-200 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-gradient-to-r from-blue-400 to-blue-600 rounded-full animate-[shimmer_2s_ease-in-out_infinite]"
+                            style={{
+                              width: '40%',
+                              animation: `shimmer ${1 + i * 0.3}s ease-in-out infinite`
+                            }}
+                          ></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Form Fields Skeleton */}
+                <div className="mt-8 space-y-4">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="space-y-2">
+                      <div className="h-4 w-32 bg-slate-200 rounded animate-pulse"></div>
+                      <div className="h-12 w-full bg-slate-100 rounded-xl animate-pulse"></div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

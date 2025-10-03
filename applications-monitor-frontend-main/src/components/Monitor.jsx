@@ -932,6 +932,7 @@ export default function Monitor({ onClose, userRole = 'admin' }) {
   const [selectedJob, setSelectedJob] = useState(null);
   const [clientSearchTerm, setClientSearchTerm] = useState('');
   const [clientDetails, setClientDetails] = useState({});
+  const [selectedOperator, setSelectedOperator] = useState('all');
   // const navigate = useNavigate();
   // In-memory caches (TTL-based) for jobs and clients
   const cacheRef = useRef({
@@ -1083,15 +1084,42 @@ export default function Monitor({ onClose, userRole = 'admin' }) {
     return clientJobs.filter(isAppliedNow).sort(sortByUpdatedDesc);
   }, [clientJobs]);
 
+  // Get unique operators from applied jobs
+  const uniqueOperators = useMemo(() => {
+    if (!filterDate) return [];
+    const target = new Date(filterDate);
+    const jobsOnDate = appliedJobs.filter((job) => {
+      const dt = safeDate(job);
+      return dt && sameDay(dt, target);
+    });
+    
+    const operators = new Set();
+    jobsOnDate.forEach(job => {
+      const operatorName = job.operatorName || 'user';
+      operators.add(operatorName);
+    });
+    return Array.from(operators).sort();
+  }, [appliedJobs, filterDate]);
+
   // Middle column: date-filtered applied jobs (for the selected date)
   const dateFilteredJobs = useMemo(() => {
     if (!filterDate) return [];
     const target = new Date(filterDate);
-    return appliedJobs.filter((job) => {
+    let filtered = appliedJobs.filter((job) => {
       const dt = safeDate(job);
       return dt && sameDay(dt, target);
     });
-  }, [appliedJobs, filterDate]);
+    
+    // Apply operator filter if not "all"
+    if (selectedOperator !== 'all') {
+      filtered = filtered.filter((job) => {
+        const operatorName = job.operatorName || 'user';
+        return operatorName === selectedOperator;
+      });
+    }
+    
+    return filtered;
+  }, [appliedJobs, filterDate, selectedOperator]);
 
   const dateAppliedCount = dateFilteredJobs.length;
 
@@ -1374,31 +1402,60 @@ export default function Monitor({ onClose, userRole = 'admin' }) {
             </div>
 
             {/* Date Filter Row */}
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 flex-wrap">
               <label className="text-sm font-medium text-slate-700">Filter by date:</label>
               <input
                 type="date"
                 value={filterDate}
-                onChange={(e) => setFilterDate(e.target.value)}
+                onChange={(e) => {
+                  setFilterDate(e.target.value);
+                  setSelectedOperator('all'); // Reset operator when date changes
+                }}
                 className="px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
+              
+              {/* Operator Filter */}
+              {filterDate && uniqueOperators.length > 0 && (
+                <>
+                  <label className="text-sm font-medium text-slate-700">Filter by operator:</label>
+                  <select
+                    value={selectedOperator}
+                    onChange={(e) => setSelectedOperator(e.target.value)}
+                    className="px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                  >
+                    <option value="all">All Operators</option>
+                    {uniqueOperators.map(operator => (
+                      <option key={operator} value={operator}>
+                        {operator}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
+              
               {filterDate && (
                 <>
                 <button
-                  onClick={() => setFilterDate("")}
+                  onClick={() => {
+                    setFilterDate("");
+                    setSelectedOperator('all');
+                  }}
                     className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
                 >
                   Clear
                 </button>
                   <div className="flex items-center gap-2 px-3 py-1 bg-blue-50 border border-blue-200 rounded-lg">
                     <span className="text-sm font-medium text-blue-800">
-                      Applied on {new Date(filterDate).toLocaleDateString('en-GB')}:
+                      {selectedOperator === 'all' 
+                        ? `Applied on ${new Date(filterDate).toLocaleDateString('en-GB')}`
+                        : `${selectedOperator} applied on ${new Date(filterDate).toLocaleDateString('en-GB')}`
+                      }:
                     </span>
                     <span className="text-sm font-bold text-blue-900 bg-blue-200 px-2 py-0.5 rounded">
                       {dateAppliedCount}
                     </span>
                   </div>
-                  {calculateDailyTarget && (
+                  {calculateDailyTarget && selectedOperator === 'all' && (
                     <div className="flex items-center gap-2 px-3 py-1 bg-green-50 border border-green-200 rounded-lg">
                       <span className="text-sm font-medium text-green-800">
                         Expected: {calculateDailyTarget.expectedApplications} | 

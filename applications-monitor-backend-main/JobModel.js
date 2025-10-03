@@ -62,7 +62,12 @@ export const JobSchema = new mongoose.Schema({
     required : true,
     default : []
 
-  }
+  },
+  operatorName: {
+    type: String,
+    required: false,
+    default: 'user'
+  },
 });
 
 export const JobModel = mongoose.model('JobDB', JobSchema)

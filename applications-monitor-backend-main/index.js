@@ -143,6 +143,7 @@ const cleanupSessionKeys = async () => {
   } catch (error) {
     console.error('❌ Error cleaning up session keys:', error);
   }
+  
 };
 
 // Clean up session keys after database connection
