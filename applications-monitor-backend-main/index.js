@@ -66,7 +66,8 @@ const allowedOrigins = [
   "https://utm-track-frontend.vercel.app",
   'https://dashboardtracking.vercel.app',
   "https://clients-tracking.vercel.app",
-  "https://dashboardtracking.vercel.app"
+  "https://dashboardtracking.vercel.app",
+  "https://dashboardtracking.vercel.app/"
 ];
 
 app.use(
