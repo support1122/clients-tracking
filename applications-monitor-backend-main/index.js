@@ -2216,13 +2216,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
                 const [a, b, yy] = date.split('/').map(n => parseInt(n, 10));
                 d = a; m = b; y = yy; // Prefer D/M/YYYY
             }
-            const dd = String(d).padStart(2, '0');
-            const mm = String(m).padStart(2, '0');
-            const dmY = `${d}/${m}/${y}`;
-            const dmY0 = `${dd}/${mm}/${y}`;
-            const mdY = `${m}/${d}/${y}`;
-            const mdY0 = `${mm}/${dd}/${y}`;
-            multiFormatDateRegex = new RegExp(`^(?:${dmY}|${dmY0}|${mdY}|${mdY0})`);
+            const dayPattern = d < 10 ? `[0]?${d}` : `${d}`;
+            const monthPattern = m < 10 ? `[0]?${m}` : `${m}`;
+            multiFormatDateRegex = new RegExp(`^${dayPattern}/${monthPattern}/${y}(?=$|\\D)`);
         }
 
         // Helper to map statuses fuzzily
@@ -2352,13 +2348,9 @@ app.post('/api/analytics/applied-by-date', async (req, res) => {
             d = a; m = b; y = yy;
         }
         if (!y || !m || !d) return res.status(400).json({ success: false, error: 'Invalid date' });
-        const dd = String(d).padStart(2, '0');
-        const mm = String(m).padStart(2, '0');
-        const dmY = `${d}/${m}/${y}`;
-        const dmY0 = `${dd}/${mm}/${y}`;
-        const mdY = `${m}/${d}/${y}`;
-        const mdY0 = `${mm}/${dd}/${y}`;
-        const dateRegex = new RegExp(`^(?:${dmY}|${dmY0}|${mdY}|${mdY0})`);
+        const dayPattern = d < 10 ? `[0]?${d}` : `${d}`;
+        const monthPattern = m < 10 ? `[0]?${m}` : `${m}`;
+        const dateRegex = new RegExp(`^${dayPattern}/${monthPattern}/${y}(?=$|\\D)`);
 
         const results = await JobModel.aggregate([
             { $match: { appliedDate: { $regex: dateRegex } } },
@@ -2486,7 +2478,7 @@ if (callQueue && twilioClient && TWILIO_FROM) {
 
       await CallLogModel.findOneAndUpdate(
         { jobId: job.id },
-        { twilioCallSid: call.sid, callStatus: 'initiated', $push: { statusHistory: { event: 'initiated', status: 'calling', raw: { sid: call.sid }, timestamp: new Date() } } }
+        { twilioCallSid: call.sid, callStatus: 'initiated', status: 'calling', $push: { statusHistory: { event: 'initiated', status: 'calling', raw: { sid: call.sid }, timestamp: new Date() } } }
       );
 
       return { ok: true, sid: call.sid };
@@ -2554,8 +2546,46 @@ app.post('/api/calls/schedule', verifyToken, async (req, res) => {
 });
 
 // List recent call logs
+async function sweepOverdueCalls(graceMs = 120000) {
+  const now = Date.now();
+  const threshold = new Date(now - 0); 
+  const candidates = await CallLogModel.find({
+    scheduledFor: { $lte: new Date(now - graceMs) },
+    status: { $in: ['queued', 'in_progress', 'calling'] }
+  }).limit(200).lean();
+  for (const c of candidates) {
+    await CallLogModel.updateOne(
+      { _id: c._id },
+      {
+        status: 'completed',
+        callStatus: c.callStatus || 'completed',
+        callEndAt: new Date(),
+        $push: { statusHistory: { event: 'auto-completed', status: 'completed', timestamp: new Date(), raw: { reason: 'overdue_sweep' } } }
+      }
+    );
+  }
+  const callingTimeoutMs = 12000;
+  const callingCandidates = await CallLogModel.find({
+    status: 'calling',
+    updatedAt: { $lte: new Date(now - callingTimeoutMs) }
+  }).limit(200).lean();
+  for (const c of callingCandidates) {
+    await CallLogModel.updateOne(
+      { _id: c._id },
+      {
+        status: 'completed',
+        callStatus: 'completed',
+        callEndAt: new Date(),
+        $push: { statusHistory: { event: 'auto-completed', status: 'completed', timestamp: new Date(), raw: { reason: 'calling_timeout' } } }
+      }
+    );
+  }
+  return candidates.length + callingCandidates.length;
+}
+
 app.get('/api/calls/logs', verifyToken, async (req, res) => {
   try {
+    await sweepOverdueCalls(2 * 60 * 1000);
     const limit = Math.min(parseInt(req.query.limit || '50', 10), 200);
     const raw = await CallLogModel.find({})
       .sort({ createdAt: -1 })
