@@ -498,6 +498,83 @@ const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).
   }
 };
 
+// Get operations names for dropdown
+const getOperationsNames = async (req, res) => {
+    try {
+        const operations = await OperationsModel.find().select('name').lean();
+        const names = operations.map(op => op.name).filter(name => name).sort();
+        res.status(200).json({ success: true, names });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+// Get dashboard manager names for dropdown
+const getDashboardManagerNames = async (req, res) => {
+    try {
+        const managers = await ManagerModel.find({ isActive: true }).select('fullName').lean();
+        const names = managers.map(m => m.fullName).filter(name => name).sort();
+        res.status(200).json({ success: true, names });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+// Update client operations name
+const updateClientOperationsName = async (req, res) => {
+    try {
+        const { email, operationsName } = req.body;
+        
+        if (!email) {
+            return res.status(400).json({ success: false, error: 'Email is required' });
+        }
+
+        const client = await ClientModel.findOneAndUpdate(
+            { email: email.toLowerCase() },
+            { 
+                operationsName: operationsName || '',
+                updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+            },
+            { new: true }
+        ).select('email operationsName').lean();
+
+        if (!client) {
+            return res.status(404).json({ success: false, error: 'Client not found' });
+        }
+
+        res.status(200).json({ success: true, client });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+// Update client dashboard team lead name
+const updateClientDashboardTeamLead = async (req, res) => {
+    try {
+        const { email, dashboardTeamLeadName } = req.body;
+        
+        if (!email) {
+            return res.status(400).json({ success: false, error: 'Email is required' });
+        }
+
+        const client = await ClientModel.findOneAndUpdate(
+            { email: email.toLowerCase() },
+            { 
+                dashboardTeamLeadName: dashboardTeamLeadName || '',
+                updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+            },
+            { new: true }
+        ).select('email dashboardTeamLeadName').lean();
+
+        if (!client) {
+            return res.status(404).json({ success: false, error: 'Client not found' });
+        }
+
+        res.status(200).json({ success: true, client });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
 
 // const createOrUpdateClient = async (req, res) => {
 //     try {
@@ -2279,11 +2356,11 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         const overallMap = new Map(overall.map(r => [r.userID, r.counts]));
         const allUserIDs = Array.from(new Set([...overallMap.keys(), ...appliedMap.keys(), ...removedMap.keys()]));
 
-        // Fetch client info (name, planType, and status) from ClientModel for all userIDs
+        // Fetch client info (name, planType, status, operationsName, and dashboardTeamLeadName) from ClientModel for all userIDs
         const clientInfo = await ClientModel.find({ 
             email: { $in: allUserIDs } 
-        }).select('email name planType planPrice status jobStatus').lean();
-        const clientMap = new Map(clientInfo.map(c => [c.email, { name: c.name, planType: c.planType, planPrice: c.planPrice, status: c.status, jobStatus: c.jobStatus }]));
+        }).select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName').lean();
+        const clientMap = new Map(clientInfo.map(c => [c.email, { name: c.name, planType: c.planType, planPrice: c.planPrice, status: c.status, jobStatus: c.jobStatus, operationsName: c.operationsName || '', dashboardTeamLeadName: c.dashboardTeamLeadName || '' }]));
 
         // Prepare base rows from JobModel aggregates
         let rows = allUserIDs.map(email => {
@@ -2300,6 +2377,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
                 planPrice: client.planPrice || null,
                 status: client.status || null,
                 jobStatus: client.jobStatus || null,
+                operationsName: client.operationsName || '',
+                dashboardTeamLeadName: client.dashboardTeamLeadName || '',
                 saved: counts.saved || 0,
                 applied: counts.applied || 0,
                 interviewing: counts.interviewing || 0,
@@ -2797,6 +2876,9 @@ app.post('/api/clients', createOrUpdateClient);
 app.post('/api/clients/sync-from-jobs', syncClientsFromJobs);
 app.delete('/api/clients/delete/:email', deleteClient);
 app.put('/api/clients/:email/change-password', verifyToken, verifyAdmin, changeClientPassword);
+app.post('/api/clients/update-operations-name', updateClientOperationsName);
+app.post('/api/clients/update-dashboard-team-lead', updateClientDashboardTeamLead);
+app.get('/api/managers/names', getDashboardManagerNames);
 
 //get all the jobdatabase data..
 const getJobsByClient = async (req, res) => {
@@ -3068,6 +3150,7 @@ const syncManagerAssignments = async (req, res) => {
 
 // Operations routes
 app.get('/api/operations', getAllOperations);
+app.get('/api/operations/names', getOperationsNames);
 app.get('/api/operations/:email', getOperationsByEmail);
 app.post('/api/operations', createOrUpdateOperation);
 app.get('/api/operations/:email/jobs', getJobsByOperatorEmail);
