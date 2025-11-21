@@ -183,6 +183,12 @@ export const ClientSchema = new mongoose.Schema({
     required: true,
     default: ' '
   },
+  operationsName: {
+    type: String,
+    required: false,
+    default: '',
+    trim: true
+  },
   createdAt: {
     type: String,
     default: () => new Date().toLocaleString('en-US', 'Asia/Kolkata'),
