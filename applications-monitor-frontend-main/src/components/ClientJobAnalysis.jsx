@@ -10,6 +10,10 @@ export default function ClientJobAnalysis() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sortDir, setSortDir] = useState('desc'); // 'asc' | 'desc'
+  const [operationsNames, setOperationsNames] = useState([]);
+  const [savingOperations, setSavingOperations] = useState(new Set());
+  const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
+  const [savingDashboardManager, setSavingDashboardManager] = useState(new Set());
 
   const convertToDMY = useCallback((iso) => {
     if (!iso) return '';
@@ -40,6 +44,40 @@ export default function ClientJobAnalysis() {
       setLoading(false);
     }
   }, [convertToDMY]);
+
+  // Fetch operations names on mount
+  useEffect(() => {
+    const fetchOperationsNames = async () => {
+      try {
+        const resp = await fetch(`${API_BASE}/api/operations/names`);
+        if (!resp.ok) throw new Error('Failed to fetch operations names');
+        const data = await resp.json();
+        if (data.success) {
+          setOperationsNames(data.names || []);
+        }
+      } catch (e) {
+        console.error('Failed to load operations names:', e);
+      }
+    };
+    fetchOperationsNames();
+  }, []);
+
+  // Fetch dashboard manager names on mount
+  useEffect(() => {
+    const fetchDashboardManagerNames = async () => {
+      try {
+        const resp = await fetch(`${API_BASE}/api/managers/names`);
+        if (!resp.ok) throw new Error('Failed to fetch dashboard manager names');
+        const data = await resp.json();
+        if (data.success) {
+          setDashboardManagerNames(data.names || []);
+        }
+      } catch (e) {
+        console.error('Failed to load dashboard manager names:', e);
+      }
+    };
+    fetchDashboardManagerNames();
+  }, []);
 
   useEffect(() => {
     fetchAnalysis();
@@ -72,6 +110,62 @@ export default function ClientJobAnalysis() {
     }
   }, [date, convertToDMY]);
 
+  const handleOperationsNameChange = async (email, operationsName) => {
+    setSavingOperations(prev => new Set(prev).add(email));
+    try {
+      const resp = await fetch(`${API_BASE}/api/clients/update-operations-name`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, operationsName })
+      });
+      if (!resp.ok) throw new Error('Failed to save');
+      const data = await resp.json();
+      if (data.success) {
+        // Update the row in state
+        setRows(prev => prev.map(r => 
+          r.email === email ? { ...r, operationsName } : r
+        ));
+        toast.success('Operations name updated successfully');
+      }
+    } catch (e) {
+      toast.error('Failed to update operations name');
+    } finally {
+      setSavingOperations(prev => {
+        const next = new Set(prev);
+        next.delete(email);
+        return next;
+      });
+    }
+  };
+
+  const handleDashboardManagerChange = async (email, dashboardTeamLeadName) => {
+    setSavingDashboardManager(prev => new Set(prev).add(email));
+    try {
+      const resp = await fetch(`${API_BASE}/api/clients/update-dashboard-team-lead`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, dashboardTeamLeadName })
+      });
+      if (!resp.ok) throw new Error('Failed to save');
+      const data = await resp.json();
+      if (data.success) {
+        // Update the row in state
+        setRows(prev => prev.map(r => 
+          r.email === email ? { ...r, dashboardTeamLeadName } : r
+        ));
+        toast.success('Dashboard Manager updated successfully');
+      }
+    } catch (e) {
+      toast.error('Failed to update dashboard manager');
+    } finally {
+      setSavingDashboardManager(prev => {
+        const next = new Set(prev);
+        next.delete(email);
+        return next;
+      });
+    }
+  };
+
   return (
     <Layout>
       <div className="p-6 max-w-7xl mx-auto">
@@ -93,6 +187,8 @@ export default function ClientJobAnalysis() {
                   <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Client</th>
                   <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Status</th>
                   <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Plan Type</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Operations Name</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Dashboard Manager</th>
                   <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Total Applications</th>
                   <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Saved</th>
                   <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Applied</th>
@@ -165,6 +261,36 @@ export default function ClientJobAnalysis() {
                         </span>
                       ) : '-'}
                     </td>
+                    <td className="px-4 py-2 text-sm">
+                      <select
+                        value={r.operationsName || ''}
+                        onChange={(e) => handleOperationsNameChange(r.email, e.target.value)}
+                        disabled={savingOperations.has(r.email)}
+                        className="px-2 py-1 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed min-w-[120px]"
+                      >
+                        <option value="">-- Select --</option>
+                        {operationsNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-2 text-sm">
+                      <select
+                        value={r.dashboardTeamLeadName || ''}
+                        onChange={(e) => handleDashboardManagerChange(r.email, e.target.value)}
+                        disabled={savingDashboardManager.has(r.email)}
+                        className="px-2 py-1 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed min-w-[120px]"
+                      >
+                        <option value="">-- Select --</option>
+                        {dashboardManagerNames.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
                     <td className="px-4 py-2 text-sm">{totalApplications}</td>
                     <td className="px-4 py-2 text-sm">{r.saved}</td>
                     <td className="px-4 py-2 text-sm">{r.applied}</td>
@@ -185,7 +311,7 @@ export default function ClientJobAnalysis() {
                 )})}
                 {rows.length===0 && (
                   <tr>
-                    <td colSpan={11} className="px-4 py-10 text-center text-gray-500">No data</td>
+                    <td colSpan={13} className="px-4 py-10 text-center text-gray-500">No data</td>
                   </tr>
                 )}
               </tbody>
