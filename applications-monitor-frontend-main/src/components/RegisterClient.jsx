@@ -12,7 +12,8 @@ const RegisterClient = () => {
     confirmPassword: '',
     planType: 'Free Trial',
     dashboardManager: '',
-    amountPaid: ''
+    amountPaid: '',
+    currency: '$'
   });
 
   const [dashboardManagers, setDashboardManagers] = useState([]);
@@ -178,7 +179,9 @@ const RegisterClient = () => {
       gmailCredentials: { email: "", password: "" },
       dashboardCredentials: { username: "", password: "" },
       linkedinCredentials: { username: "", password: "" },
-      amountPaid: formData.amountPaid ? parseFloat(formData.amountPaid) || 0 : 0,
+      amountPaid: formData.amountPaid && formData.currency 
+        ? `${formData.currency}${formData.amountPaid}` 
+        : 0,
       amountPaidDate: "",
       modeOfPayment: "paypal",
       status: "active",
@@ -207,6 +210,7 @@ const RegisterClient = () => {
         planType: "Free Trial",
         dashboardManager: "",
         amountPaid: "",
+        currency: "$",
       });
       setErrors({});
       setShowForm(false);
@@ -383,7 +387,7 @@ const RegisterClient = () => {
                   <button
                     onClick={() => {
                       setShowForm(false);
-                      setFormData({ firstName: '', lastName: '', email: '', password: '', confirmPassword: '', planType: 'Free Trial', dashboardManager: '', amountPaid: '' });
+                      setFormData({ firstName: '', lastName: '', email: '', password: '', confirmPassword: '', planType: 'Free Trial', dashboardManager: '', amountPaid: '', currency: '$' });
                       setErrors({});
                     }}
                     className="text-gray-400 hover:text-gray-600"
@@ -507,21 +511,34 @@ const RegisterClient = () => {
                     </div>
                   </div>
 
-                  {/* Amount Paid */}
-                  <div>
-                    <input
-                      type="number"
-                      name="amountPaid"
-                      value={formData.amountPaid}
-                      onChange={handleInputChange}
-                      placeholder="Amount Paid"
-                      min="0"
-                      step="0.01"
-                      className={`w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                        errors.amountPaid ? 'border-red-400' : 'border-gray-300'
-                      }`}
-                    />
-                    {errors.amountPaid && <p className="text-red-500 text-xs mt-1">{errors.amountPaid}</p>}
+                  {/* Amount Paid with Currency */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="col-span-1">
+                      <select
+                        name="currency"
+                        value={formData.currency}
+                        onChange={handleInputChange}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="$">$ (Dollar)</option>
+                        <option value="₹">₹ (Rupee)</option>
+                      </select>
+                    </div>
+                    <div className="col-span-2">
+                      <input
+                        type="number"
+                        name="amountPaid"
+                        value={formData.amountPaid}
+                        onChange={handleInputChange}
+                        placeholder="Amount Paid"
+                        min="0"
+                        step="0.01"
+                        className={`w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                          errors.amountPaid ? 'border-red-400' : 'border-gray-300'
+                        }`}
+                      />
+                      {errors.amountPaid && <p className="text-red-500 text-xs mt-1">{errors.amountPaid}</p>}
+                    </div>
                   </div>
 
                   {/* Submit Button */}
