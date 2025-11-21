@@ -240,7 +240,10 @@ export default function ClientJobAnalysis() {
                   const rowColor = exceeded ? 'bg-red-100' : (idx%2===0 ? 'bg-white' : 'bg-gray-50');
                   return (
                   <tr key={r.email+idx} className={rowColor}>
-                    <td className="px-4 py-2 text-sm text-gray-900">{r.email}</td>
+                    <td className="px-4 py-2 text-sm">
+                      <div className="text-gray-900 font-medium">{r.name || r.email}</div>
+                      <div className="text-gray-500 text-xs">{r.email}</div>
+                    </td>
                     <td className="px-4 py-2 text-sm">
                       {r.status ? (
                         <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
