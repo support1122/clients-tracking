@@ -146,9 +146,9 @@ export const ClientSchema = new mongoose.Schema({
     }
   },
   amountPaid: {
-    type: Number,
-    required: true,
-    default: 0
+    type: String,
+    required: false,
+    default: '0'
   },
   amountPaidDate: {
     type: String,
