@@ -1921,13 +1921,12 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-4">
-      {/* Top Right Buttons */}
+      {/* Top Right Buttons (reserved) */}
       <div className="absolute top-4 right-4 z-30 flex gap-2" />
-      
-      <div className="flex min-h-[calc(100vh-2rem)] rounded-xl border border-slate-200 bg-white shadow-lg relative">
-      {/* Left: Navigation Buttons - Sliding Panel */}
-      <div className={`${leftPanelOpen ? 'w-64' : 'w-0'} transition-all duration-300 overflow-hidden border-r border-slate-200 bg-blue-50`}>
-        <div className="w-64 p-3 flex flex-col gap-3">
+
+      {/* Top Bar Menu */}
+      <div className="mb-4 rounded-xl border border-slate-200 bg-blue-50 shadow-sm px-3 py-2">
+        <div className="flex flex-wrap gap-2 justify-center">
           <button
             onClick={() => {
               setShowClients(true);
@@ -1943,20 +1942,13 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
               setRightSidebarOpen(false);
               navigate('/');
             }}
-            className={`w-full p-3 rounded-lg transition-colors font-medium ${
+            className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium ${
               showClients ? 'bg-blue-700 text-white' : 'bg-blue-600 text-white hover:bg-blue-700'
             }`}
           >
             Clients
           </button>
-          <button
-            onClick={() => {
-              navigate('/client-dashboard');
-            }}
-            className="w-full p-3 rounded-lg transition-colors font-medium bg-purple-600 text-white hover:bg-purple-700"
-          >
-            Client Dashboard
-          </button>
+          
           <button
             onClick={() => {
               setShowOperations(true);
@@ -1972,95 +1964,91 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
               setRightSidebarOpen(false);
               navigate('/');
             }}
-            className={`w-full p-3 rounded-lg transition-colors font-medium ${
+            className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium ${
               showOperations ? 'bg-green-700 text-white' : 'bg-green-600 text-white hover:bg-green-700'
             }`}
           >
             Operations Team
           </button>
           <button
-  onClick={() => {
-    setShowRegisterClient(true);
-    setShowClients(false);
-    setShowOperations(false);
-    setSelectedClient(null);
-    setSelectedOperation(null);
-    setSelectedStatus(null);
-    setFilterDate("");
-    setOperationFilterDate("");
-    setSelectedClientFilter("");
-    setClientStatusFilter("all");
-    setRightSidebarOpen(false);
-    navigate('/clients/new');
-  }}
-  className={`w-full p-3 rounded-lg transition-colors font-medium ${
-    showRegisterClient ? 'bg-orange-700 text-white' : 'bg-orange-600 text-white hover:bg-orange-700'
-  } ${JSON.parse(localStorage.getItem('user') || '{}')?.role === 'team_lead' ? 'hidden' : ''}`}
->
-  Register Client
-</button>
-
-<button
-  onClick={() => {
-    setShowRegisterClient(false);
-    setShowClients(false);
-    setShowOperations(false);
-    setSelectedClient(null);
-    setSelectedOperation(null);
-    setSelectedStatus(null);
-    setFilterDate("");
-    setOperationFilterDate("");
-    setSelectedClientFilter("");
-    setClientStatusFilter("all");
-    setRightSidebarOpen(false);
-    navigate('/manager-dashboard');
-  }}
-  className={`w-full p-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium ${
-    JSON.parse(localStorage.getItem('user') || '{}')?.role === 'team_lead' ? 'hidden' : ''
-  }`}
->
-  Manager Dashboard
-</button>
-
+            onClick={() => {
+              navigate('/client-dashboard');
+            }}
+            className="px-3 py-2 text-sm rounded-lg transition-colors font-medium bg-purple-600 text-white hover:bg-purple-700"
+          >
+            Client Dashboard
+          </button>
+          <button
+            onClick={() => {
+              setShowRegisterClient(true);
+              setShowClients(false);
+              setShowOperations(false);
+              setSelectedClient(null);
+              setSelectedOperation(null);
+              setSelectedStatus(null);
+              setFilterDate("");
+              setOperationFilterDate("");
+              setSelectedClientFilter("");
+              setClientStatusFilter("all");
+              setRightSidebarOpen(false);
+              navigate('/clients/new');
+            }}
+            className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium ${
+              showRegisterClient ? 'bg-orange-700 text-white' : 'bg-orange-600 text-white hover:bg-orange-700'
+            } ${JSON.parse(localStorage.getItem('user') || '{}')?.role === 'team_lead' ? 'hidden' : ''}`}
+          >
+            Register Client
+          </button>
+          <button
+            onClick={() => {
+              setShowRegisterClient(false);
+              setShowClients(false);
+              setShowOperations(false);
+              setSelectedClient(null);
+              setSelectedOperation(null);
+              setSelectedStatus(null);
+              setFilterDate("");
+              setOperationFilterDate("");
+              setSelectedClientFilter("");
+              setClientStatusFilter("all");
+              setRightSidebarOpen(false);
+              navigate('/manager-dashboard');
+            }}
+            className={`px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium ${
+              JSON.parse(localStorage.getItem('user') || '{}')?.role === 'team_lead' ? 'hidden' : ''
+            }`}
+          >
+            Manager Dashboard
+          </button>
+          <button
+            onClick={() => {
+              navigate('/job-analytics');
+            }}
+            className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
+          >
+            Job Analytics
+          </button>
+          <button
+            onClick={() => {
+              navigate('/client-job-analysis');
+            }}
+            className="px-3 py-2 text-sm bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium"
+          >
+            Client Job Analysis
+          </button>
+          <button
+            onClick={() => {
+              navigate('/call-scheduler');
+            }}
+            className="px-3 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium"
+          >
+            Call Scheduler
+          </button>
         </div>
       </div>
 
-      {/* Toggle Button */}
-      <button
-        onClick={() => {
-          if (!leftPanelOpen) {
-            // Opening panel - show client selection by default
-            setLeftPanelOpen(true);
-            setShowClients(true);
-            setShowOperations(false);
-            setShowRegisterClient(false);
-            setSelectedClient(null);
-            setSelectedOperation(null);
-            setSelectedStatus(null);
-            setFilterDate("");
-            setOperationFilterDate("");
-            setSelectedClientFilter("");
-            setClientStatusFilter("all");
-            setRightSidebarOpen(false);
-            navigate('/');
-          } else {
-            // Closing panel
-            setLeftPanelOpen(false);
-          }
-        }}
-        className={`absolute top-4 ${leftPanelOpen ? 'left-60' : 'left-4'} z-20 w-8 h-8 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-all duration-300 flex items-center justify-center shadow-lg border-2 border-white`}
-      >
-        <svg 
-          className={`w-4 h-4 transition-transform duration-300 ${leftPanelOpen ? 'rotate-180' : ''}`} 
-          fill="none" 
-          stroke="currentColor" 
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
-
-
+      {/* Main content area with optional right sidebar */}
+      <div className="flex min-h-[calc(100vh-5rem)] rounded-xl border border-slate-200 bg-white shadow-lg relative">
       {/* Middle: Content Area */}
       <div className="flex-1 overflow-auto border-r border-slate-200 bg-slate-50">
         
@@ -2517,7 +2505,6 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
           </>
         )}
       </div>
-
       {/* Right: Jobs filtered by selected status */}
       {selectedClient && !showClients && rightSidebarOpen && (
         <div className="bg-blue-50">
