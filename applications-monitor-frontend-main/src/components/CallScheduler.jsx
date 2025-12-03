@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import Layout from './Layout';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
+import { sanitizePhoneNumber } from '../utils/phoneUtils';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
 
@@ -45,7 +46,8 @@ export default function CallScheduler() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!/^\+?[1-9]\d{7,14}$/.test(phoneNumber)) {
+    const cleanPhoneNumber = sanitizePhoneNumber(phoneNumber);
+    if (!/^\+?[1-9]\d{7,14}$/.test(cleanPhoneNumber)) {
       toast.error('Enter a valid number with country code, e.g. +14155551234');
       return;
     }
@@ -60,7 +62,7 @@ export default function CallScheduler() {
       const resp = await fetch(`${API_BASE}/api/calls/schedule`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ phoneNumber, scheduleTime: iso, announceTimeText: announceTimeText?.trim() || undefined })
+        body: JSON.stringify({ phoneNumber: cleanPhoneNumber, scheduleTime: iso, announceTimeText: announceTimeText?.trim() || undefined })
       });
       const data = await resp.json();
       if (!resp.ok || !data.success) throw new Error(data.error || 'Failed');
@@ -92,7 +94,7 @@ export default function CallScheduler() {
               <input
                 type="tel"
                 value={phoneNumber}
-                onChange={(e)=>setPhoneNumber(e.target.value.trim())}
+                onChange={(e)=>setPhoneNumber(sanitizePhoneNumber(e.target.value))}
                 placeholder="+14155551234"
                 className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500"
               />
