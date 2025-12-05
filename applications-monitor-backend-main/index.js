@@ -2627,39 +2627,56 @@ app.post('/api/calls/schedule', verifyToken, async (req, res) => {
 // List recent call logs
 async function sweepOverdueCalls(graceMs = 120000) {
   const now = Date.now();
-  const threshold = new Date(now - 0); 
-  const candidates = await CallLogModel.find({
-    scheduledFor: { $lte: new Date(now - graceMs) },
-    status: { $in: ['queued', 'in_progress', 'calling'] }
-  }).limit(200).lean();
-  for (const c of candidates) {
-    await CallLogModel.updateOne(
-      { _id: c._id },
-      {
-        status: 'completed',
-        callStatus: c.callStatus || 'completed',
-        callEndAt: new Date(),
-        $push: { statusHistory: { event: 'auto-completed', status: 'completed', timestamp: new Date(), raw: { reason: 'overdue_sweep' } } }
-      }
-    );
+  let updatedCount = 0;
+  
+  try {
+    const overdueCandidates = await CallLogModel.find({
+      scheduledFor: { $lte: new Date(now - graceMs) },
+      status: { $in: ['queued', 'in_progress', 'calling'] }
+    }).limit(200).lean();
+    
+    for (const c of overdueCandidates) {
+      await CallLogModel.updateOne(
+        { _id: c._id },
+        {
+          status: 'completed',
+          callStatus: c.callStatus || 'completed',
+          callEndAt: new Date(),
+          $push: { statusHistory: { event: 'auto-completed', status: 'completed', timestamp: new Date(), raw: { reason: 'overdue_sweep' } } }
+        }
+      );
+      updatedCount++;
+    }
+    
+    const callingTimeoutMs = 10 * 60 * 1000; // 10 minutes
+    const callingCandidates = await CallLogModel.find({
+      status: 'calling',
+      updatedAt: { $lte: new Date(now - callingTimeoutMs) }
+    }).limit(200).lean();
+    
+    for (const c of callingCandidates) {
+      await CallLogModel.updateOne(
+        { _id: c._id },
+        {
+          status: 'completed',
+          callStatus: 'completed',
+          callEndAt: new Date(),
+          $push: { statusHistory: { event: 'auto-completed', status: 'completed', timestamp: new Date(), raw: { reason: 'calling_timeout_10min', originalStatus: c.status, originalCallStatus: c.callStatus, stuckForMinutes: Math.round((now - new Date(c.updatedAt).getTime()) / 60000) } } }
+        }
+      );
+      updatedCount++;
+      console.log(`[Call Sweep] Auto-completed call ${c._id} (phone: ${c.phoneNumber}) `);
+    }
+    
+    if (updatedCount > 0) {
+      console.log(`[Call Sweep] Auto-completed ${updatedCount} stuck calls`);
+    }
+    
+    return updatedCount;
+  } catch (error) {
+    console.error('❌ [Call Sweep] Error sweeping overdue calls:', error);
+    return 0;
   }
-  const callingTimeoutMs = 12000;
-  const callingCandidates = await CallLogModel.find({
-    status: 'calling',
-    updatedAt: { $lte: new Date(now - callingTimeoutMs) }
-  }).limit(200).lean();
-  for (const c of callingCandidates) {
-    await CallLogModel.updateOne(
-      { _id: c._id },
-      {
-        status: 'completed',
-        callStatus: 'completed',
-        callEndAt: new Date(),
-        $push: { statusHistory: { event: 'auto-completed', status: 'completed', timestamp: new Date(), raw: { reason: 'calling_timeout' } } }
-      }
-    );
-  }
-  return candidates.length + callingCandidates.length;
 }
 
 app.get('/api/calls/logs', verifyToken, async (req, res) => {
@@ -3197,4 +3214,52 @@ app.post('/api/clients/sync-managers', syncManagerAssignments);
 
 // Client details route (removed duplicate - using getClientByEmail instead)
 
-app.listen(process.env.PORT);
+// Start automated call status cleanup job
+// Runs every 2 minutes to update stuck "calling" calls to "completed"
+let callSweepInterval: NodeJS.Timeout | null = null;
+
+function startCallSweepJob() {
+  // Run immediately on startup
+  sweepOverdueCalls().catch(err => {
+    console.error('❌ [Call Sweep] Initial sweep error:', err);
+  });
+  
+  // Then run every 2 minutes
+  callSweepInterval = setInterval(async () => {
+    try {
+      const updated = await sweepOverdueCalls();
+      if (updated > 0) {
+        console.log(`🔄 [Call Sweep] Auto-updated ${updated} calls from "calling" to "completed"`);
+      }
+    } catch (error) {
+      console.error('❌ [Call Sweep] Scheduled sweep error:', error);
+    }
+  }, 2 * 60 * 1000); // Every 2 minutes
+  
+  console.log('✅ [Call Sweep] Automated call status cleanup job started (runs every 2 minutes)');
+}
+
+// Start the server
+app.listen(process.env.PORT, () => {
+  console.log(`✅ Server is live at port: ${process.env.PORT}`);
+  
+  // Start the automated call sweep job
+  startCallSweepJob();
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 SIGTERM received, shutting down gracefully...');
+  if (callSweepInterval) {
+    clearInterval(callSweepInterval);
+  }
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 SIGINT received, shutting down gracefully...');
+  if (callSweepInterval) {
+    clearInterval(callSweepInterval);
+  }
+  process.exit(0);
+});
