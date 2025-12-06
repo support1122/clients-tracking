@@ -3216,7 +3216,7 @@ app.post('/api/clients/sync-managers', syncManagerAssignments);
 
 // Start automated call status cleanup job
 // Runs every 2 minutes to update stuck "calling" calls to "completed"
-let callSweepInterval: NodeJS.Timeout | null = null;
+let callSweepInterval = null;
 
 function startCallSweepJob() {
   // Run immediately on startup
