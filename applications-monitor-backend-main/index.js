@@ -2648,24 +2648,26 @@ async function sweepOverdueCalls(graceMs = 120000) {
       updatedCount++;
     }
     
-    const callingTimeoutMs = 10 * 60 * 1000; // 10 minutes
+    // Auto-complete calls stuck in "calling" status for more than 30 seconds - NO MATTER WHAT
+    const callingTimeoutMs = 30 * 1000; // 30 seconds - aggressive timeout to ensure calls never stay stuck
     const callingCandidates = await CallLogModel.find({
       status: 'calling',
       updatedAt: { $lte: new Date(now - callingTimeoutMs) }
     }).limit(200).lean();
     
     for (const c of callingCandidates) {
+      const stuckForSeconds = Math.round((now - new Date(c.updatedAt).getTime()) / 1000);
       await CallLogModel.updateOne(
         { _id: c._id },
         {
           status: 'completed',
           callStatus: 'completed',
           callEndAt: new Date(),
-          $push: { statusHistory: { event: 'auto-completed', status: 'completed', timestamp: new Date(), raw: { reason: 'calling_timeout_10min', originalStatus: c.status, originalCallStatus: c.callStatus, stuckForMinutes: Math.round((now - new Date(c.updatedAt).getTime()) / 60000) } } }
+          $push: { statusHistory: { event: 'auto-completed', status: 'completed', timestamp: new Date(), raw: { reason: 'calling_timeout_30sec', originalStatus: c.status, originalCallStatus: c.callStatus, stuckForSeconds } } }
         }
       );
       updatedCount++;
-      console.log(`[Call Sweep] Auto-completed call ${c._id} (phone: ${c.phoneNumber}) `);
+      console.log(`✅ [Call Sweep] Auto-completed call ${c._id} (phone: ${c.phoneNumber}) - was stuck in "calling" for ${stuckForSeconds}s (30s timeout enforced)`);
     }
     
     if (updatedCount > 0) {
@@ -3215,7 +3217,7 @@ app.post('/api/clients/sync-managers', syncManagerAssignments);
 // Client details route (removed duplicate - using getClientByEmail instead)
 
 // Start automated call status cleanup job
-// Runs every 2 minutes to update stuck "calling" calls to "completed"
+// Runs every 30 seconds to update stuck "calling" calls to "completed" (after 30 seconds timeout - NO MATTER WHAT)
 let callSweepInterval = null;
 
 function startCallSweepJob() {
@@ -3224,7 +3226,7 @@ function startCallSweepJob() {
     console.error('❌ [Call Sweep] Initial sweep error:', err);
   });
   
-  // Then run every 2 minutes
+  // Then run every 30 seconds for faster detection of stuck calls
   callSweepInterval = setInterval(async () => {
     try {
       const updated = await sweepOverdueCalls();
@@ -3234,9 +3236,9 @@ function startCallSweepJob() {
     } catch (error) {
       console.error('❌ [Call Sweep] Scheduled sweep error:', error);
     }
-  }, 2 * 60 * 1000); // Every 2 minutes
+  }, 30 * 1000); // Every 30 seconds (changed from 2 minutes for faster detection)
   
-  console.log('✅ [Call Sweep] Automated call status cleanup job started (runs every 2 minutes)');
+  console.log('✅ [Call Sweep] Automated call status cleanup job started (runs every 30 seconds, auto-completes calls stuck in "calling" for >30 seconds - NO MATTER WHAT)');
 }
 
 // Start the server
