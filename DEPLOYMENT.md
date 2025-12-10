@@ -21,7 +21,7 @@ This guide will help you deploy the Dashboard Tracking application to Render.
 
 **Basic Settings:**
 - **Name**: `dashboard-tracking-backend`
-- **Root Directory**: `applications-monitor-backend-main`
+- **Root Directory**: `applications_monitor_backend`
 - **Environment**: `Node`
 - **Build Command**: `npm install`
 - **Start Command**: `npm start`

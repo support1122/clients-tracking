@@ -10,7 +10,7 @@
 
 ### Backend Environment Variables
 
-Create `.env` file in `applications-monitor-backend-main/`:
+Create `.env` file in `applications_monitor_backend/`:
 
 ```env
 # Server Configuration
@@ -51,7 +51,7 @@ VITE_NODE_ENV=production
 
 1. **Install Dependencies:**
    ```bash
-   cd applications-monitor-backend-main
+   cd applications_monitor_backend
    npm install
    ```
 
@@ -199,8 +199,8 @@ jobs:
       - uses: actions/setup-node@v2
         with:
           node-version: '18'
-      - run: cd applications-monitor-backend-main && npm install
-      - run: cd applications-monitor-backend-main && npm run build
+      - run: cd applications_monitor_backend && npm install
+      - run: cd applications_monitor_backend && npm run build
       # Add deployment steps here
 
   deploy-frontend:

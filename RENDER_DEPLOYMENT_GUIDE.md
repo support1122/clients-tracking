@@ -76,7 +76,7 @@ Fill in the following details:
 - **Environment**: `Node`
 - **Region**: Choose closest to your users
 - **Branch**: `main`
-- **Root Directory**: `applications-monitor-backend-main`
+- **Root Directory**: `applications_monitor_backend`
 - **Runtime**: `Node`
 - **Build Command**: `npm install`
 - **Start Command**: `npm start`
@@ -278,7 +278,7 @@ Click "Add Environment Variable" and add:
 
 ### Backend Service Settings:
 - **Name**: `dashboard-tracking-backend`
-- **Root Directory**: `applications-monitor-backend-main`
+- **Root Directory**: `applications_monitor_backend`
 - **Build Command**: `npm install`
 - **Start Command**: `npm start`
 - **Environment Variables**: `MONGODB_URI`, `NODE_ENV`

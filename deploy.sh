@@ -27,10 +27,10 @@ print_error() {
 check_env_files() {
     echo "🔍 Checking environment files..."
     
-    if [ ! -f "applications-monitor-backend-main/.env" ]; then
+    if [ ! -f "applications_monitor_backend/.env" ]; then
         print_warning "Backend .env file not found. Creating from .env.example..."
-        if [ -f "applications-monitor-backend-main/.env.example" ]; then
-            cp applications-monitor-backend-main/.env.example applications-monitor-backend-main/.env
+        if [ -f "applications_monitor_backend/.env.example" ]; then
+            cp applications_monitor_backend/.env.example applications_monitor_backend/.env
             print_status "Backend .env file created from example"
         else
             print_error "Backend .env.example file not found!"
@@ -60,7 +60,7 @@ install_dependencies() {
     
     # Backend dependencies
     echo "Installing backend dependencies..."
-    cd applications-monitor-backend-main
+    cd applications_monitor_backend
     npm install
     if [ $? -eq 0 ]; then
         print_status "Backend dependencies installed"
@@ -89,7 +89,7 @@ build_applications() {
     
     # Backend build
     echo "Building backend..."
-    cd applications-monitor-backend-main
+    cd applications_monitor_backend
     npm run build
     if [ $? -eq 0 ]; then
         print_status "Backend build completed"
@@ -118,7 +118,7 @@ start_applications() {
     
     # Start backend
     echo "Starting backend server..."
-    cd applications-monitor-backend-main
+    cd applications_monitor_backend
     npm run prod &
     BACKEND_PID=$!
     cd ..

@@ -43,7 +43,7 @@ A comprehensive client tracking and management system with role-based authentica
 
 2. **Backend Setup**
    ```bash
-   cd applications-monitor-backend-main
+   cd applications_monitor_backend
    npm install
    cp .env.example .env
    # Edit .env with your configuration
@@ -188,7 +188,7 @@ Make sure to set secure values for:
 ### Build for Production
 ```bash
 # Backend
-cd applications-monitor-backend-main
+cd applications_monitor_backend
 npm run build
 
 # Frontend
