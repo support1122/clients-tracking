@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import {
   BarChart,
   Bar,
+  LabelList,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -42,6 +43,31 @@ export function TopPerformersBarChart({ operations, operationsPerformance, loadi
       .sort((a, b) => b.applications - a.applications);
   }, [operations, operationsPerformance]);
 
+  const renderApplicationsLabel = ({ x, y, width, height, value }) => {
+    const display =
+      typeof value === 'number'
+        ? value.toLocaleString()
+        : value === 0
+          ? '0'
+          : (value ?? '');
+
+    if (display === '') return null;
+
+    return (
+      <text
+        x={x + width + 10}
+        y={y + height / 2}
+        dominantBaseline="middle"
+        textAnchor="start"
+        fill="#0f172a"
+        fontSize={12}
+        fontWeight={600}
+      >
+        {display}
+      </text>
+    );
+  };
+
   // Colorful palette - mix of different colors
   const COLORS = [
     '#10b981', // Green
@@ -78,19 +104,18 @@ export function TopPerformersBarChart({ operations, operationsPerformance, loadi
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={Math.max(300, chartData.length * 40)}>
-          <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 100, bottom: 5 }}>
+          <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 70, left: 100, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis type="number" />
             <YAxis dataKey="name" type="category" width={120} />
-            <Tooltip 
-              formatter={(value) => [`${value.toLocaleString()}`, 'Applications']}
-            />
             <Bar 
               dataKey="applications" 
               radius={[0, 8, 8, 0]}
               animationDuration={loading ? 0 : 1000}
               animationBegin={0}
             >
+              {/* Always-visible values on bars (instead of hover tooltip) */}
+              <LabelList dataKey="applications" content={renderApplicationsLabel} />
               {chartData.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
               ))}
