@@ -28,6 +28,7 @@ import {
 import { upload } from './utils/cloudinary.js';
 import { encrypt } from './utils/CryptoHelper.js';
 import { NewUserModel } from './schema_models/UserModel.js';
+import { ClientTodosModel } from './ClientTodosModel.js';
 
 
 
@@ -3213,6 +3214,179 @@ app.get('/api/operations/:email/available-clients', getAvailableClients);
 
 // Manager sync route
 app.post('/api/clients/sync-managers', syncManagerAssignments);
+
+
+const getCurrentISTTime = () => new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+
+app.get('/api/client-todos/all', async (req, res) => {
+  try {
+    const allClientTodos = await ClientTodosModel.find().lean();
+    const allClients = await ClientModel.find().select('email name').lean();
+    
+    const clientMap = {};
+    allClients.forEach(client => {
+      clientMap[client.email.toLowerCase()] = client.name;
+    });
+    
+    // Merge client info with todos
+    const clientsWithTodos = allClientTodos.map(todoData => ({
+      email: todoData.clientEmail,
+      name: clientMap[todoData.clientEmail.toLowerCase()] || todoData.clientEmail,
+      todos: todoData.todos || [],
+      lockPeriods: todoData.lockPeriods || [],
+      createdAt: todoData.createdAt,
+      updatedAt: todoData.updatedAt
+    }));
+    
+    // Also include clients that don't have todos yet
+    allClients.forEach(client => {
+      const exists = clientsWithTodos.find(c => c.email.toLowerCase() === client.email.toLowerCase());
+      if (!exists) {
+        clientsWithTodos.push({
+          email: client.email,
+          name: client.name,
+          todos: [],
+          lockPeriods: [],
+          createdAt: null,
+          updatedAt: null
+        });
+      }
+    });
+    
+    res.status(200).json({ success: true, clients: clientsWithTodos });
+  } catch (error) {
+    console.error('Error fetching all client todos:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get client TODOs and lock periods by email
+app.get('/api/client-todos/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    let clientTodos = await ClientTodosModel.findOne({ clientEmail: email.toLowerCase() });
+    
+    if (!clientTodos) {
+      // Create default structure if not found
+      clientTodos = new ClientTodosModel({
+        clientEmail: email.toLowerCase(),
+        todos: [
+          {
+            id: `todo-${Date.now()}-1`,
+            title: 'Create optimized resume',
+            notes: '',
+            completed: false,
+            createdAt: getCurrentISTTime(),
+            updatedAt: getCurrentISTTime()
+          },
+          {
+            id: `todo-${Date.now()}-2`,
+            title: 'LinkedIn Optimization',
+            notes: '',
+            completed: false,
+            createdAt: getCurrentISTTime(),
+            updatedAt: getCurrentISTTime()
+          },
+          {
+            id: `todo-${Date.now()}-3`,
+            title: 'Cover letter Optimization',
+            notes: '',
+            completed: false,
+            createdAt: getCurrentISTTime(),
+            updatedAt: getCurrentISTTime()
+          }
+        ],
+        lockPeriods: []
+      });
+      await clientTodos.save();
+    }
+    
+    res.status(200).json({ success: true, data: clientTodos });
+  } catch (error) {
+    console.error('Error fetching client todos:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Update client TODOs and lock periods
+app.put('/api/client-todos/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { todos, lockPeriods } = req.body;
+    
+    const updateData = {
+      updatedAt: getCurrentISTTime()
+    };
+    
+    if (todos !== undefined) {
+      updateData.todos = todos.map(todo => ({
+        ...todo,
+        updatedAt: todo.updatedAt || getCurrentISTTime()
+      }));
+    }
+    
+    if (lockPeriods !== undefined) {
+      updateData.lockPeriods = lockPeriods;
+    }
+    
+    const clientTodos = await ClientTodosModel.findOneAndUpdate(
+      { clientEmail: email.toLowerCase() },
+      { $set: updateData },
+      { new: true, upsert: true }
+    );
+    
+    res.status(200).json({ success: true, message: 'Client todos updated successfully', data: clientTodos });
+  } catch (error) {
+    console.error('Error updating client todos:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Check if current date is within any lock period
+app.post('/api/client-todos/check-lock-period', async (req, res) => {
+  try {
+    const { clientEmail } = req.body;
+    
+    if (!clientEmail) {
+      return res.status(400).json({ success: false, message: 'Client email is required' });
+    }
+    
+    const clientTodos = await ClientTodosModel.findOne({ clientEmail: clientEmail.toLowerCase() });
+    
+    if (!clientTodos || !clientTodos.lockPeriods || clientTodos.lockPeriods.length === 0) {
+      return res.status(200).json({ success: true, isLocked: false, message: null });
+    }
+    
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    
+    for (const period of clientTodos.lockPeriods) {
+      const startDate = new Date(period.startDate);
+      const endDate = new Date(period.endDate);
+      
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
+      
+      if (now >= startDate && now <= endDate) {
+        return res.status(200).json({
+          success: true,
+          isLocked: true,
+          message: period.reason || 'Job card movement is locked during this period. Please try again after the lock period ends.',
+          lockPeriod: {
+            startDate: period.startDate,
+            endDate: period.endDate,
+            reason: period.reason
+          }
+        });
+      }
+    }
+    
+    return res.status(200).json({ success: true, isLocked: false, message: null });
+  } catch (error) {
+    console.error('Error checking lock period:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Client details route (removed duplicate - using getClientByEmail instead)
 
