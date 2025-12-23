@@ -75,7 +75,7 @@ export default function Layout({ children }) {
               <button className={`px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium ${
                 ['team_lead', 'operations_intern'].includes(JSON.parse(localStorage.getItem('user') || '{}')?.role) ? 'hidden' : ''
               }`}>
-                Client Dashboard
+                Plan's Analytics
               </button>
             </Link>
 
