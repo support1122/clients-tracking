@@ -2075,6 +2075,16 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
           >
             Call Scheduler
           </button>
+          <button
+            onClick={() => {
+              navigate('/client-preferences');
+            }}
+            className={`px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium ${
+              ['team_lead', 'operations_intern'].includes(JSON.parse(localStorage.getItem('user') || '{}')?.role) ? 'hidden' : ''
+            }`}
+          >
+            Client Preferences
+          </button>
         </div>
       </div>
 
