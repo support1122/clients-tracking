@@ -2911,13 +2911,23 @@ const getRevenueStats = async (req, res) => {
     // Get all clients from ClientModel to calculate real revenue from amountPaid
     const allClients = await ClientModel.find({}).lean();
 
-    // Simply sum up all amountPaid values
-    let totalRevenue = 0;
+        // Sum up all amountPaid values (parsing strings to numbers)
+        let totalRevenue = 0;
 
-    allClients.forEach(client => {
-      const amountPaid = client.amountPaid || 0;
-      totalRevenue += amountPaid;
-    });
+        allClients.forEach(client => {
+            let amountPaid = client.amountPaid || 0;
+            
+            // If amountPaid is a string, parse it to a number
+            if (typeof amountPaid === 'string') {
+                // Remove currency symbols ($, ₹) and any whitespace
+                amountPaid = amountPaid.replace(/[$₹,\s]/g, '').trim();
+                // Convert to number, default to 0 if invalid
+                amountPaid = parseFloat(amountPaid) || 0;
+            }
+            
+            // Ensure it's a number before adding
+            totalRevenue += Number(amountPaid) || 0;
+        });
 
     res.status(200).json({
       success: true,
