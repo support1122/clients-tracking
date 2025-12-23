@@ -6,8 +6,7 @@ const ClientTodosSchema = new mongoose.Schema({
     required: true,
     unique: true,
     lowercase: true,
-    trim: true,
-    index: true
+    trim: true
   },
   todos: [{
     id: {
@@ -71,8 +70,8 @@ const ClientTodosSchema = new mongoose.Schema({
   timestamps: false
 });
 
-// Index for faster lookups
-ClientTodosSchema.index({ clientEmail: 1 });
+// Note: clientEmail already has unique: true which automatically creates an index
+// No need for explicit index definition
 
 export const ClientTodosModel = mongoose.model('ClientTodos', ClientTodosSchema);
 

@@ -1,16 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import Layout from './Layout';
 import toast from 'react-hot-toast';
-import { 
-  CheckCircle2, 
-  Circle, 
-  Plus, 
-  Trash2, 
-  Calendar, 
-  Lock, 
-  Save, 
-  Edit2, 
-  ChevronDown, 
+import {
+  CheckCircle2,
+  Circle,
+  Plus,
+  Trash2,
+  Calendar,
+  Lock,
+  Save,
+  Edit2,
+  ChevronDown,
   ChevronUp,
   Search,
   Filter,
@@ -39,10 +39,10 @@ export default function ClientPreferences() {
       const response = await fetch(`${API_BASE}/api/client-todos/all`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
+
       if (!response.ok) throw new Error('Failed to load clients');
       const data = await response.json();
-      
+
       if (data.success) {
         setClients(data.clients || []);
       } else {
@@ -80,7 +80,7 @@ export default function ClientPreferences() {
 
   const saveClientData = async () => {
     if (!editingClient) return;
-    
+
     setSaving(true);
     try {
       const token = localStorage.getItem('authToken');
@@ -112,9 +112,39 @@ export default function ClientPreferences() {
     }
   };
 
+  const toggleTodoStatus = async (client, todoId) => {
+    try {
+      const updatedTodos = (client.todos || []).map(todo =>
+        todo.id === todoId ? { ...todo, completed: !todo.completed, updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) } : todo
+      );
+
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE}/api/client-todos/${client.email}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          todos: updatedTodos
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        fetchClients();
+      } else {
+        throw new Error(data.error || 'Failed to update');
+      }
+    } catch (error) {
+      console.error('Error toggling todo:', error);
+      toast.error('Failed to update todo status');
+    }
+  };
+
   const addTodo = (clientEmail) => {
     if (!editingClient || editingClient.email !== clientEmail) return;
-    
+
     const newTodo = {
       id: `todo-${Date.now()}`,
       title: '',
@@ -123,7 +153,7 @@ export default function ClientPreferences() {
       createdAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }),
       updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
     };
-    
+
     setEditingClient({
       ...editingClient,
       todos: [...editingClient.todos, newTodo]
@@ -132,7 +162,7 @@ export default function ClientPreferences() {
 
   const updateTodo = (clientEmail, todoId, updates) => {
     if (!editingClient || editingClient.email !== clientEmail) return;
-    
+
     setEditingClient({
       ...editingClient,
       todos: editingClient.todos.map(todo =>
@@ -145,7 +175,7 @@ export default function ClientPreferences() {
 
   const deleteTodo = (clientEmail, todoId) => {
     if (!editingClient || editingClient.email !== clientEmail) return;
-    
+
     setEditingClient({
       ...editingClient,
       todos: editingClient.todos.filter(todo => todo.id !== todoId)
@@ -154,7 +184,7 @@ export default function ClientPreferences() {
 
   const addLockPeriod = (clientEmail) => {
     if (!editingClient || editingClient.email !== clientEmail) return;
-    
+
     const newPeriod = {
       id: `lock-${Date.now()}`,
       startDate: '',
@@ -162,7 +192,7 @@ export default function ClientPreferences() {
       reason: '',
       createdAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
     };
-    
+
     setEditingClient({
       ...editingClient,
       lockPeriods: [...editingClient.lockPeriods, newPeriod]
@@ -171,7 +201,7 @@ export default function ClientPreferences() {
 
   const updateLockPeriod = (clientEmail, periodId, updates) => {
     if (!editingClient || editingClient.email !== clientEmail) return;
-    
+
     setEditingClient({
       ...editingClient,
       lockPeriods: editingClient.lockPeriods.map(period =>
@@ -182,7 +212,7 @@ export default function ClientPreferences() {
 
   const deleteLockPeriod = (clientEmail, periodId) => {
     if (!editingClient || editingClient.email !== clientEmail) return;
-    
+
     setEditingClient({
       ...editingClient,
       lockPeriods: editingClient.lockPeriods.filter(period => period.id !== periodId)
@@ -193,7 +223,7 @@ export default function ClientPreferences() {
     if (!lockPeriods || lockPeriods.length === 0) return false;
     const now = new Date(date);
     now.setHours(0, 0, 0, 0);
-    
+
     return lockPeriods.some(period => {
       const start = new Date(period.startDate);
       const end = new Date(period.endDate);
@@ -207,7 +237,7 @@ export default function ClientPreferences() {
     if (!lockPeriods || lockPeriods.length === 0) return null;
     const now = new Date();
     now.setHours(0, 0, 0, 0);
-    
+
     return lockPeriods.find(period => {
       const start = new Date(period.startDate);
       const end = new Date(period.endDate);
@@ -220,12 +250,12 @@ export default function ClientPreferences() {
   // Filter clients
   const filteredClients = clients.filter(client => {
     // Search filter
-    const matchesSearch = !searchQuery || 
+    const matchesSearch = !searchQuery ||
       client.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       client.email.toLowerCase().includes(searchQuery.toLowerCase());
-    
+
     if (!matchesSearch) return false;
-    
+
     // Status filter
     if (filterStatus === 'hasTodos') {
       return client.todos && client.todos.length > 0;
@@ -236,7 +266,7 @@ export default function ClientPreferences() {
     if (filterStatus === 'activeLock') {
       return getActiveLockPeriod(client.lockPeriods) !== null;
     }
-    
+
     return true;
   });
 
@@ -363,18 +393,29 @@ export default function ClientPreferences() {
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="text-sm text-gray-600">{client.email}</div>
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-center">
-                            <div className="flex items-center justify-center gap-2">
-                              <span className="text-sm font-medium text-gray-900">
-                                {incompleteTodos.length}
-                              </span>
-                              <span className="text-xs text-gray-500">
-                                / {client.todos?.length || 0}
-                              </span>
-                              {incompleteTodos.length > 0 && (
-                                <span className="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded-full">
-                                  Pending
-                                </span>
+                          <td className="px-6 py-4 text-center">
+                            <div className="flex items-center justify-center">
+                              {incompleteTodos.length > 0 ? (
+                                <div className="w-64 max-h-24 overflow-y-auto bg-gray-50 rounded-lg border border-gray-200 p-2 text-left">
+                                  <div className="space-y-1.5">
+                                    {incompleteTodos.map((todo) => (
+                                      <div
+                                        key={todo.id}
+                                        className="flex items-start gap-2 text-sm cursor-pointer hover:bg-gray-100 p-1 rounded transition-colors group/todo"
+                                        onClick={() => toggleTodoStatus(client, todo.id)}
+                                        title="Click to mark as complete"
+                                      >
+                                        <Circle className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5 group-hover/todo:text-indigo-500" />
+                                        <span className="text-gray-700 leading-tight">{todo.title}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <CheckCircle2 className="w-5 h-5 text-green-500" />
+                                  <span className="text-sm text-green-600 font-medium">All Complete</span>
+                                </div>
                               )}
                             </div>
                           </td>
@@ -452,12 +493,12 @@ export default function ClientPreferences() {
                                       </button>
                                     )}
                                   </div>
-                                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                                  <div className="space-y-2 max-h-80 overflow-y-auto pr-2">
                                     {displayData.todos && displayData.todos.length > 0 ? (
                                       displayData.todos.map((todo) => (
                                         <div
                                           key={todo.id}
-                                          className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 group"
+                                          className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors group"
                                         >
                                           {isEditing ? (
                                             <>
@@ -495,21 +536,27 @@ export default function ClientPreferences() {
                                               </button>
                                             </>
                                           ) : (
-                                            <>
-                                              {todo.completed ? (
-                                                <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
-                                              ) : (
-                                                <Circle className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5" />
-                                              )}
-                                              <div className="flex-1">
-                                                <p className={`text-sm ${todo.completed ? 'text-gray-500 line-through' : 'text-gray-900 font-medium'}`}>
-                                                  {todo.title}
-                                                </p>
-                                                {todo.notes && (
-                                                  <p className="text-xs text-gray-600 mt-1">{todo.notes}</p>
+                                            <div
+                                              className="flex-1 cursor-pointer"
+                                              onClick={() => toggleTodoStatus(client, todo.id)}
+                                              title={todo.completed ? "Click to mark as incomplete" : "Click to mark as complete"}
+                                            >
+                                              <div className="flex items-start gap-3">
+                                                {todo.completed ? (
+                                                  <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                                                ) : (
+                                                  <Circle className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5 group-hover:text-indigo-500" />
                                                 )}
+                                                <div className="flex-1">
+                                                  <p className={`text-sm ${todo.completed ? 'text-gray-500 line-through' : 'text-gray-900 font-medium'}`}>
+                                                    {todo.title}
+                                                  </p>
+                                                  {todo.notes && (
+                                                    <p className="text-xs text-gray-600 mt-1">{todo.notes}</p>
+                                                  )}
+                                                </div>
                                               </div>
-                                            </>
+                                            </div>
                                           )}
                                         </div>
                                       ))
@@ -533,19 +580,18 @@ export default function ClientPreferences() {
                                       </button>
                                     )}
                                   </div>
-                                  <div className="space-y-3 max-h-96 overflow-y-auto">
+                                  <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
                                     {displayData.lockPeriods && displayData.lockPeriods.length > 0 ? (
                                       displayData.lockPeriods.map((period) => {
                                         const isActive = isDateInLockPeriod(new Date(), [period]);
-                                        
+
                                         return (
                                           <div
                                             key={period.id}
-                                            className={`p-3 rounded-lg border ${
-                                              isActive
-                                                ? 'bg-red-50 border-red-300'
-                                                : 'bg-gray-50 border-gray-200'
-                                            } group`}
+                                            className={`p-3 rounded-lg border ${isActive
+                                              ? 'bg-red-50 border-red-300'
+                                              : 'bg-gray-50 border-gray-200'
+                                              } group`}
                                           >
                                             {isEditing ? (
                                               <div className="space-y-2">

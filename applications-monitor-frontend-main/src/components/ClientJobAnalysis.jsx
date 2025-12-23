@@ -255,7 +255,20 @@ export default function ClientJobAnalysis() {
                   const isExecutive = plan.includes('executive');
                   const threshold = isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1000 : Infinity;
                   const exceeded = totalApplications > threshold;
-                  const rowColor = exceeded ? 'bg-red-100' : (idx%2===0 ? 'bg-white' : 'bg-gray-50');
+                  
+                  // Check if active status and saved is 0 - make row orange
+                  const isActiveWithNoSaved = r.status === 'active' && Number(r.saved || 0) === 0;
+                  
+                  // Determine row color: orange (active + no saved) > red (exceeded) > alternating white/gray
+                  let rowColor;
+                  if (isActiveWithNoSaved) {
+                    rowColor = 'bg-orange-100';
+                  } else if (exceeded) {
+                    rowColor = 'bg-red-100';
+                  } else {
+                    rowColor = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                  }
+                  
                   return (
                   <tr key={r.email+idx} className={rowColor}>
                     <td className="px-2 py-1">
