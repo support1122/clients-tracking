@@ -2001,7 +2001,7 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
               ['team_lead', 'operations_intern'].includes(JSON.parse(localStorage.getItem('user') || '{}')?.role) ? 'hidden' : ''
             }`}
           >
-            Client Dashboard
+            Plan's Analytics
           </button>
           <button
             onClick={() => {
