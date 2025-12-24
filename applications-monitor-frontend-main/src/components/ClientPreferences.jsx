@@ -150,6 +150,7 @@ export default function ClientPreferences() {
       title: '',
       notes: '',
       completed: false,
+      createdBy: 'admin',
       createdAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }),
       updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
     };
@@ -527,6 +528,11 @@ export default function ClientPreferences() {
                                                   rows={2}
                                                   className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
                                                 />
+                                                {todo.createdBy && (
+                                                  <p className="text-xs text-gray-500">
+                                                    Created by {todo.createdBy}
+                                                  </p>
+                                                )}
                                               </div>
                                               <button
                                                 onClick={() => deleteTodo(client.email, todo.id)}
@@ -551,9 +557,19 @@ export default function ClientPreferences() {
                                                   <p className={`text-sm ${todo.completed ? 'text-gray-500 line-through' : 'text-gray-900 font-medium'}`}>
                                                     {todo.title}
                                                   </p>
-                                                  {todo.notes && (
-                                                    <p className="text-xs text-gray-600 mt-1">{todo.notes}</p>
-                                                  )}
+                                                  <div className="flex items-center gap-2 mt-1">
+                                                    {todo.createdBy && (
+                                                      <span className="text-xs text-gray-500">
+                                                        Created by {todo.createdBy}
+                                                      </span>
+                                                    )}
+                                                    {todo.notes && todo.createdBy && (
+                                                      <span className="text-xs text-gray-500">•</span>
+                                                    )}
+                                                    {todo.notes && (
+                                                      <p className="text-xs text-gray-600">{todo.notes}</p>
+                                                    )}
+                                                  </div>
                                                 </div>
                                               </div>
                                             </div>

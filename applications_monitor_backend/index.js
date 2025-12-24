@@ -29,6 +29,7 @@ import { upload } from './utils/cloudinary.js';
 import { encrypt } from './utils/CryptoHelper.js';
 import { NewUserModel } from './schema_models/UserModel.js';
 import { ClientTodosModel } from './ClientTodosModel.js';
+import { ClientOperationsModel } from './ClientOperationsModel.js';
 
 
 
@@ -3286,27 +3287,163 @@ app.get('/api/operations/:email/available-clients', getAvailableClients);
 app.post('/api/clients/sync-managers', syncManagerAssignments);
 
 
-const getCurrentISTTime = () => new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+const getCurrentISTTime = () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+// Helper function to merge TODOs from both models, keeping the most recent version
+const mergeTodos = (todos1, todos2) => {
+  const todoMap = new Map();
+  
+  // Add all TODOs from first array
+  todos1.forEach(todo => {
+    todoMap.set(todo.id, todo);
+  });
+  
+  // Merge TODOs from second array, keeping the one with the latest updatedAt
+  todos2.forEach(todo => {
+    const existing = todoMap.get(todo.id);
+    if (!existing) {
+      todoMap.set(todo.id, todo);
+    } else {
+      // Compare updatedAt timestamps and keep the most recent
+      // Handle both string dates and Date objects
+      const existingTime = existing.updatedAt 
+        ? (typeof existing.updatedAt === 'string' ? new Date(existing.updatedAt) : existing.updatedAt)
+        : (existing.createdAt ? (typeof existing.createdAt === 'string' ? new Date(existing.createdAt) : existing.createdAt) : new Date(0));
+      const newTime = todo.updatedAt 
+        ? (typeof todo.updatedAt === 'string' ? new Date(todo.updatedAt) : todo.updatedAt)
+        : (todo.createdAt ? (typeof todo.createdAt === 'string' ? new Date(todo.createdAt) : todo.createdAt) : new Date(0));
+      
+      if (newTime > existingTime || isNaN(existingTime.getTime())) {
+        todoMap.set(todo.id, todo);
+      }
+    }
+  });
+  
+  return Array.from(todoMap.values());
+};
+
+// Helper function to merge lock periods from both models
+const mergeLockPeriods = (periods1, periods2) => {
+  const periodMap = new Map();
+  
+  periods1.forEach(period => {
+    periodMap.set(period.id, period);
+  });
+  
+  periods2.forEach(period => {
+    const existing = periodMap.get(period.id);
+    if (!existing) {
+      periodMap.set(period.id, period);
+    } else {
+      // Keep the most recent one
+      const existingTime = existing.createdAt 
+        ? (typeof existing.createdAt === 'string' ? new Date(existing.createdAt) : existing.createdAt)
+        : new Date(0);
+      const newTime = period.createdAt 
+        ? (typeof period.createdAt === 'string' ? new Date(period.createdAt) : period.createdAt)
+        : new Date(0);
+      
+      if (newTime > existingTime || isNaN(existingTime.getTime())) {
+        periodMap.set(period.id, period);
+      }
+    }
+  });
+  
+  return Array.from(periodMap.values());
+};
+
+// Helper function to get default TODOs
+const getDefaultTodos = () => {
+  const timestamp = Date.now();
+  return [
+    {
+      id: `todo-${timestamp}-1`,
+      title: 'Create optimized resume',
+      notes: '',
+      completed: false,
+      createdBy: '',
+      createdAt: getCurrentISTTime(),
+      updatedAt: getCurrentISTTime()
+    },
+    {
+      id: `todo-${timestamp}-2`,
+      title: 'LinkedIn Optimization',
+      notes: '',
+      completed: false,
+      createdBy: '',
+      createdAt: getCurrentISTTime(),
+      updatedAt: getCurrentISTTime()
+    },
+    {
+      id: `todo-${timestamp}-3`,
+      title: 'Cover letter Optimization',
+      notes: '',
+      completed: false,
+      createdBy: '',
+      createdAt: getCurrentISTTime(),
+      updatedAt: getCurrentISTTime()
+    }
+  ];
+};
 
 app.get('/api/client-todos/all', async (req, res) => {
   try {
-    const allClientTodos = await ClientTodosModel.find().lean();
-    const allClients = await ClientModel.find().select('email name').lean();
+    // Fetch from both models and sync them
+    const [allClientTodos, allClientOps, allClients] = await Promise.all([
+      ClientTodosModel.find().lean(),
+      ClientOperationsModel.find().lean(),
+      ClientModel.find().select('email name').lean()
+    ]);
 
     const clientMap = {};
     allClients.forEach(client => {
       clientMap[client.email.toLowerCase()] = client.name;
     });
 
-    // Merge client info with todos
-    const clientsWithTodos = allClientTodos.map(todoData => ({
-      email: todoData.clientEmail,
-      name: clientMap[todoData.clientEmail.toLowerCase()] || todoData.clientEmail,
-      todos: todoData.todos || [],
-      lockPeriods: todoData.lockPeriods || [],
-      createdAt: todoData.createdAt,
-      updatedAt: todoData.updatedAt
-    }));
+    // Create a map to merge data from both models
+    const mergedDataMap = new Map();
+
+    // Process ClientTodosModel data
+    allClientTodos.forEach(todoData => {
+      const email = todoData.clientEmail.toLowerCase();
+      mergedDataMap.set(email, {
+        email: todoData.clientEmail,
+        name: clientMap[email] || todoData.clientEmail,
+        todos: todoData.todos || [],
+        lockPeriods: todoData.lockPeriods || [],
+        createdAt: todoData.createdAt,
+        updatedAt: todoData.updatedAt
+      });
+    });
+
+    // Merge ClientOperationsModel data
+    allClientOps.forEach(opsData => {
+      const email = opsData.clientEmail.toLowerCase();
+      const existing = mergedDataMap.get(email);
+      
+      if (existing) {
+        // Merge TODOs and lock periods, keeping most recent
+        existing.todos = mergeTodos(existing.todos, opsData.todos || []);
+        existing.lockPeriods = mergeLockPeriods(existing.lockPeriods, opsData.lockPeriods || []);
+        // Update timestamps if opsData is newer
+        const existingTime = new Date(existing.updatedAt || 0);
+        const opsTime = new Date(opsData.updatedAt || 0);
+        if (opsTime > existingTime) {
+          existing.updatedAt = opsData.updatedAt;
+        }
+      } else {
+        mergedDataMap.set(email, {
+          email: opsData.clientEmail,
+          name: clientMap[email] || opsData.clientEmail,
+          todos: opsData.todos || [],
+          lockPeriods: opsData.lockPeriods || [],
+          createdAt: opsData.createdAt,
+          updatedAt: opsData.updatedAt
+        });
+      }
+    });
+
+    const clientsWithTodos = Array.from(mergedDataMap.values());
 
     // Also include clients that don't have todos yet
     allClients.forEach(client => {
@@ -3330,45 +3467,96 @@ app.get('/api/client-todos/all', async (req, res) => {
   }
 });
 
-// Get client TODOs and lock periods by email
+// Get client TODOs and lock periods by email - SYNCED with ClientOperationsModel
 app.get('/api/client-todos/:email', async (req, res) => {
   try {
     const { email } = req.params;
-    let clientTodos = await ClientTodosModel.findOne({ clientEmail: email.toLowerCase() });
+    const emailLower = email.toLowerCase();
+    
+    // Fetch from both models
+    let clientTodos = await ClientTodosModel.findOne({ clientEmail: emailLower });
+    let clientOps = await ClientOperationsModel.findOne({ clientEmail: emailLower });
 
-    if (!clientTodos) {
-      // Create default structure if not found
-      clientTodos = new ClientTodosModel({
-        clientEmail: email.toLowerCase(),
-        todos: [
-          {
-            id: `todo-${Date.now()}-1`,
-            title: 'Create optimized resume',
-            notes: '',
-            completed: false,
-            createdAt: getCurrentISTTime(),
-            updatedAt: getCurrentISTTime()
-          },
-          {
-            id: `todo-${Date.now()}-2`,
-            title: 'LinkedIn Optimization',
-            notes: '',
-            completed: false,
-            createdAt: getCurrentISTTime(),
-            updatedAt: getCurrentISTTime()
-          },
-          {
-            id: `todo-${Date.now()}-3`,
-            title: 'Cover letter Optimization',
-            notes: '',
-            completed: false,
-            createdAt: getCurrentISTTime(),
-            updatedAt: getCurrentISTTime()
+    // If neither exists, create default structure in both
+    if (!clientTodos && !clientOps) {
+      const defaultTodos = getDefaultTodos();
+      const defaultData = {
+        clientEmail: emailLower,
+        todos: defaultTodos,
+        lockPeriods: [],
+        createdAt: getCurrentISTTime(),
+        updatedAt: getCurrentISTTime()
+      };
+
+      clientTodos = new ClientTodosModel(defaultData);
+      clientOps = new ClientOperationsModel(defaultData);
+      
+      await Promise.all([
+        clientTodos.save(),
+        clientOps.save()
+      ]);
+    } else {
+      // Merge data from both models
+      const mergedTodos = mergeTodos(
+        clientTodos?.todos || [],
+        clientOps?.todos || []
+      );
+      const mergedLockPeriods = mergeLockPeriods(
+        clientTodos?.lockPeriods || [],
+        clientOps?.lockPeriods || []
+      );
+
+      // Ensure default TODOs are present
+      const defaultTodoTitles = ['Create optimized resume', 'LinkedIn Optimization', 'Cover letter Optimization'];
+      const existingTitles = mergedTodos.map(t => t.title);
+      const missingDefaults = defaultTodoTitles.filter(title => !existingTitles.includes(title));
+      
+      if (missingDefaults.length > 0 || mergedTodos.length === 0) {
+        // Add missing default TODOs
+        const defaultTodos = getDefaultTodos();
+        defaultTodos.forEach(defaultTodo => {
+          if (!mergedTodos.find(t => t.title === defaultTodo.title)) {
+            mergedTodos.push(defaultTodo);
           }
-        ],
-        lockPeriods: []
-      });
-      await clientTodos.save();
+        });
+      }
+
+      // Update both models with merged data
+      const updateData = {
+        todos: mergedTodos,
+        lockPeriods: mergedLockPeriods,
+        updatedAt: getCurrentISTTime()
+      };
+
+      if (!clientTodos) {
+        clientTodos = new ClientTodosModel({
+          clientEmail: emailLower,
+          ...updateData,
+          createdAt: getCurrentISTTime()
+        });
+      } else {
+        clientTodos.todos = mergedTodos;
+        clientTodos.lockPeriods = mergedLockPeriods;
+        clientTodos.updatedAt = getCurrentISTTime();
+      }
+
+      if (!clientOps) {
+        clientOps = new ClientOperationsModel({
+          clientEmail: emailLower,
+          ...updateData,
+          createdAt: getCurrentISTTime()
+        });
+      } else {
+        clientOps.todos = mergedTodos;
+        clientOps.lockPeriods = mergedLockPeriods;
+        clientOps.updatedAt = getCurrentISTTime();
+      }
+
+      // Save both models
+      await Promise.all([
+        clientTodos.save(),
+        clientOps.save()
+      ]);
     }
 
     res.status(200).json({ success: true, data: clientTodos });
@@ -3378,11 +3566,12 @@ app.get('/api/client-todos/:email', async (req, res) => {
   }
 });
 
-// Update client TODOs and lock periods
+// Update client TODOs and lock periods - SYNCED with ClientOperationsModel
 app.put('/api/client-todos/:email', async (req, res) => {
   try {
     const { email } = req.params;
     const { todos, lockPeriods } = req.body;
+    const emailLower = email.toLowerCase();
 
     const updateData = {
       updatedAt: getCurrentISTTime()
@@ -3391,6 +3580,8 @@ app.put('/api/client-todos/:email', async (req, res) => {
     if (todos !== undefined) {
       updateData.todos = todos.map(todo => ({
         ...todo,
+        // Preserve createdBy if it exists, otherwise set as "admin" (created from clients-tracking)
+        createdBy: todo.createdBy || "admin",
         updatedAt: todo.updatedAt || getCurrentISTTime()
       }));
     }
@@ -3399,11 +3590,29 @@ app.put('/api/client-todos/:email', async (req, res) => {
       updateData.lockPeriods = lockPeriods;
     }
 
-    const clientTodos = await ClientTodosModel.findOneAndUpdate(
-      { clientEmail: email.toLowerCase() },
-      { $set: updateData },
-      { new: true, upsert: true }
-    );
+    // Update both models simultaneously to keep them in sync
+    const [clientTodos, clientOps] = await Promise.all([
+      ClientTodosModel.findOneAndUpdate(
+        { clientEmail: emailLower },
+        { $set: updateData },
+        { new: true, upsert: true }
+      ),
+      ClientOperationsModel.findOneAndUpdate(
+        { clientEmail: emailLower },
+        { $set: updateData },
+        { new: true, upsert: true }
+      )
+    ]);
+
+    // If upsert created new documents, ensure they have clientEmail
+    if (clientTodos && !clientTodos.clientEmail) {
+      clientTodos.clientEmail = emailLower;
+      await clientTodos.save();
+    }
+    if (clientOps && !clientOps.clientEmail) {
+      clientOps.clientEmail = emailLower;
+      await clientOps.save();
+    }
 
     res.status(200).json({ success: true, message: 'Client todos updated successfully', data: clientTodos });
   } catch (error) {
