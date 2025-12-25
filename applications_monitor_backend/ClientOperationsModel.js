@@ -1,12 +1,13 @@
 import mongoose from "mongoose";
 
-const ClientTodosSchema = new mongoose.Schema({
+const ClientOperationsSchema = new mongoose.Schema({
   clientEmail: {
     type: String,
     required: true,
     unique: true,
     lowercase: true,
-    trim: true
+    trim: true,
+    index: true
   },
   todos: [{
     id: {
@@ -59,7 +60,7 @@ const ClientTodosSchema = new mongoose.Schema({
     },
     createdAt: {
       type: String,
-        default: () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      default: () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
     }
   }],
   createdAt: {
@@ -74,8 +75,8 @@ const ClientTodosSchema = new mongoose.Schema({
   timestamps: false
 });
 
-// Note: clientEmail already has unique: true which automatically creates an index
-// No need for explicit index definition
+// Index for faster lookups
+ClientOperationsSchema.index({ clientEmail: 1 });
 
-export const ClientTodosModel = mongoose.model('ClientTodos', ClientTodosSchema);
+export const ClientOperationsModel = mongoose.models.ClientOperations || mongoose.model('ClientOperations', ClientOperationsSchema);
 
