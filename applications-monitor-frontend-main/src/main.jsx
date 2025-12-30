@@ -34,6 +34,7 @@ import JobAnalytics from './components/JobAnalytics.jsx';
 import ClientJobAnalysis from './components/ClientJobAnalysis.jsx';
 import CallScheduler from './components/CallScheduler.jsx';
 import ClientPreferences from './components/ClientPreferences.jsx';
+import OperatorsPerformanceReport from './components/OperatorsPerformanceReport.jsx';
 
 const router = createBrowserRouter([
   {
@@ -87,6 +88,10 @@ const router = createBrowserRouter([
       {
         path: '/client-preferences',
         element: <ClientPreferences />
+      },
+      {
+        path: '/operators-performance-report',
+        element: <OperatorsPerformanceReport />
       }
     ]
   }

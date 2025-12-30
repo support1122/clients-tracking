@@ -3249,7 +3249,97 @@ const syncManagerAssignments = async (req, res) => {
   }
 };
 
-// Operations routes
+const getOperationsPerformanceReport = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    const datePatterns = [];
+    const currentDate = new Date(start);
+    while (currentDate <= end) {
+      const day = currentDate.getDate();
+      const month = currentDate.getMonth() + 1;
+      const year = currentDate.getFullYear();
+      const dayPattern = day < 10 ? `[0]?${day}` : `${day}`;
+      const monthPattern = month < 10 ? `[0]?${month}` : `${month}`;
+      datePatterns.push(new RegExp(`^${dayPattern}/${monthPattern}/${year}(?=$|\\D)`));
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    const allOperations = await OperationsModel.find().select('email name').lean();
+    const operatorEmails = allOperations.map(op => op.email.toLowerCase());
+
+    if (operatorEmails.length === 0) {
+      return res.status(200).json({
+        success: true,
+        startDate,
+        endDate,
+        totalApplied: 0,
+        operators: [],
+        performanceMap: {}
+      });
+    }
+
+    const pipeline = [
+      {
+        $match: {
+          operatorEmail: { $in: operatorEmails },
+          appliedDate: { $exists: true, $ne: null, $ne: '' },
+          $or: datePatterns.map(pattern => ({ appliedDate: { $regex: pattern } }))
+        }
+      },
+      {
+        $group: {
+          _id: '$operatorEmail',
+          appliedCount: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          operatorEmail: '$_id',
+          appliedCount: 1
+        }
+      }
+    ];
+
+    const results = await JobModel.aggregate(pipeline).allowDiskUse(true);
+    const performanceMap = {};
+    results.forEach(r => {
+      performanceMap[r.operatorEmail] = r.appliedCount;
+    });
+
+    const performanceData = allOperations.map(op => ({
+      email: op.email,
+      name: op.name || op.email.split('@')[0],
+      appliedCount: performanceMap[op.email.toLowerCase()] || 0
+    })).sort((a, b) => b.appliedCount - a.appliedCount);
+
+    const totalApplied = performanceData.reduce((sum, op) => sum + op.appliedCount, 0);
+
+    res.status(200).json({
+      success: true,
+      startDate,
+      endDate,
+      totalApplied,
+      operators: performanceData,
+      performanceMap
+    });
+  } catch (error) {
+    console.error('Error in getOperationsPerformanceReport:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+app.get('/api/operations/performance-report', getOperationsPerformanceReport);
+
 app.get('/api/operations', getAllOperations);
 app.get('/api/operations/names', getOperationsNames);
 app.get('/api/operations/:email', getOperationsByEmail);

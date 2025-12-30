@@ -3,7 +3,6 @@ import ClientDetails from "./ClientDetails";
 import OperationsDetails from "./OperationsDetails";
 import RegisterClient from "./RegisterClient";
 import {Link, useNavigate, useOutletContext} from 'react-router-dom';
-import { TopPerformersBarChart, TeamPerformanceSummary } from "./OperationsCharts";
 import { AnimatedCounter } from "./AnimatedCounter";
 
 const API_BASE = import.meta.env.VITE_BASE || "https://applications-monitor-api.flashfirejobs.com";
@@ -2172,101 +2171,16 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
         {!showRegisterClient && !loading && !err && showOperations && (
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-slate-900 mb-4">Operations Team Performance</h2>
-            </div>
-            
-            {/* Date Range Selector */}
-            <div className="mb-6">
-              <div className="flex items-center gap-4 flex-wrap">
-                <label className="text-sm font-medium text-slate-700">Date Range:</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="date"
-                    value={performanceDate}
-                    onChange={(e) => setPerformanceDate(e.target.value)}
-                    className="px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                  />
-                  <span className="text-slate-500">to</span>
-                  <input
-                    type="date"
-                    value={performanceEndDate}
-                    onChange={(e) => setPerformanceEndDate(e.target.value)}
-                    className="px-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                  />
-                </div>
-                <div className="text-sm text-slate-600">
-                  Shows jobs applied within selected date range
-                </div>
-              </div>
-            </div>
-
-            {/* Top Performer Card */}
-            {loadingPerformance ? (
-              <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 mb-6">
-                <div className="flex items-center justify-center py-8">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
-                  <span className="ml-3 text-slate-600">Loading performance data...</span>
-                </div>
-              </div>
-            ) : (() => {
-              const topPerformer = operations
-                .map(op => ({
-                  name: op.name || op.email.split('@')[0],
-                  email: op.email,
-                  applications: operationsPerformance[op.email] || 0,
-                  clients: op.managedUsers?.length || 0
-                }))
-                .sort((a, b) => b.applications - a.applications)[0];
-
-              if (!topPerformer) return null;
-
-              return (
-                <div key={`top-performer-${performanceDate}-${performanceEndDate}`} className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg shadow-sm border-2 border-green-200 p-6 mb-6">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center text-white text-2xl font-bold">
-                        {topPerformer.name.charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                        <h3 className="text-xl font-bold text-slate-900 mb-1">Top Performer</h3>
-                        <p className="text-lg text-slate-700 font-semibold">{topPerformer.name}</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-8">
-                      <div className="text-center">
-                        <div className="text-3xl font-bold text-green-600">
-                          <AnimatedCounter value={topPerformer.applications} loading={loadingPerformance} />
-                        </div>
-                        <div className="text-sm text-slate-600 mt-1">Applications</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-3xl font-bold text-green-600">
-                          <AnimatedCounter value={topPerformer.clients} loading={loadingPerformance} />
-                        </div>
-                        <div className="text-sm text-slate-600 mt-1">Clients Handling</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Team Performance Summary Cards */}
-            <div key={`summary-${performanceDate}-${performanceEndDate}`}>
-              <TeamPerformanceSummary 
-                operations={operations} 
-                operationsPerformance={operationsPerformance}
-                loading={loadingPerformance}
-              />
-            </div>
-
-            {/* Top Performers Bar Chart */}
-            <div key={`chart-${performanceDate}-${performanceEndDate}`}>
-              <TopPerformersBarChart 
-                operations={operations} 
-                operationsPerformance={operationsPerformance}
-                loading={loadingPerformance}
-              />
+              <h2 className="text-lg font-semibold text-slate-900 mb-4">Operations Team</h2>
+              <Link
+                to="/operators-performance-report"
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium shadow-sm"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                View Performance Report
+              </Link>
             </div>
             
             {/* Search Bar */}
