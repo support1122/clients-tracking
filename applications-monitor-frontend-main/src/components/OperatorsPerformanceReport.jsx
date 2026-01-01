@@ -159,6 +159,15 @@ export default function OperatorsPerformanceReport() {
     };
   };
 
+  const sortedOperators = useMemo(() => {
+    return operations
+      .map(op => ({
+        ...op,
+        applications: operationsPerformance[op.email] || 0
+      }))
+      .sort((a, b) => b.applications - a.applications);
+  }, [operations, operationsPerformance]);
+
   // Get tier distribution
   const getTierDistribution = useMemo(() => {
     if (!startDate || !endDate) return {};
@@ -181,15 +190,6 @@ export default function OperatorsPerformanceReport() {
     
     return distribution;
   }, [sortedOperators, startDate, endDate]);
-
-  const sortedOperators = useMemo(() => {
-    return operations
-      .map(op => ({
-        ...op,
-        applications: operationsPerformance[op.email] || 0
-      }))
-      .sort((a, b) => b.applications - a.applications);
-  }, [operations, operationsPerformance]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-6">
