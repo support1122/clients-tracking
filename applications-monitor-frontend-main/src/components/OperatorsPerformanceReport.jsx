@@ -175,10 +175,10 @@ export default function OperatorsPerformanceReport() {
     const distribution = {};
     
     sortedOperators.forEach(operator => {
-      const monthlyApps = calculateMonthlyApplications(operator.applications, startDate, endDate);
-      const tierInfo = getTierInfo(monthlyApps);
+      // Use actual applications for tier calculation
+      const tierInfo = getTierInfo(operator.applications);
       
-      // Only include operators who have reached at least 1,000 monthly applications
+      // Only include operators who have reached at least 1,000 applications
       if (tierInfo.tierIndex !== -1) {
         const tierKey = tierInfo.tier;
         
@@ -251,7 +251,7 @@ export default function OperatorsPerformanceReport() {
                 </div>
                 <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                   <p className="text-xs text-blue-800">
-                    <strong>Note:</strong> Incentives are calculated based on monthly application totals. Select a date range to see projected monthly performance and current tier status.
+                    <strong>Note:</strong> Tiers are calculated based on actual applications in the selected date range. Select a date range to see current tier status for each operator.
                   </p>
                 </div>
               </div>
@@ -400,7 +400,6 @@ export default function OperatorsPerformanceReport() {
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Operator Name</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Email</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-slate-700 uppercase">Applications</th>
-                          <th className="px-4 py-3 text-right text-xs font-semibold text-slate-700 uppercase">Monthly Projected</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Current Tier</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Progress to Next Tier</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-slate-700 uppercase">Percentage</th>
@@ -412,9 +411,9 @@ export default function OperatorsPerformanceReport() {
                             ? ((operator.applications / totalApplied) * 100).toFixed(1)
                             : '0.0';
                           
-                          const monthlyProjected = calculateMonthlyApplications(operator.applications, startDate, endDate);
-                          const tierInfo = getTierInfo(monthlyProjected);
-                          const nextTierProgress = getNextTierProgress(monthlyProjected);
+                          // Use actual applications for tier calculation
+                          const tierInfo = getTierInfo(operator.applications);
+                          const nextTierProgress = getNextTierProgress(operator.applications);
                           
                           return (
                             <tr 
@@ -432,9 +431,6 @@ export default function OperatorsPerformanceReport() {
                               </td>
                               <td className="px-4 py-3 text-sm font-bold text-slate-900 text-right">
                                 {operator.applications.toLocaleString()}
-                              </td>
-                              <td className="px-4 py-3 text-sm font-semibold text-slate-900 text-right">
-                                {monthlyProjected.toLocaleString()}
                               </td>
                               <td className="px-4 py-3">
                                 <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-gradient-to-r ${tierInfo.bgColor || 'from-slate-100 to-slate-200'} border ${tierInfo.borderColor || 'border-slate-300'} ${tierInfo.textColor || 'text-slate-700'}`}>
