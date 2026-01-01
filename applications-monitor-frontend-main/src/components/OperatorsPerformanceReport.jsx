@@ -149,8 +149,9 @@ export default function OperatorsPerformanceReport() {
     
     // Get next tier
     const nextTier = INCENTIVE_TIERS[currentTier.tierIndex - 1];
-    const range = nextTier.max - currentTier.max;
-    const progress = ((monthlyApplications - currentTier.max) / range) * 100;
+    // Calculate progress from current tier min to next tier min
+    const range = nextTier.min - currentTier.min;
+    const progress = ((monthlyApplications - currentTier.min) / range) * 100;
     
     return {
       nextTier: nextTier,
