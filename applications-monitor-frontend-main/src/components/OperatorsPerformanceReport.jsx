@@ -110,7 +110,7 @@ export default function OperatorsPerformanceReport() {
   // Get tier information for a given monthly application count
   const getTierInfo = (monthlyApplications) => {
     if (monthlyApplications < 1000) {
-      return { tier: 'Below Threshold', payout: 'No incentive', tierIndex: -1, min: 0, max: 999 };
+      return { tier: 'Under 1,000', payout: 'Stipend only', tierIndex: -1, min: 0, max: 999 };
     }
     
     for (let i = 0; i < INCENTIVE_TIERS.length; i++) {
@@ -168,7 +168,7 @@ export default function OperatorsPerformanceReport() {
       .sort((a, b) => b.applications - a.applications);
   }, [operations, operationsPerformance]);
 
-  // Get tier distribution
+  // Get tier distribution (only show operators who qualify for tiers - 1,000+)
   const getTierDistribution = useMemo(() => {
     if (!startDate || !endDate) return {};
     
@@ -177,15 +177,19 @@ export default function OperatorsPerformanceReport() {
     sortedOperators.forEach(operator => {
       const monthlyApps = calculateMonthlyApplications(operator.applications, startDate, endDate);
       const tierInfo = getTierInfo(monthlyApps);
-      const tierKey = tierInfo.tierIndex === -1 ? 'Below Threshold' : tierInfo.tier;
       
-      if (!distribution[tierKey]) {
-        distribution[tierKey] = {
-          count: 0,
-          tierInfo: tierInfo
-        };
+      // Only include operators who have reached at least 1,000 monthly applications
+      if (tierInfo.tierIndex !== -1) {
+        const tierKey = tierInfo.tier;
+        
+        if (!distribution[tierKey]) {
+          distribution[tierKey] = {
+            count: 0,
+            tierInfo: tierInfo
+          };
+        }
+        distribution[tierKey].count++;
       }
-      distribution[tierKey].count++;
     });
     
     return distribution;
