@@ -8,6 +8,7 @@ const RegisterClient = () => {
     firstName: '',
     lastName: '',
     email: '',
+    oldEmail: '',
     password: '',
     confirmPassword: '',
     planType: 'Free Trial',
@@ -201,10 +202,45 @@ const RegisterClient = () => {
     if (res.ok) {
       toastUtils.dismissToast(loadingToast);
       toastUtils.success("Client registered successfully!");
+      
+      try {
+        const MICROSERVICE_URL = import.meta.env.VITE_MICROSERVICE_URL || 'http://localhost:5000';
+        const microservicePayload = {
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          email: formData.email,
+          oldEmail: formData.oldEmail,
+          password: formData.password,
+          planType: formData.planType,
+          dashboardManager: formData.dashboardManager,
+          amountPaid: formData.amountPaid,
+          currency: formData.currency,
+          amountPaidFormatted: formData.amountPaid && formData.currency 
+            ? `${formData.currency}${formData.amountPaid}` 
+            : 0,
+        };
+
+        const microserviceResponse = await fetch(`${MICROSERVICE_URL}/api/microservice/paid`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(microservicePayload),
+        });
+
+        if (!microserviceResponse.ok) {
+          console.error('Microservice call failed:', await microserviceResponse.text());
+        }
+      } catch (microserviceError) {
+        console.error('Error calling microservice:', microserviceError);
+        // Don't fail the main registration if microservice call fails
+      }
+
       setFormData({
         firstName: "",
         lastName: "",
         email: "",
+        oldEmail: "",
         password: "",
         confirmPassword: "",
         planType: "Free Trial",
@@ -387,7 +423,7 @@ const RegisterClient = () => {
                   <button
                     onClick={() => {
                       setShowForm(false);
-                      setFormData({ firstName: '', lastName: '', email: '', password: '', confirmPassword: '', planType: 'Free Trial', dashboardManager: '', amountPaid: '', currency: '$' });
+                      setFormData({ firstName: '', lastName: '', email: '', oldEmail: '', password: '', confirmPassword: '', planType: 'Free Trial', dashboardManager: '', amountPaid: '', currency: '$' });
                       setErrors({});
                     }}
                     className="text-gray-400 hover:text-gray-600"
@@ -442,6 +478,21 @@ const RegisterClient = () => {
                       }`}
                     />
                     {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
+                  </div>
+
+                  {/* Old Email */}
+                  <div>
+                    <input
+                      type="email"
+                      name="oldEmail"
+                      value={formData.oldEmail}
+                      onChange={handleInputChange}
+                      placeholder="email used in crm"
+                      className={`w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                        errors.oldEmail ? 'border-red-400' : 'border-gray-300'
+                      }`}
+                    />
+                    {errors.oldEmail && <p className="text-red-500 text-xs mt-1">{errors.oldEmail}</p>}
                   </div>
 
                   {/* Plan Type & Manager */}
