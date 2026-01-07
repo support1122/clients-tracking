@@ -19,6 +19,77 @@ import {
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
 
+// Helper function to parse flexible date formats
+function parseFlexibleDate(input) {
+  if (!input) return null;
+
+  // Try dd/mm/yyyy format first
+  const m = String(input).trim().match(
+    /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?)?$/i
+  );
+
+  if (m) {
+    let [, d, mo, y, h = "0", mi = "0", s = "0", ap] = m;
+    d = +d; mo = +mo - 1; y = +y; h = +h; mi = +mi; s = +s;
+    if (ap) {
+      const isPM = ap.toLowerCase() === "pm";
+      if (h === 12) h = isPM ? 12 : 0;
+      else if (isPM) h += 12;
+    }
+    return new Date(y, mo, d, h, mi, s);
+  }
+
+  // If input is already a Date or ISO string
+  const native = new Date(input);
+  return isNaN(native.getTime()) ? null : native;
+}
+
+// Helper function to format relative time (e.g., "2 hours ago", "3 days ago")
+function formatRelativeTime(dateInput) {
+  if (!dateInput) return "—";
+  
+  // Parse the date input (handles various formats)
+  const date = parseFlexibleDate(dateInput);
+  if (!date || isNaN(date.getTime())) return "—";
+  
+  const now = new Date();
+  const diffMs = now - date;
+  const diffSeconds = Math.floor(diffMs / 1000);
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  const diffHours = Math.floor(diffMinutes / 60);
+  const diffDays = Math.floor(diffHours / 24);
+  const diffMonths = Math.floor(diffDays / 30);
+  const diffYears = Math.floor(diffDays / 365);
+  
+  // Less than a minute ago
+  if (diffSeconds < 60) {
+    return diffSeconds <= 0 ? "just now" : `${diffSeconds} second${diffSeconds === 1 ? '' : 's'} ago`;
+  }
+  
+  // Less than an hour ago
+  if (diffMinutes < 60) {
+    return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
+  }
+  
+  // Less than a day ago
+  if (diffHours < 24) {
+    return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+  }
+  
+  // Less than a month ago
+  if (diffDays < 30) {
+    return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+  }
+  
+  // Less than a year ago
+  if (diffMonths < 12) {
+    return `${diffMonths} month${diffMonths === 1 ? '' : 's'} ago`;
+  }
+  
+  // More than a year ago
+  return `${diffYears} year${diffYears === 1 ? '' : 's'} ago`;
+}
+
 export default function ClientPreferences() {
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -72,10 +143,19 @@ export default function ClientPreferences() {
       todos: JSON.parse(JSON.stringify(client.todos || [])),
       lockPeriods: JSON.parse(JSON.stringify(client.lockPeriods || []))
     });
+    if (!expandedRows.has(client.email)) {
+      const newExpanded = new Set(expandedRows);
+      newExpanded.add(client.email);
+      setExpandedRows(newExpanded);
+    }
   };
 
   const cancelEditing = () => {
     setEditingClient(null);
+  };
+
+  const handleEditClick = (client) => {
+    startEditing(client);
   };
 
   const saveClientData = async () => {
@@ -248,16 +328,13 @@ export default function ClientPreferences() {
     });
   };
 
-  // Filter clients
   const filteredClients = clients.filter(client => {
-    // Search filter
     const matchesSearch = !searchQuery ||
       client.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       client.email.toLowerCase().includes(searchQuery.toLowerCase());
 
     if (!matchesSearch) return false;
 
-    // Status filter
     if (filterStatus === 'hasTodos') {
       return client.todos && client.todos.length > 0;
     }
@@ -269,6 +346,11 @@ export default function ClientPreferences() {
     }
 
     return true;
+  }).sort((a, b) => {
+    const aActive = a.isJobActive !== false;
+    const bActive = b.isJobActive !== false;
+    if (aActive === bActive) return 0;
+    return aActive ? -1 : 1;
   });
 
   if (loading) {
@@ -286,7 +368,7 @@ export default function ClientPreferences() {
 
   return (
     <Layout>
-      <div className="p-6 max-w-7xl mx-auto">
+      <div className="p-6 w-full">
         {/* Header */}
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Client Preferences</h1>
@@ -331,28 +413,33 @@ export default function ClientPreferences() {
         {/* Table */}
         <div className="bg-white rounded-lg shadow-lg overflow-hidden border border-gray-200">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
+            <table className="w-full divide-y divide-gray-200 table-fixed">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider w-12">
-                    {/* Expand/Collapse */}
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[10%]">
                     Client
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-8">
+                  </th>
+                  <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[12%]">
                     Email
                   </th>
-                  <th className="px-6 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[15%]">
                     TODOs
                   </th>
-                  <th className="px-6 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[8%]">
                     Lock Periods
                   </th>
-                  <th className="px-6 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[8%]">
                     Status
                   </th>
-                  <th className="px-6 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[15%]">
+                    Last Applied Job
+                  </th>
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[12%]">
+                    Operator
+                  </th>
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[8%]">
                     Actions
                   </th>
                 </tr>
@@ -360,7 +447,7 @@ export default function ClientPreferences() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredClients.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={9} className="px-6 py-12 text-center text-gray-500">
                       {searchQuery ? 'No clients found matching your search' : 'No clients found'}
                     </td>
                   </tr>
@@ -372,104 +459,133 @@ export default function ClientPreferences() {
                     const incompleteTodos = (client.todos || []).filter(t => !t.completed);
                     const completedTodos = (client.todos || []).filter(t => t.completed);
                     const displayData = isEditing ? editingClient : client;
+                    const isJobActive = client.isJobActive !== false;
+                    const rowBgClass = isJobActive ? (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50') : 'bg-red-50';
 
                     return (
                       <React.Fragment key={client.email}>
-                        <tr className={`hover:bg-gray-50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
-                          <td className="px-6 py-4 whitespace-nowrap">
+                        <tr className={`hover:bg-gray-100 transition-colors ${rowBgClass}`}>
+                          <td className="px-2 py-2">
+                            <div className={`text-[11px] font-medium truncate ${isJobActive ? 'text-gray-900' : 'text-red-900'}`} title={client.name}>{client.name}</div>
+                          </td>
+                          <td className="px-1 py-2">
                             <button
                               onClick={() => toggleRowExpansion(client.email)}
-                              className="p-1 hover:bg-gray-200 rounded transition-colors"
+                              className="p-0.5 hover:bg-gray-200 rounded transition-colors"
                             >
                               {isExpanded ? (
-                                <ChevronUp className="w-5 h-5 text-gray-600" />
+                                <ChevronUp className="w-3 h-3 text-gray-600" />
                               ) : (
-                                <ChevronDown className="w-5 h-5 text-gray-600" />
+                                <ChevronDown className="w-3 h-3 text-gray-600" />
                               )}
                             </button>
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm font-medium text-gray-900">{client.name}</div>
+                          <td className="px-2 py-2">
+                            <div className={`text-[11px] truncate ${isJobActive ? 'text-gray-600' : 'text-red-700'}`} title={client.email}>{client.email}</div>
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm text-gray-600">{client.email}</div>
-                          </td>
-                          <td className="px-6 py-4 text-center">
+                          <td className="px-2 py-2 text-center">
                             <div className="flex items-center justify-center">
                               {incompleteTodos.length > 0 ? (
-                                <div className="w-64 max-h-24 overflow-y-auto bg-gray-50 rounded-lg border border-gray-200 p-2 text-left">
-                                  <div className="space-y-1.5">
+                                <div className="w-full max-h-20 overflow-y-auto bg-gray-50 rounded border border-gray-200 p-1 text-left">
+                                  <div className="space-y-0.5">
                                     {incompleteTodos.map((todo) => (
                                       <div
                                         key={todo.id}
-                                        className="flex items-start gap-2 text-sm cursor-pointer hover:bg-gray-100 p-1 rounded transition-colors group/todo"
+                                        className="flex items-start gap-1 text-[10px] cursor-pointer hover:bg-gray-100 p-0.5 rounded transition-colors group/todo"
                                         onClick={() => toggleTodoStatus(client, todo.id)}
                                         title="Click to mark as complete"
                                       >
-                                        <Circle className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5 group-hover/todo:text-indigo-500" />
-                                        <span className="text-gray-700 leading-tight">{todo.title}</span>
+                                        <Circle className="w-3 h-3 text-gray-400 flex-shrink-0 mt-0.5 group-hover/todo:text-indigo-500" />
+                                        <span className="text-gray-700 leading-tight truncate">{todo.title}</span>
                                       </div>
                                     ))}
                                   </div>
                                 </div>
                               ) : (
-                                <div className="flex items-center gap-2">
-                                  <CheckCircle2 className="w-5 h-5 text-green-500" />
-                                  <span className="text-sm text-green-600 font-medium">All Complete</span>
+                                <div className="flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                  <span className="text-[10px] text-green-600 font-medium">All Complete</span>
                                 </div>
                               )}
                             </div>
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-center">
-                            <div className="flex items-center justify-center gap-2">
-                              <span className="text-sm font-medium text-gray-900">
+                          <td className="px-2 py-2 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <span className="text-[11px] font-medium text-gray-900">
                                 {client.lockPeriods?.length || 0}
                               </span>
                               {activeLock && (
-                                <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full flex items-center gap-1">
-                                  <Lock className="w-3 h-3" />
+                                <span className="px-1 py-0.5 bg-red-100 text-red-700 text-[9px] rounded-full flex items-center gap-0.5">
+                                  <Lock className="w-2.5 h-2.5" />
                                   Active
                                 </span>
                               )}
                             </div>
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                          <td className="px-2 py-2 text-center">
                             {activeLock ? (
-                              <span className="px-2 py-1 bg-red-100 text-red-700 text-xs font-medium rounded">
+                              <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] font-medium rounded">
                                 Locked
                               </span>
-                            ) : (
-                              <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-medium rounded">
+                            ) : isJobActive ? (
+                              <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-medium rounded">
                                 Active
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] font-medium rounded">
+                                Inactive
                               </span>
                             )}
                           </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-center">
+                          <td className="px-2 py-2 text-center">
+                            {client.lastAppliedJob ? (
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span className={`text-[11px] font-medium truncate w-full ${isJobActive ? 'text-gray-900' : 'text-red-900'}`} title={client.lastAppliedJob.companyName || 'N/A'}>
+                                  {client.lastAppliedJob.companyName || 'N/A'}
+                                </span>
+                                <span className={`text-[9px] ${isJobActive ? 'text-gray-500' : 'text-red-600'}`} title={client.lastAppliedJob.appliedDate || 'N/A'}>
+                                  {formatRelativeTime(client.lastAppliedJob.appliedDate) || 'N/A'}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className={`text-[11px] ${isJobActive ? 'text-gray-400' : 'text-red-400'}`}>-</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 text-center">
+                            {client.lastAppliedJob?.operatorName ? (
+                              <span className={`text-[11px] font-medium truncate ${isJobActive ? 'text-gray-700' : 'text-red-800'}`} title={client.lastAppliedJob.operatorName}>
+                                {client.lastAppliedJob.operatorName}
+                              </span>
+                            ) : (
+                              <span className={`text-[11px] ${isJobActive ? 'text-gray-400' : 'text-red-400'}`}>-</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 text-center">
                             {isEditing ? (
-                              <div className="flex items-center justify-center gap-2">
+                              <div className="flex items-center justify-center gap-1">
                                 <button
                                   onClick={saveClientData}
                                   disabled={saving}
-                                  className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors"
+                                  className="p-1 text-green-600 hover:bg-green-50 rounded transition-colors"
                                   title="Save"
                                 >
-                                  <Save className="w-4 h-4" />
+                                  <Save className="w-3 h-3" />
                                 </button>
                                 <button
                                   onClick={cancelEditing}
-                                  className="p-1.5 text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                                  className="p-1 text-gray-600 hover:bg-gray-100 rounded transition-colors"
                                   title="Cancel"
                                 >
-                                  <X className="w-4 h-4" />
+                                  <X className="w-3 h-3" />
                                 </button>
                               </div>
                             ) : (
                               <button
-                                onClick={() => startEditing(client)}
-                                className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
+                                onClick={() => handleEditClick(client)}
+                                className="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
                                 title="Edit"
                               >
-                                <Edit2 className="w-4 h-4" />
+                                <Edit2 className="w-3 h-3" />
                               </button>
                             )}
                           </td>
@@ -478,7 +594,7 @@ export default function ClientPreferences() {
                         {/* Expanded Row Content */}
                         {isExpanded && (
                           <tr>
-                            <td colSpan={7} className="px-6 py-4 bg-gray-50">
+                            <td colSpan={9} className="px-2 py-2 bg-gray-50">
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                 {/* TODOs Section */}
                                 <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -487,19 +603,19 @@ export default function ClientPreferences() {
                                     {isEditing && (
                                       <button
                                         onClick={() => addTodo(client.email)}
-                                        className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors"
+                                        className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded transition-colors"
                                       >
-                                        <Plus className="w-4 h-4" />
+                                        <Plus className="w-3 h-3" />
                                         Add TODO
                                       </button>
                                     )}
                                   </div>
-                                  <div className="space-y-2 max-h-80 overflow-y-auto pr-2">
+                                  <div className="space-y-1 max-h-60 overflow-y-auto pr-1">
                                     {displayData.todos && displayData.todos.length > 0 ? (
                                       displayData.todos.map((todo) => (
                                         <div
                                           key={todo.id}
-                                          className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors group"
+                                          className="flex items-start gap-2 p-2 bg-gray-50 rounded border border-gray-200 hover:border-gray-300 transition-colors group"
                                         >
                                           {isEditing ? (
                                             <>
@@ -508,37 +624,37 @@ export default function ClientPreferences() {
                                                 className="flex-shrink-0 mt-0.5"
                                               >
                                                 {todo.completed ? (
-                                                  <CheckCircle2 className="w-5 h-5 text-green-500" />
+                                                  <CheckCircle2 className="w-4 h-4 text-green-500" />
                                                 ) : (
-                                                  <Circle className="w-5 h-5 text-gray-400" />
+                                                  <Circle className="w-4 h-4 text-gray-400" />
                                                 )}
                                               </button>
-                                              <div className="flex-1 space-y-2">
+                                              <div className="flex-1 space-y-1">
                                                 <input
                                                   type="text"
                                                   value={todo.title}
                                                   onChange={(e) => updateTodo(client.email, todo.id, { title: e.target.value })}
                                                   placeholder="TODO title..."
-                                                  className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                                  className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                                                 />
                                                 <textarea
                                                   value={todo.notes || ''}
                                                   onChange={(e) => updateTodo(client.email, todo.id, { notes: e.target.value })}
                                                   placeholder="Add notes..."
                                                   rows={2}
-                                                  className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
+                                                  className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
                                                 />
                                                 {todo.createdBy && (
-                                                  <p className="text-xs text-gray-500">
+                                                  <p className="text-[10px] text-gray-500">
                                                     Created by {todo.createdBy}
                                                   </p>
                                                 )}
                                               </div>
                                               <button
                                                 onClick={() => deleteTodo(client.email, todo.id)}
-                                                className="flex-shrink-0 p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-all opacity-0 group-hover:opacity-100"
+                                                className="flex-shrink-0 p-0.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-all opacity-0 group-hover:opacity-100"
                                               >
-                                                <Trash2 className="w-4 h-4" />
+                                                <Trash2 className="w-3 h-3" />
                                               </button>
                                             </>
                                           ) : (
@@ -547,27 +663,27 @@ export default function ClientPreferences() {
                                               onClick={() => toggleTodoStatus(client, todo.id)}
                                               title={todo.completed ? "Click to mark as incomplete" : "Click to mark as complete"}
                                             >
-                                              <div className="flex items-start gap-3">
+                                              <div className="flex items-start gap-2">
                                                 {todo.completed ? (
-                                                  <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                                                  <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
                                                 ) : (
-                                                  <Circle className="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5 group-hover:text-indigo-500" />
+                                                  <Circle className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5 group-hover:text-indigo-500" />
                                                 )}
                                                 <div className="flex-1">
-                                                  <p className={`text-sm ${todo.completed ? 'text-gray-500 line-through' : 'text-gray-900 font-medium'}`}>
+                                                  <p className={`text-xs ${todo.completed ? 'text-gray-500 line-through' : 'text-gray-900 font-medium'}`}>
                                                     {todo.title}
                                                   </p>
-                                                  <div className="flex items-center gap-2 mt-1">
+                                                  <div className="flex items-center gap-1 mt-0.5">
                                                     {todo.createdBy && (
-                                                      <span className="text-xs text-gray-500">
+                                                      <span className="text-[10px] text-gray-500">
                                                         Created by {todo.createdBy}
                                                       </span>
                                                     )}
                                                     {todo.notes && todo.createdBy && (
-                                                      <span className="text-xs text-gray-500">•</span>
+                                                      <span className="text-[10px] text-gray-500">•</span>
                                                     )}
                                                     {todo.notes && (
-                                                      <p className="text-xs text-gray-600">{todo.notes}</p>
+                                                      <p className="text-[10px] text-gray-600">{todo.notes}</p>
                                                     )}
                                                   </div>
                                                 </div>
@@ -577,26 +693,26 @@ export default function ClientPreferences() {
                                         </div>
                                       ))
                                     ) : (
-                                      <p className="text-sm text-gray-500 text-center py-4">No TODOs</p>
+                                      <p className="text-xs text-gray-500 text-center py-2">No TODOs</p>
                                     )}
                                   </div>
                                 </div>
 
                                 {/* Lock Periods Section */}
-                                <div className="bg-white rounded-lg border border-gray-200 p-4">
-                                  <div className="flex items-center justify-between mb-4">
-                                    <h3 className="text-lg font-semibold text-gray-900">Lock Periods</h3>
+                                <div className="bg-white rounded-lg border border-gray-200 p-2">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <h3 className="text-sm font-semibold text-gray-900">Lock Periods</h3>
                                     {isEditing && (
                                       <button
                                         onClick={() => addLockPeriod(client.email)}
-                                        className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors"
+                                        className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded transition-colors"
                                       >
-                                        <Plus className="w-4 h-4" />
+                                        <Plus className="w-3 h-3" />
                                         Add Period
                                       </button>
                                     )}
                                   </div>
-                                  <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
+                                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                                     {displayData.lockPeriods && displayData.lockPeriods.length > 0 ? (
                                       displayData.lockPeriods.map((period) => {
                                         const isActive = isDateInLockPeriod(new Date(), [period]);
@@ -604,46 +720,46 @@ export default function ClientPreferences() {
                                         return (
                                           <div
                                             key={period.id}
-                                            className={`p-3 rounded-lg border ${isActive
+                                            className={`p-2 rounded border ${isActive
                                               ? 'bg-red-50 border-red-300'
                                               : 'bg-gray-50 border-gray-200'
                                               } group`}
                                           >
                                             {isEditing ? (
-                                              <div className="space-y-2">
-                                                <div className="grid grid-cols-2 gap-2">
+                                              <div className="space-y-1.5">
+                                                <div className="grid grid-cols-2 gap-1.5">
                                                   <div>
-                                                    <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
+                                                    <label className="block text-[10px] font-medium text-gray-700 mb-0.5">Start Date</label>
                                                     <input
                                                       type="date"
                                                       value={period.startDate}
                                                       onChange={(e) => updateLockPeriod(client.email, period.id, { startDate: e.target.value })}
-                                                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                                      className="w-full px-1.5 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                                                     />
                                                   </div>
                                                   <div>
-                                                    <label className="block text-xs font-medium text-gray-700 mb-1">End Date</label>
+                                                    <label className="block text-[10px] font-medium text-gray-700 mb-0.5">End Date</label>
                                                     <input
                                                       type="date"
                                                       value={period.endDate}
                                                       onChange={(e) => updateLockPeriod(client.email, period.id, { endDate: e.target.value })}
-                                                      className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                                      className="w-full px-1.5 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                                                     />
                                                   </div>
                                                 </div>
                                                 <div>
-                                                  <label className="block text-xs font-medium text-gray-700 mb-1">Reason</label>
+                                                  <label className="block text-[10px] font-medium text-gray-700 mb-0.5">Reason</label>
                                                   <input
                                                     type="text"
                                                     value={period.reason || ''}
                                                     onChange={(e) => updateLockPeriod(client.email, period.id, { reason: e.target.value })}
                                                     placeholder="Reason for lock period..."
-                                                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                                                    className="w-full px-1.5 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                                                   />
                                                 </div>
                                                 <button
                                                   onClick={() => deleteLockPeriod(client.email, period.id)}
-                                                  className="w-full px-3 py-1.5 text-xs font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
+                                                  className="w-full px-2 py-1 text-[10px] font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
                                                 >
                                                   Delete Period
                                                 </button>
@@ -651,19 +767,19 @@ export default function ClientPreferences() {
                                             ) : (
                                               <div className="flex items-start justify-between">
                                                 <div className="flex-1">
-                                                  <div className="flex items-center gap-2 mb-1">
-                                                    <Calendar className="w-4 h-4 text-gray-500" />
-                                                    <span className="text-sm font-medium text-gray-900">
+                                                  <div className="flex items-center gap-1.5 mb-0.5">
+                                                    <Calendar className="w-3 h-3 text-gray-500" />
+                                                    <span className="text-xs font-medium text-gray-900">
                                                       {new Date(period.startDate).toLocaleDateString()} - {new Date(period.endDate).toLocaleDateString()}
                                                     </span>
                                                     {isActive && (
-                                                      <span className="px-2 py-0.5 text-xs font-medium bg-red-500 text-white rounded">
+                                                      <span className="px-1.5 py-0.5 text-[9px] font-medium bg-red-500 text-white rounded">
                                                         Active
                                                       </span>
                                                     )}
                                                   </div>
                                                   {period.reason && (
-                                                    <p className="text-xs text-gray-600 mt-1">{period.reason}</p>
+                                                    <p className="text-[10px] text-gray-600 mt-0.5">{period.reason}</p>
                                                   )}
                                                 </div>
                                               </div>
@@ -672,7 +788,7 @@ export default function ClientPreferences() {
                                         );
                                       })
                                     ) : (
-                                      <p className="text-sm text-gray-500 text-center py-4">No lock periods</p>
+                                      <p className="text-xs text-gray-500 text-center py-2">No lock periods</p>
                                     )}
                                   </div>
                                 </div>

@@ -72,6 +72,51 @@ function formatDateTime(dt) {
   });
 }
 
+function formatRelativeTime(dateInput) {
+  if (!dateInput) return "—";
+  
+  // Parse the date input (handles various formats)
+  const date = parseFlexibleDate(dateInput);
+  if (!date || isNaN(date.getTime())) return "—";
+  
+  const now = new Date();
+  const diffMs = now - date;
+  const diffSeconds = Math.floor(diffMs / 1000);
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  const diffHours = Math.floor(diffMinutes / 60);
+  const diffDays = Math.floor(diffHours / 24);
+  const diffMonths = Math.floor(diffDays / 30);
+  const diffYears = Math.floor(diffDays / 365);
+  
+  // Less than a minute ago
+  if (diffSeconds < 60) {
+    return diffSeconds <= 0 ? "just now" : `${diffSeconds} second${diffSeconds === 1 ? '' : 's'} ago`;
+  }
+  
+  // Less than an hour ago
+  if (diffMinutes < 60) {
+    return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
+  }
+  
+  // Less than a day ago
+  if (diffHours < 24) {
+    return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+  }
+  
+  // Less than a month ago
+  if (diffDays < 30) {
+    return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+  }
+  
+  // Less than a year ago
+  if (diffMonths < 12) {
+    return `${diffMonths} month${diffMonths === 1 ? '' : 's'} ago`;
+  }
+  
+  // More than a year ago
+  return `${diffYears} year${diffYears === 1 ? '' : 's'} ago`;
+}
+
 
 
 function sameDay(a, b) {
@@ -259,7 +304,7 @@ function JobDetailsModal({ job, isOpen, onClose }) {
   if (!isOpen || !job) return null;
 
   const dt = safeDate(job);
-  const when = formatDateTime(dt);
+  const when = formatRelativeTime(dt);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
