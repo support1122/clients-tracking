@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { TopPerformersBarChart, MonthlyLeaderboard, TeamPerformanceSummary } from './OperationsCharts';
 import { AnimatedCounter } from './AnimatedCounter';
 
@@ -15,6 +16,7 @@ const INCENTIVE_TIERS = [
 ];
 
 export default function OperatorsPerformanceReport() {
+  const navigate = useNavigate();
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [operations, setOperations] = useState([]);
@@ -196,12 +198,34 @@ export default function OperatorsPerformanceReport() {
     return distribution;
   }, [sortedOperators, startDate, endDate]);
 
+  const handleGoBack = () => {
+    // Try to go back in history, fallback to monitor-clients if no history
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate('/monitor-clients');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-6">
       <div className="max-w-7xl mx-auto">
         <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 mb-6">
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">Operators Performance Report</h1>
-          <p className="text-slate-600 mb-6">Shows jobs applied within selected date range</p>
+          <div className="flex items-start justify-between mb-6">
+            <div className="flex-1">
+              <h1 className="text-3xl font-bold text-slate-900 mb-2">Operators Performance Report</h1>
+              <p className="text-slate-600">Shows jobs applied within selected date range</p>
+            </div>
+            <button
+              onClick={handleGoBack}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors font-medium text-sm ml-4"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+              </svg>
+              Go Back
+            </button>
+          </div>
           
           {/* Incentive Structure Card - Collapsible */}
           <div className="mb-6 border border-slate-200 rounded-xl overflow-hidden">

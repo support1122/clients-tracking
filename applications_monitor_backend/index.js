@@ -2406,6 +2406,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return a.email.localeCompare(b.email);
     });
 
+    await syncClientStatusFromJobs();
+
     res.status(200).json({ success: true, date: date || null, rows });
   } catch (e) {
     console.error('client-job-analysis error', e);
@@ -3453,6 +3455,54 @@ const mergeLockPeriods = (periods1, periods2) => {
 };
 
 // Helper function to get default TODOs
+const syncClientStatusFromJobs = async () => {
+  try {
+    const allClients = await ClientModel.find().select('email').lean();
+    const clientEmailList = allClients.map(c => c.email.toLowerCase());
+
+    if (clientEmailList.length === 0) return;
+
+    const jobAnalysisPipeline = [
+      {
+        $match: {
+          userID: { $in: clientEmailList },
+          $or: [
+            { currentStatus: { $regex: /appl/i } },
+            { appliedDate: { $exists: true, $ne: null } }
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: '$userID',
+          hasAppliedJobs: { $sum: 1 }
+        }
+      }
+    ];
+
+    const jobAnalysis = await JobModel.aggregate(jobAnalysisPipeline);
+    const activeClientsSet = new Set(jobAnalysis.map(j => j._id.toLowerCase()));
+
+    const updatePromises = [];
+    for (const client of allClients) {
+      const emailLower = client.email.toLowerCase();
+      const isActive = activeClientsSet.has(emailLower);
+      const newStatus = isActive ? 'active' : 'inactive';
+      
+      updatePromises.push(
+        ClientModel.updateOne(
+          { email: emailLower },
+          { $set: { status: newStatus, updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) } }
+        )
+      );
+    }
+
+    await Promise.all(updatePromises);
+  } catch (error) {
+    console.error('Error syncing client status from jobs:', error);
+  }
+};
+
 const getDefaultTodos = () => {
   const timestamp = Date.now();
   return [
@@ -3488,22 +3538,26 @@ const getDefaultTodos = () => {
 
 app.get('/api/client-todos/all', async (req, res) => {
   try {
-    // Fetch from both models and sync them
+    await syncClientStatusFromJobs();
+
     const [allClientTodos, allClientOps, allClients] = await Promise.all([
       ClientTodosModel.find().lean(),
       ClientOperationsModel.find().lean(),
-      ClientModel.find().select('email name').lean()
+      ClientModel.find().select('email name status').lean()
     ]);
 
     const clientMap = {};
+    const clientStatusMap = {};
+    const clientEmails = new Set();
     allClients.forEach(client => {
-      clientMap[client.email.toLowerCase()] = client.name;
+      const emailLower = client.email.toLowerCase();
+      clientMap[emailLower] = client.name;
+      clientStatusMap[emailLower] = client.status || 'active';
+      clientEmails.add(emailLower);
     });
 
-    // Create a map to merge data from both models
     const mergedDataMap = new Map();
 
-    // Process ClientTodosModel data
     allClientTodos.forEach(todoData => {
       const email = todoData.clientEmail.toLowerCase();
       mergedDataMap.set(email, {
@@ -3516,16 +3570,13 @@ app.get('/api/client-todos/all', async (req, res) => {
       });
     });
 
-    // Merge ClientOperationsModel data
     allClientOps.forEach(opsData => {
       const email = opsData.clientEmail.toLowerCase();
       const existing = mergedDataMap.get(email);
       
       if (existing) {
-        // Merge TODOs and lock periods, keeping most recent
         existing.todos = mergeTodos(existing.todos, opsData.todos || []);
         existing.lockPeriods = mergeLockPeriods(existing.lockPeriods, opsData.lockPeriods || []);
-        // Update timestamps if opsData is newer
         const existingTime = new Date(existing.updatedAt || 0);
         const opsTime = new Date(opsData.updatedAt || 0);
         if (opsTime > existingTime) {
@@ -3545,7 +3596,6 @@ app.get('/api/client-todos/all', async (req, res) => {
 
     const clientsWithTodos = Array.from(mergedDataMap.values());
 
-    // Also include clients that don't have todos yet
     allClients.forEach(client => {
       const exists = clientsWithTodos.find(c => c.email.toLowerCase() === client.email.toLowerCase());
       if (!exists) {
@@ -3558,6 +3608,95 @@ app.get('/api/client-todos/all', async (req, res) => {
           updatedAt: null
         });
       }
+    });
+
+    const clientEmailList = Array.from(clientEmails);
+    
+    const jobAnalysisPipeline = [
+      {
+        $match: {
+          userID: { $in: clientEmailList },
+          $or: [
+            { currentStatus: { $regex: /appl/i } },
+            { appliedDate: { $exists: true, $ne: null } }
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: '$userID',
+          hasAppliedJobs: { $sum: 1 }
+        }
+      }
+    ];
+
+    const lastAppliedJobsQuery = {
+      userID: { $in: clientEmailList },
+      operatorName: { $ne: 'user', $exists: true },
+      appliedDate: { $exists: true, $ne: null }
+    };
+
+    const [jobAnalysis, allAppliedJobs] = await Promise.all([
+      JobModel.aggregate(jobAnalysisPipeline),
+      JobModel.find(lastAppliedJobsQuery).select('userID companyName appliedDate operatorName').lean()
+    ]);
+
+    const parseDateString = (dateStr) => {
+      if (!dateStr) return null;
+      try {
+        const parts = dateStr.split('/');
+        if (parts.length === 3) {
+          const [day, month, year] = parts.map(n => parseInt(n, 10));
+          return new Date(year, month - 1, day);
+        }
+        return new Date(dateStr);
+      } catch {
+        return null;
+      }
+    };
+
+    const jobsByUser = new Map();
+    allAppliedJobs.forEach(job => {
+      const emailLower = job.userID.toLowerCase();
+      const existing = jobsByUser.get(emailLower);
+      const jobDate = parseDateString(job.appliedDate);
+      
+      if (!existing || !existing.date || (jobDate && jobDate > existing.date)) {
+        jobsByUser.set(emailLower, {
+          companyName: job.companyName,
+          appliedDate: job.appliedDate,
+          operatorName: job.operatorName,
+          date: jobDate
+        });
+      }
+    });
+
+    const activeClientsSet = new Set(jobAnalysis.map(j => j._id.toLowerCase()));
+    const lastAppliedMap = new Map();
+    jobsByUser.forEach((jobData, email) => {
+      lastAppliedMap.set(email, {
+        companyName: jobData.companyName,
+        appliedDate: jobData.appliedDate,
+        operatorName: jobData.operatorName
+      });
+    });
+
+    clientsWithTodos.forEach(client => {
+      const emailLower = client.email.toLowerCase();
+      const syncedStatus = clientStatusMap[emailLower] || 'active';
+      client.isJobActive = syncedStatus === 'active';
+      client.status = syncedStatus;
+      const lastJob = lastAppliedMap.get(emailLower);
+      if (lastJob) {
+        client.lastAppliedJob = lastJob;
+      } else {
+        client.lastAppliedJob = null;
+      }
+    });
+
+    clientsWithTodos.sort((a, b) => {
+      if (a.isJobActive === b.isJobActive) return 0;
+      return a.isJobActive ? -1 : 1;
     });
 
     res.status(200).json({ success: true, clients: clientsWithTodos });
