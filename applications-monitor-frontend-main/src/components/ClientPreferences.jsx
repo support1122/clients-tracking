@@ -455,10 +455,16 @@ export default function ClientPreferences() {
                   filteredClients.map((client, idx) => {
                     const isExpanded = expandedRows.has(client.email);
                     const isEditing = editingClient?.email === client.email;
-                    const activeLock = getActiveLockPeriod(client.lockPeriods);
-                    const incompleteTodos = (client.todos || []).filter(t => !t.completed);
-                    const completedTodos = (client.todos || []).filter(t => t.completed);
                     const displayData = isEditing ? editingClient : client;
+                    const displayTodos = displayData?.todos || [];
+                    const incompleteTodos = displayTodos.filter(t => !t.completed);
+                    const completedTodos = displayTodos.filter(t => t.completed);
+                    const todoStats = {
+                      total: displayTodos.length,
+                      pending: incompleteTodos.length,
+                      completed: completedTodos.length
+                    };
+                    const activeLock = getActiveLockPeriod(client.lockPeriods);
                     const isJobActive = client.isJobActive !== false;
                     const rowBgClass = isJobActive ? (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50') : 'bg-red-50';
 
@@ -566,10 +572,10 @@ export default function ClientPreferences() {
                                 <button
                                   onClick={saveClientData}
                                   disabled={saving}
-                                  className="p-1 text-green-600 hover:bg-green-50 rounded transition-colors"
+                                  className="p-1 text-white hover:bg-green-900 bg-green-600 rounded transition-colors"
                                   title="Save"
                                 >
-                                  <Save className="w-3 h-3" />
+                                  Save
                                 </button>
                                 <button
                                   onClick={cancelEditing}
@@ -595,111 +601,144 @@ export default function ClientPreferences() {
                         {isExpanded && (
                           <tr>
                             <td colSpan={9} className="px-2 py-2 bg-gray-50">
-                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                              <div className="grid grid-cols-1 gap-6">
                                 {/* TODOs Section */}
                                 <div className="bg-white rounded-lg border border-gray-200 p-4">
-                                  <div className="flex items-center justify-between mb-4">
-                                    <h3 className="text-lg font-semibold text-gray-900">TODOs</h3>
+                                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                                    <div>
+                                      <h3 className="text-lg font-semibold text-gray-900">TODOs</h3>
+                                      <p className="text-xs text-gray-500">
+                                        {todoStats.pending} pending &middot; {todoStats.total} total
+                                      </p>
+                                    </div>
                                     {isEditing && (
                                       <button
                                         onClick={() => addTodo(client.email)}
-                                        className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded transition-colors"
+                                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
                                       >
                                         <Plus className="w-3 h-3" />
                                         Add TODO
                                       </button>
                                     )}
                                   </div>
-                                  <div className="space-y-1 max-h-60 overflow-y-auto pr-1">
-                                    {displayData.todos && displayData.todos.length > 0 ? (
-                                      displayData.todos.map((todo) => (
-                                        <div
-                                          key={todo.id}
-                                          className="flex items-start gap-2 p-2 bg-gray-50 rounded border border-gray-200 hover:border-gray-300 transition-colors group"
-                                        >
-                                          {isEditing ? (
-                                            <>
+                                  <div className="flex flex-wrap items-center gap-4 text-[11px] text-gray-600 mb-4">
+                                    <div className="flex items-center gap-1">
+                                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                                      Pending {todoStats.pending}
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                                      Completed {todoStats.completed}
+                                    </div>
+                                  </div>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-96 overflow-y-auto pr-1 auto-rows-max">
+                                    {displayTodos.length > 0 ? (
+                                      displayTodos.map((todo) => (
+                                        isEditing ? (
+                                          <div
+                                            key={todo.id}
+                                            className={`relative group rounded-lg border p-3 text-xs transition-all ${todo.completed ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200 hover:border-indigo-200'}`}
+                                          >
+                                            <div className="flex items-start gap-3">
                                               <button
                                                 onClick={() => updateTodo(client.email, todo.id, { completed: !todo.completed })}
-                                                className="flex-shrink-0 mt-0.5"
+                                                className="flex-shrink-0 mt-1 text-gray-500 hover:text-indigo-500"
                                               >
                                                 {todo.completed ? (
-                                                  <CheckCircle2 className="w-4 h-4 text-green-500" />
+                                                  <CheckCircle2 className="w-5 h-5 text-green-500" />
                                                 ) : (
-                                                  <Circle className="w-4 h-4 text-gray-400" />
+                                                  <Circle className="w-5 h-5 text-gray-400" />
                                                 )}
                                               </button>
-                                              <div className="flex-1 space-y-1">
-                                                <input
-                                                  type="text"
-                                                  value={todo.title}
-                                                  onChange={(e) => updateTodo(client.email, todo.id, { title: e.target.value })}
-                                                  placeholder="TODO title..."
-                                                  className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                                                />
-                                                <textarea
+                                              <div className="flex-1 space-y-2">
+                                                <div className="flex items-start justify-between gap-2">
+                                                  <input
+                                                    type="text"
+                                                    value={todo.title}
+                                                    onChange={(e) => updateTodo(client.email, todo.id, { title: e.target.value })}
+                                                    placeholder="TODO title..."
+                                                    className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                                                  />
+                                                  <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-full ${todo.completed ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                    {todo.completed ? 'Completed' : 'Pending'}
+                                                  </span>
+                                                </div>
+                                                {/* <textarea
                                                   value={todo.notes || ''}
                                                   onChange={(e) => updateTodo(client.email, todo.id, { notes: e.target.value })}
                                                   placeholder="Add notes..."
-                                                  rows={2}
-                                                  className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
-                                                />
-                                                {todo.createdBy && (
-                                                  <p className="text-[10px] text-gray-500">
-                                                    Created by {todo.createdBy}
-                                                  </p>
-                                                )}
+                                                  rows={3}
+                                                  className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
+                                                /> */}
+                                                <div className="flex flex-wrap gap-3 text-[10px] text-gray-500">
+                                                  {todo.createdBy && (
+                                                    <span>Created by {todo.createdBy}</span>
+                                                  )}
+                                                  {todo.createdAt && (
+                                                    <span>Added {formatRelativeTime(todo.createdAt)}</span>
+                                                  )}
+                                                  {todo.updatedAt && (
+                                                    <span>Updated {formatRelativeTime(todo.updatedAt)}</span>
+                                                  )}
+                                                </div>
                                               </div>
-                                              <button
+                                              {/* <button
                                                 onClick={() => deleteTodo(client.email, todo.id)}
-                                                className="flex-shrink-0 p-0.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-all opacity-0 group-hover:opacity-100"
+                                                className="flex-shrink-0 p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-all"
                                               >
-                                                <Trash2 className="w-3 h-3" />
-                                              </button>
-                                            </>
-                                          ) : (
-                                            <div
-                                              className="flex-1 cursor-pointer"
-                                              onClick={() => toggleTodoStatus(client, todo.id)}
-                                              title={todo.completed ? "Click to mark as incomplete" : "Click to mark as complete"}
-                                            >
-                                              <div className="flex items-start gap-2">
-                                                {todo.completed ? (
-                                                  <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
-                                                ) : (
-                                                  <Circle className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5 group-hover:text-indigo-500" />
-                                                )}
-                                                <div className="flex-1">
-                                                  <p className={`text-xs ${todo.completed ? 'text-gray-500 line-through' : 'text-gray-900 font-medium'}`}>
-                                                    {todo.title}
+                                                <Trash2 className="w-4 h-4" />
+                                              </button> */}
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <div
+                                            key={todo.id}
+                                            className={`group rounded-lg border p-3 text-xs transition-all cursor-pointer ${todo.completed ? 'bg-white border-gray-200 hover:border-green-300' : 'bg-amber-50 border-amber-200 hover:border-amber-300'}`}
+                                            onClick={() => toggleTodoStatus(client, todo.id)}
+                                            title={todo.completed ? "Click to mark as incomplete" : "Click to mark as complete"}
+                                          >
+                                            <div className="flex items-start gap-3">
+                                              {todo.completed ? (
+                                                <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                                              ) : (
+                                                <Circle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5 group-hover:text-indigo-500" />
+                                              )}
+                                              <div className="flex-1 space-y-2">
+                                                <div className="flex items-start justify-between gap-3">
+                                                  <p className={`text-sm ${todo.completed ? 'text-gray-600 line-through' : 'text-gray-900 font-semibold'}`}>
+                                                    {todo.title || 'Untitled TODO'}
                                                   </p>
-                                                  <div className="flex items-center gap-1 mt-0.5">
-                                                    {todo.createdBy && (
-                                                      <span className="text-[10px] text-gray-500">
-                                                        Created by {todo.createdBy}
-                                                      </span>
-                                                    )}
-                                                    {todo.notes && todo.createdBy && (
-                                                      <span className="text-[10px] text-gray-500">•</span>
-                                                    )}
-                                                    {todo.notes && (
-                                                      <p className="text-[10px] text-gray-600">{todo.notes}</p>
-                                                    )}
-                                                  </div>
+                                                  <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-full ${todo.completed ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                                                    {todo.completed ? 'Completed' : 'Pending'}
+                                                  </span>
+                                                </div>
+                                                {todo.notes && (
+                                                  <p className="text-[11px] text-gray-600 leading-snug">{todo.notes}</p>
+                                                )}
+                                                <div className="flex flex-wrap gap-3 text-[10px] text-gray-500">
+                                                  {todo.createdBy && (
+                                                    <span>Created by {todo.createdBy}</span>
+                                                  )}
+                                                  {todo.createdAt && (
+                                                    <span>Added {formatRelativeTime(todo.createdAt)}</span>
+                                                  )}
+                                                  {todo.updatedAt && (
+                                                    <span>Updated {formatRelativeTime(todo.updatedAt)}</span>
+                                                  )}
                                                 </div>
                                               </div>
                                             </div>
-                                          )}
-                                        </div>
+                                          </div>
+                                        )
                                       ))
                                     ) : (
-                                      <p className="text-xs text-gray-500 text-center py-2">No TODOs</p>
+                                      <p className="text-xs text-gray-500 text-center py-4">No TODOs</p>
                                     )}
                                   </div>
                                 </div>
 
                                 {/* Lock Periods Section */}
-                                <div className="bg-white rounded-lg border border-gray-200 p-2">
+                                {/* <div className="bg-white rounded-lg border border-gray-200 p-2">
                                   <div className="flex items-center justify-between mb-2">
                                     <h3 className="text-sm font-semibold text-gray-900">Lock Periods</h3>
                                     {isEditing && (
@@ -791,7 +830,7 @@ export default function ClientPreferences() {
                                       <p className="text-xs text-gray-500 text-center py-2">No lock periods</p>
                                     )}
                                   </div>
-                                </div>
+                                </div> */}
                               </div>
                             </td>
                           </tr>
