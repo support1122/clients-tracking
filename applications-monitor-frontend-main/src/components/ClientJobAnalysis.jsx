@@ -254,7 +254,7 @@ export default function ClientJobAnalysis() {
                   const isProfessional = plan.includes('professional');
                   const isExecutive = plan.includes('executive');
                   const isPrime = plan.includes('prime');
-                  const threshold = isPrime ? 2000 : isExecutive ? 1000 : isProfessional ? 500 : isIgnite ? 250 : Infinity;
+                  const threshold = isPrime ? 160 : isExecutive ? 1000 : isProfessional ? 500 : isIgnite ? 250 : Infinity;
                   const exceeded = totalApplications > threshold;
                   
                   // Check if active status and saved is 0 - make row orange
