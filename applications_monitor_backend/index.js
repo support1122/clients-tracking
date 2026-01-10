@@ -578,6 +578,145 @@ const updateClientDashboardTeamLead = async (req, res) => {
   }
 };
 
+const upgradeClientPlan = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { planType } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+
+    if (!planType) {
+      return res.status(400).json({ success: false, error: 'Plan type is required' });
+    }
+
+    const emailLower = email.toLowerCase();
+    const planPrices = { ignite: 199, professional: 349, executive: 599 };
+    const planTypeLower = planType.toLowerCase();
+
+    if (!planPrices[planTypeLower]) {
+      return res.status(400).json({ success: false, error: 'Invalid plan type' });
+    }
+
+    const capitalizedPlan = planTypeLower === 'ignite' 
+      ? 'Ignite' 
+      : planTypeLower === 'professional' 
+        ? 'Professional' 
+        : planTypeLower === 'executive' 
+          ? 'Executive' 
+          : 'Free Trial';
+
+    const planPrice = planPrices[planTypeLower];
+    const currentDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+
+    const existingClient = await ClientModel.findOne({ email: emailLower }).lean();
+    if (!existingClient) {
+      return res.status(404).json({ success: false, error: 'Client not found' });
+    }
+
+    const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹,\s]/g, '') || '0');
+    const currentPlanPrice = existingClient.planPrice || 0;
+    const upgradeDifference = planPrice - currentPlanPrice;
+    const newAmountPaid = currentAmountPaid + upgradeDifference;
+
+    await ClientModel.updateOne(
+      { email: emailLower },
+      {
+        $set: {
+          planType: planTypeLower,
+          planPrice: planPrice,
+          amountPaid: newAmountPaid.toString(),
+          amountPaidDate: currentDate,
+          updatedAt: currentDate
+        }
+      },
+      { runValidators: false }
+    );
+
+    await NewUserModel.updateOne(
+      { email: emailLower },
+      {
+        $set: {
+          planType: capitalizedPlan,
+          updatedAt: currentDate
+        }
+      },
+      { runValidators: false }
+    );
+
+    const updatedClient = await ClientModel.findOne({ email: emailLower }).lean();
+
+    res.status(200).json({
+      success: true,
+      message: `Plan upgraded to ${capitalizedPlan} successfully`,
+      client: updatedClient
+    });
+  } catch (error) {
+    console.error('Error upgrading client plan:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+const addClientAddon = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { addonType, addonPrice } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+
+    if (!addonType || !addonPrice) {
+      return res.status(400).json({ success: false, error: 'Addon type and price are required' });
+    }
+
+    const emailLower = email.toLowerCase();
+    const currentDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+
+    const existingClient = await ClientModel.findOne({ email: emailLower }).lean();
+    if (!existingClient) {
+      return res.status(404).json({ success: false, error: 'Client not found' });
+    }
+
+    const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹,\s]/g, '') || '0');
+    const newAmountPaid = currentAmountPaid + parseFloat(addonPrice);
+
+    const newAddon = {
+      type: addonType,
+      price: parseFloat(addonPrice),
+      addedAt: currentDate
+    };
+
+    const existingAddons = existingClient.addons || [];
+    const updatedAddons = [...existingAddons, newAddon];
+
+    await ClientModel.updateOne(
+      { email: emailLower },
+      {
+        $set: {
+          addons: updatedAddons,
+          amountPaid: newAmountPaid.toString(),
+          amountPaidDate: currentDate,
+          updatedAt: currentDate
+        }
+      },
+      { runValidators: false }
+    );
+
+    const updatedClient = await ClientModel.findOne({ email: emailLower }).lean();
+
+    res.status(200).json({
+      success: true,
+      message: `Addon ${addonType} added successfully`,
+      client: updatedClient
+    });
+  } catch (error) {
+    console.error('Error adding client addon:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 // const createOrUpdateClient = async (req, res) => {
 //     try {
 //       // const referer = req.headers.referer || "";
@@ -2981,6 +3120,8 @@ app.delete('/api/clients/delete/:email', deleteClient);
 app.put('/api/clients/:email/change-password', verifyToken, verifyAdmin, changeClientPassword);
 app.post('/api/clients/update-operations-name', updateClientOperationsName);
 app.post('/api/clients/update-dashboard-team-lead', updateClientDashboardTeamLead);
+app.put('/api/clients/:email/upgrade-plan', verifyToken, upgradeClientPlan);
+app.post('/api/clients/:email/add-addon', verifyToken, addClientAddon);
 app.get('/api/managers/names', getDashboardManagerNames);
 
 //get all the jobdatabase data..
