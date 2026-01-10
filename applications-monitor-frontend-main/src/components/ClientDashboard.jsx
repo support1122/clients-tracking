@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'react-hot-toast';
 import Layout from './Layout';
-import { Search, User, CreditCard, Zap, X, CheckCircle2, ArrowUp, Sparkles, Crown, Rocket } from 'lucide-react';
+import { Search, User, CreditCard, Zap, X, CheckCircle2, ArrowUp, Sparkles, Crown, Rocket, Star } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_BASE || 'http://localhost:8001';
 
@@ -30,7 +30,8 @@ export default function ClientDashboard() {
   const planOptions = [
     { value: 'Ignite', label: 'Ignite', price: 199, applications: 250, icon: Rocket, color: 'orange' },
     { value: 'Professional', label: 'Professional', price: 349, applications: 500, icon: Sparkles, color: 'blue' },
-    { value: 'Executive', label: 'Executive', price: 599, applications: 1200, icon: Crown, color: 'purple' }
+    { value: 'Executive', label: 'Executive', price: 599, applications: 1200, icon: Crown, color: 'purple' },
+    { value: 'Prime', label: 'Prime', price: 119, applications: 2000, icon: Star, color: 'gold' }
   ];
 
   const getCurrentPlan = () => {
@@ -43,7 +44,7 @@ export default function ClientDashboard() {
     const currentPlan = getCurrentPlan();
     if (!currentPlan) return true;
     
-    const planOrder = ['Ignite', 'Professional', 'Executive'];
+    const planOrder = ['Ignite', 'Professional', 'Executive', 'Prime'];
     const currentIndex = planOrder.indexOf(currentPlan.value);
     const targetIndex = planOrder.indexOf(planValue);
     
@@ -62,7 +63,7 @@ export default function ClientDashboard() {
     
     if (planValue === currentPlan.value) return 0;
     
-    const planOrder = ['Ignite', 'Professional', 'Executive'];
+    const planOrder = ['Ignite', 'Professional', 'Executive', 'Prime'];
     const currentIndex = planOrder.indexOf(currentPlan.value);
     const targetIndex = planOrder.indexOf(planValue);
     
@@ -298,6 +299,7 @@ export default function ClientDashboard() {
 
   const getPlanTypeColor = (planType) => {
     const colors = {
+      'Prime': '#FFD700',
       'Executive': '#8B5CF6',
       'Professional': '#3B82F6',
       'Ignite': '#F59E0B',
@@ -840,11 +842,13 @@ export default function ClientDashboard() {
                                 <div className={`p-1.5 rounded-lg ${
                                   plan.color === 'orange' ? 'bg-orange-100' :
                                   plan.color === 'blue' ? 'bg-blue-100' :
+                                  plan.color === 'gold' ? 'bg-yellow-100' :
                                   'bg-purple-100'
                                 }`}>
                                   <Icon className={`w-4 h-4 ${
                                     plan.color === 'orange' ? 'text-orange-600' :
                                     plan.color === 'blue' ? 'text-blue-600' :
+                                    plan.color === 'gold' ? 'text-yellow-600' :
                                     'text-purple-600'
                                   }`} />
                                 </div>
