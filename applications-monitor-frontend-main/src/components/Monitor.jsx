@@ -1041,6 +1041,7 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
               <option value="ignite">Ignite</option>
               <option value="professional">Professional</option>
               <option value="executive">Executive</option>
+              <option value="prime">Prime</option>
             </select>
           ) : (
             <p className="text-sm text-slate-900 mt-1">
