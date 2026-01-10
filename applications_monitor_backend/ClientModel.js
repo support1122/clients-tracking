@@ -189,6 +189,11 @@ export const ClientSchema = new mongoose.Schema({
     default: '',
     trim: true
   },
+  addons: {
+    type: Array,
+    required: false,
+    default: []
+  },
   createdAt: {
     type: String,
     default: () => new Date().toLocaleString('en-US', 'Asia/Kolkata'),
