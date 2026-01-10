@@ -31,7 +31,7 @@ export default function ClientDashboard() {
     { value: 'Ignite', label: 'Ignite', price: 199, applications: 250, icon: Rocket, color: 'orange' },
     { value: 'Professional', label: 'Professional', price: 349, applications: 500, icon: Sparkles, color: 'blue' },
     { value: 'Executive', label: 'Executive', price: 599, applications: 1200, icon: Crown, color: 'purple' },
-    { value: 'Prime', label: 'Prime', price: 119, applications: 2000, icon: Star, color: 'gold' }
+    { value: 'Prime', label: 'Prime', price: 119, applications: 160, icon: Star, color: 'gold' }
   ];
 
   const getCurrentPlan = () => {
