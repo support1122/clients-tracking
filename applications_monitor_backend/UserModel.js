@@ -1,39 +1,38 @@
+// UserModel.js
 import mongoose from "mongoose";
+import { baseResumeSchema, coverLetterSchema, optimizedResumeSchema, transcriptSchema } from "../schema_models/Opt.Resumes_Cover_Schema.js";
 
-export const UserSchema = new mongoose.Schema({
-  email: {
-    type: String,
-    required: true,
-    unique: true,
-    lowercase: true,
-    trim: true
-  },
-  password: {
-    type: String,
-    required: true
-  },
-  role: {
-    type: String,
-    enum: ["admin", "team_lead", "operations_intern"],
-    required: true,
-    default: "team_lead"
-  },
-  isActive: {
-    type: Boolean,
-    required: true,
-    default: true
-  },
-  createdAt: {
-    type: String,
-    default: () => new Date().toLocaleString('en-US', 'Asia/Kolkata'),
-    required: true,
-    immutable: true
-  },
-  updatedAt: {
-    type: String,
-    required: true,
-    default: () => new Date().toLocaleString('en-US', 'Asia/Kolkata')
-  }
-});
+export const userSchema = new mongoose.Schema(
+  {
+    userID: { type: String, required: true, default: () => String(Date.now()) },
+    name:   { type: String, required: true },
+    email:  { type: String, required: true },
+    passwordHashed: { type: String, required: true, default: "--NO Password --/OAUTH" },
 
-export const UserModel = mongoose.model('tracking_portal_users', UserSchema);
+    // Base resume (single)
+    resumeLink: { type: [baseResumeSchema], default: [] },
+
+    // Plural arrays + [] defaults
+    coverLetters:     { type: [coverLetterSchema],     default: [] },
+    optimizedResumes: { type: [optimizedResumeSchema], default: [] },
+    transcript : {type : [transcriptSchema], default : []},
+    planType:  { 
+      type: String, 
+      required: true, 
+      default: "Free Trial",
+      enum: ["Free Trial", "Ignite", "Professional", "Executive", "Prime"]
+    },
+    joinTime: {
+      type: String,
+      required: true,
+      default: "in 1 week",
+      enum: ["in 1 week", "in 2 week", "in 3 week", "in 4 week", "in 6-7 week"]
+    },
+    planLimit: { type: Number, default: null },
+    userType:  { type: String, default: "User" },
+    dashboardManager: { type: String, required: false, default: "" },
+  },
+  { timestamps: true }
+);
+
+export const NewUserModel = mongoose.model("users", userSchema);
