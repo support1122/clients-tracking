@@ -253,7 +253,8 @@ export default function ClientJobAnalysis() {
                   const isIgnite = plan.includes('ignite');
                   const isProfessional = plan.includes('professional');
                   const isExecutive = plan.includes('executive');
-                  const threshold = isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1000 : Infinity;
+                  const isPrime = plan.includes('prime');
+                  const threshold = isPrime ? 2000 : isExecutive ? 1000 : isProfessional ? 500 : isIgnite ? 250 : Infinity;
                   const exceeded = totalApplications > threshold;
                   
                   // Check if active status and saved is 0 - make row orange
@@ -287,6 +288,7 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1">
                       {r.planType ? (
                         <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
+                          r.planType === 'prime' ? 'bg-yellow-100 text-yellow-700' :
                           r.planType === 'executive' ? 'bg-purple-100 text-purple-700' :
                           r.planType === 'professional' ? 'bg-blue-100 text-blue-700' :
                           'bg-green-100 text-green-700'
