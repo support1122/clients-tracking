@@ -390,7 +390,7 @@ export const createOrUpdateClient = async (req, res) => {
     } = req.body;
 
     const emailLower = email.toLowerCase();
-    const planPrices = { ignite: 199, professional: 349, executive: 599 };
+    const planPrices = { ignite: 199, professional: 349, executive: 599, prime: 119 };
     const dashboardManager = dashboardTeamLeadName;
 
     const capitalizedPlan =
@@ -400,7 +400,9 @@ export const createOrUpdateClient = async (req, res) => {
           ? "Professional"
           : planType?.trim()?.toLowerCase() === "executive"
             ? "Executive"
-            : "Free Trial";
+            : planType?.trim()?.toLowerCase() === "prime"
+              ? "Prime"
+              : "Free Trial";
 
     const userData = {
       name,
@@ -592,7 +594,7 @@ const upgradeClientPlan = async (req, res) => {
     }
 
     const emailLower = email.toLowerCase();
-    const planPrices = { ignite: 199, professional: 349, executive: 599 };
+    const planPrices = { ignite: 199, professional: 349, executive: 599, prime: 119 };
     const planTypeLower = planType.toLowerCase();
 
     if (!planPrices[planTypeLower]) {
@@ -604,8 +606,10 @@ const upgradeClientPlan = async (req, res) => {
       : planTypeLower === 'professional' 
         ? 'Professional' 
         : planTypeLower === 'executive' 
-          ? 'Executive' 
-          : 'Free Trial';
+          ? 'Executive'
+          : planTypeLower === 'prime'
+            ? 'Prime'
+            : 'Free Trial';
 
     const planPrice = planPrices[planTypeLower];
     const currentDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
