@@ -447,7 +447,7 @@ function ClientCard({ client, clientDetails, onSelect }) {
       .join("")
       ?.toUpperCase() || "?";
 
-  const status = details?.status || "active";
+  const status = details?.status !== undefined && details?.status !== null ? details.status : "active";
   const plan = details?.planType || "No plan";
 
   return (
@@ -795,7 +795,7 @@ function OperationCard({ operation, onSelect, performanceCount = 0, performanceD
   );
 }
 
-function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, userRole = 'admin', dashboardManagers = [], loadingManagers = false }) {
+function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, userRole = 'admin', dashboardManagers = [], loadingManagers = false, onStatusUpdate }) {
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
@@ -843,7 +843,7 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
         portfolioMadeDate: clientDetails.portfolioMadeDate || '',
         linkedinOptimization: clientDetails.linkedinOptimization || false,
         linkedinOptimizationDate: clientDetails.linkedinOptimizationDate || '',
-        status: clientDetails.status || 'active'
+        status: clientDetails.status !== undefined && clientDetails.status !== null ? clientDetails.status : 'active'
       });
     }
   }, [clientDetails]);
@@ -858,33 +858,49 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
 
   const handleSave = async () => {
     try {
+      const saveData = {
+        email: clientEmail,
+        ...formData,
+        status: formData.status !== undefined && formData.status !== null && formData.status !== '' 
+          ? formData.status 
+          : (clientDetails?.status !== undefined && clientDetails?.status !== null ? clientDetails.status : 'active'),
+        currentPath: window.location.pathname
+      };
+      
       const response = await fetch(`${API_BASE}/api/clients`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: clientEmail,
-          ...formData,  currentPath: window.location.pathname, // 👈 this captures /monitor-clients or /clients/new
-
-        })
+        body: JSON.stringify(saveData)
       });
       
-      if (response.ok) {
-        const result = await response.json();
-        // Update the client details in the parent component
-        if (result.client) {
-          // Call a callback to update the parent state
-          if (typeof onClientUpdate === 'function') {
-            onClientUpdate(clientEmail, result.client);
-          }
-        }
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
         setIsEditing(false);
+        console.error('Save failed - HTTP Status:', response.status, 'Response:', errorData);
+        alert(`Save failed (HTTP ${response.status}): ${errorData.error || errorData.message || 'Please check console for details'}`);
+        return;
+      }
+      
+      const result = await response.json();
+      const updatedClient = result.updatedClientsTracking || result.client;
+      
+      setIsEditing(false);
+      
+      if (updatedClient) {
+        if (typeof onClientUpdate === 'function') {
+          onClientUpdate(clientEmail, updatedClient);
+        }
+        
+        if (onStatusUpdate && typeof onStatusUpdate === 'function') {
+          onStatusUpdate();
+        }
       } else {
-        console.error('Failed to save client details:', response.statusText);
-        alert('Failed to save client details. Please try again.');
+        console.warn('Save successful but no client data returned:', result);
       }
     } catch (error) {
       console.error('Error saving client details:', error);
-      alert('Error saving client details. Please try again.');
+      setIsEditing(false);
+      alert(`Network error: ${error.message}. Please check your connection and try again.`);
     }
   };
 
@@ -1520,9 +1536,10 @@ const [clientsPostFilter, setClientsPostFilter] = useState([]);
   // (Auth removed)
 
   // Fetch client details
-  const fetchClientDetails = async (email) => {
+  const fetchClientDetails = async (email, bypassCache = false) => {
     try {
-      const response = await fetch(`${import.meta.env.VITE_BASE || 'https://applications-monitor-api.flashfirejobs.com'}/api/clients/${encodeURIComponent(email)}`);
+      const url = `${import.meta.env.VITE_BASE || 'https://applications-monitor-api.flashfirejobs.com'}/api/clients/${encodeURIComponent(email)}${bypassCache ? `?t=${Date.now()}` : ''}`;
+      const response = await fetch(url, { cache: bypassCache ? 'no-store' : 'default' });
       if (response.ok) {
         const data = await response.json();
         return data.client;
@@ -1667,19 +1684,6 @@ const [clientsPostFilter, setClientsPostFilter] = useState([]);
       try {
         setLoading(true);
         
-        // First, sync missing clients from jobs to dashboardtrackings
-        try {
-          const syncResponse = await fetch(`${API_BASE}/api/clients/sync-from-jobs`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-          });
-          if (syncResponse.ok) {
-            const syncData = await syncResponse.json();
-            // Sync completed successfully
-          }
-        } catch (syncError) {
-          console.warn('Client sync failed (non-critical):', syncError);
-        }
 
         const now = Date.now();
 
@@ -1687,40 +1691,41 @@ const [clientsPostFilter, setClientsPostFilter] = useState([]);
         const clientData = await fetchAllClients();
         setClients(clientData.map(c => c.email));
 
-        // Clients: serve from cache if fresh
-        if (cacheRef.current.clients.data && now - cacheRef.current.clients.ts < CACHE_TTL_MS) {
-          setClientDetails(cacheRef.current.clients.data);
-        } else {
-          // Fetch clients from FlashFire Dashboard Backend
-          const FLASHFIRE_API_BASE = import.meta.env.VITE_BASE ;
-          const clientsResponse = await fetch(`${FLASHFIRE_API_BASE}/api/clients`);
-          // after: const clientsResponse = await fetch(`${FLASHFIRE_API_BASE}/api/clients/all`);
-if (clientsResponse.ok) {
-  const clientsData = await clientsResponse.json();
+        // Fetch clients from FlashFire Dashboard Backend (always fresh to ensure status sync)
+        const FLASHFIRE_API_BASE = import.meta.env.VITE_BASE;
+        const clientsResponse = await fetch(`${FLASHFIRE_API_BASE}/api/clients?t=${Date.now()}`, {
+          cache: 'no-store'
+        });
+          
+          if (clientsResponse.ok) {
+            const clientsData = await clientsResponse.json();
 
-  // -> base array of client emails from the route
-  const validEmail = (s) =>
-    typeof s === "string" &&
-    /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(s);
+            const validEmail = (s) =>
+              typeof s === "string" &&
+              /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(s);
 
-  const baseEmails = (clientsData?.data || [])
-    .map(c => c?.email)
-    .filter(validEmail);
-
-  setClientsPostFilter(clientsData.clients); // <-- THIS is your base now
-  // keep your details map for name/status lookups
-  const clientDetailsMap = {};
-  (clientsData?.data || []).forEach(client => {
-    if (validEmail(client.email)) clientDetailsMap[client.email] = client;
-  });
-  cacheRef.current.clients = { data: clientDetailsMap, ts: now };
-  setClientDetails(clientDetailsMap);
-  setClientsLoaded(true);
-} else {
-  setErr("Failed to fetch client data");
-}
-
-        }
+            const clientsArray = clientsData.clients || clientsData.data || [];
+            setClientsPostFilter(clientsArray);
+            
+            const clientDetailsMap = {};
+            clientsArray.forEach(client => {
+              if (validEmail(client.email)) {
+                const emailLower = client.email.toLowerCase();
+                clientDetailsMap[emailLower] = {
+                  ...client,
+                  status: client.status !== undefined && client.status !== null && client.status !== '' 
+                    ? client.status 
+                    : 'active'
+                };
+              }
+            });
+            
+            cacheRef.current.clients = { data: clientDetailsMap, ts: now };
+            setClientDetails(clientDetailsMap);
+            setClientsLoaded(true);
+          } else {
+            setErr("Failed to fetch client data");
+          }
 
         // Fetch operations data
         await fetchOperations();
@@ -1768,13 +1773,19 @@ if (clientsResponse.ok) {
         }
       })();
 
-      // Fetch client details
-      fetchClientDetails(selectedClient).then(client => {
+      // Fetch client details (always fetch fresh data when client is selected)
+      fetchClientDetails(selectedClient, true).then(client => {
         if (client) {
           setClientDetails(prev => ({
             ...prev,
             [selectedClient]: client
           }));
+          const now = Date.now();
+          const clientEmailLower = selectedClient.toLowerCase();
+          if (cacheRef.current.clients.data) {
+            cacheRef.current.clients.data[clientEmailLower] = client;
+            cacheRef.current.clients.ts = now;
+          }
         }
       });
     } else {
@@ -1961,9 +1972,62 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
     }
   }, [jobs, selectedStatus]);
 
+  // Function to refresh client list and details
+  const refreshClients = async () => {
+    try {
+      const FLASHFIRE_API_BASE = import.meta.env.VITE_BASE;
+      const clientsResponse = await fetch(`${FLASHFIRE_API_BASE}/api/clients?t=${Date.now()}`, {
+        cache: 'no-store'
+      });
+      
+      if (clientsResponse.ok) {
+        const clientsData = await clientsResponse.json();
+        
+        const validEmail = (s) =>
+          typeof s === "string" &&
+          /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(s);
+
+        const baseEmails = (clientsData?.data || [])
+          .map(c => c?.email)
+          .filter(validEmail);
+
+        const clientsArray = clientsData.clients || clientsData.data || [];
+        setClientsPostFilter(clientsArray);
+        
+        const clientDetailsMap = {};
+        clientsArray.forEach(client => {
+          if (validEmail(client.email)) {
+            const emailLower = client.email.toLowerCase();
+            clientDetailsMap[emailLower] = {
+              ...client,
+              status: client.status !== undefined && client.status !== null && client.status !== '' 
+                ? client.status 
+                : 'active'
+            };
+          }
+        });
+        
+        const now = Date.now();
+        cacheRef.current.clients = { data: clientDetailsMap, ts: now };
+        setClientDetails(prev => {
+          const updated = { ...prev };
+          Object.keys(clientDetailsMap).forEach(email => {
+            updated[email] = clientDetailsMap[email];
+          });
+          return updated;
+        });
+        setClientsLoaded(true);
+      }
+    } catch (error) {
+      console.error('Error refreshing clients:', error);
+    }
+  };
+
   const handleCloseClientDetails = () => {
     setShowClientDetails(false);
     setClientDetailsEmail('');
+    // Refresh client list when modal closes to ensure status sync
+    refreshClients();
   };
 
   if (showClientDetails) {
@@ -1972,6 +2036,7 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
         clientEmail={clientDetailsEmail} 
         onClose={handleCloseClientDetails}
         userRole={userRole}
+        onStatusUpdate={refreshClients}
       />
     );
   }
@@ -2491,6 +2556,7 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
                 dashboardManagers={dashboardManagers}
                 loadingManagers={loadingManagers}
                 userRole={userRole}
+                onStatusUpdate={refreshClients}
               />
             </div>
 

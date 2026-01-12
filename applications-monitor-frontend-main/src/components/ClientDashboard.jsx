@@ -28,9 +28,10 @@ export default function ClientDashboard() {
   const [selectedAddon, setSelectedAddon] = useState(null);
 
   const planOptions = [
+    { value: 'Prime', label: 'Prime', price: 0, applications: 160, icon: User, color: 'green' },
     { value: 'Ignite', label: 'Ignite', price: 199, applications: 250, icon: Rocket, color: 'orange' },
     { value: 'Professional', label: 'Professional', price: 349, applications: 500, icon: Sparkles, color: 'blue' },
-    { value: 'Executive', label: 'Executive', price: 599, applications: 1200, icon: Crown, color: 'purple' }
+    { value: 'Executive', label: 'Executive', price: 599, applications: 1000, icon: Crown, color: 'purple' }
   ];
 
   const getCurrentPlan = () => {
@@ -43,7 +44,7 @@ export default function ClientDashboard() {
     const currentPlan = getCurrentPlan();
     if (!currentPlan) return true;
     
-    const planOrder = ['Ignite', 'Professional', 'Executive'];
+    const planOrder = ['Prime', 'Ignite', 'Professional', 'Executive'];
     const currentIndex = planOrder.indexOf(currentPlan.value);
     const targetIndex = planOrder.indexOf(planValue);
     
@@ -62,7 +63,7 @@ export default function ClientDashboard() {
     
     if (planValue === currentPlan.value) return 0;
     
-    const planOrder = ['Ignite', 'Professional', 'Executive'];
+    const planOrder = ['Prime', 'Ignite', 'Professional', 'Executive'];
     const currentIndex = planOrder.indexOf(currentPlan.value);
     const targetIndex = planOrder.indexOf(planValue);
     
