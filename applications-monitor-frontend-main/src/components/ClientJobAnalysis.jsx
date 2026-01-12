@@ -9,11 +9,12 @@ export default function ClientJobAnalysis() {
   const [date, setDate] = useState('');
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [sortDir, setSortDir] = useState('desc'); // 'asc' | 'desc'
+  const [sortDir, setSortDir] = useState('desc');
   const [operationsNames, setOperationsNames] = useState([]);
   const [savingOperations, setSavingOperations] = useState(new Set());
   const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
   const [savingDashboardManager, setSavingDashboardManager] = useState(new Set());
+  const [clientAddons, setClientAddons] = useState({});
 
   const convertToDMY = useCallback((iso) => {
     if (!iso) return '';
@@ -22,6 +23,29 @@ export default function ClientJobAnalysis() {
     const m = dt.getMonth() + 1;
     const y = dt.getFullYear();
     return `${d}/${m}/${y}`;
+  }, []);
+
+  const fetchClientAddons = useCallback(async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/api/clients?t=${Date.now()}`, { cache: 'no-store' });
+      if (resp.ok) {
+        const data = await resp.json();
+        const addonsMap = {};
+        const clients = data.clients || data.data || [];
+        clients.forEach(client => {
+          if (client.email && client.addons && Array.isArray(client.addons)) {
+            const totalAddon = client.addons.reduce((sum, addon) => {
+              const addonValue = parseInt(addon.type || addon.addonType || '0', 10);
+              return sum + (isNaN(addonValue) ? 0 : addonValue);
+            }, 0);
+            addonsMap[client.email] = totalAddon;
+          }
+        });
+        setClientAddons(addonsMap);
+      }
+    } catch (e) {
+      console.error('Failed to fetch client addons:', e);
+    }
   }, []);
 
   const fetchAnalysis = useCallback(async (selected) => {
@@ -38,12 +62,13 @@ export default function ClientJobAnalysis() {
       if (!resp.ok) throw new Error('Failed');
       const data = await resp.json();
       setRows(data.rows || []);
+      await fetchClientAddons();
     } catch (e) {
       toast.error('Failed to load client job analysis');
     } finally {
       setLoading(false);
     }
-  }, [convertToDMY]);
+  }, [convertToDMY, fetchClientAddons]);
 
   // Fetch operations names on mount
   useEffect(() => {
@@ -250,17 +275,18 @@ export default function ClientJobAnalysis() {
                   const plan = String(r.planType || '')
                     .trim()
                     .toLowerCase();
+                  const isPrime = plan.includes('prime');
                   const isIgnite = plan.includes('ignite');
                   const isProfessional = plan.includes('professional');
                   const isExecutive = plan.includes('executive');
-                  const isPrime = plan.includes('prime');
-                  const threshold = isPrime ? 160 : isExecutive ? 1000 : isProfessional ? 500 : isIgnite ? 250 : Infinity;
-                  const exceeded = totalApplications > threshold;
                   
-                  // Check if active status and saved is 0 - make row orange
+                  const planLimit = isPrime ? 160 : isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1000 : Infinity;
+                  const addonLimit = clientAddons[r.email] || 0;
+                  const totalLimit = planLimit + addonLimit;
+                  const exceeded = totalLimit !== Infinity && totalApplications > totalLimit;
+                  
                   const isActiveWithNoSaved = r.status === 'active' && Number(r.saved || 0) === 0;
                   
-                  // Determine row color: orange (active + no saved) > red (exceeded) > alternating white/gray
                   let rowColor;
                   if (isActiveWithNoSaved) {
                     rowColor = 'bg-orange-100';
@@ -287,14 +313,29 @@ export default function ClientJobAnalysis() {
                     </td>
                     <td className="px-2 py-1">
                       {r.planType ? (
-                        <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
-                          r.planType === 'prime' ? 'bg-yellow-100 text-yellow-700' :
-                          r.planType === 'executive' ? 'bg-purple-100 text-purple-700' :
-                          r.planType === 'professional' ? 'bg-blue-100 text-blue-700' :
-                          'bg-green-100 text-green-700'
-                        }`}>
-                          {r.planType.charAt(0).toUpperCase() + r.planType.slice(1)}
-                        </span>
+                        <div className="flex flex-col gap-1">
+                          <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
+                            r.planType.toLowerCase() === 'executive' ? 'bg-purple-100 text-purple-700' :
+                            r.planType.toLowerCase() === 'professional' ? 'bg-blue-100 text-blue-700' :
+                            r.planType.toLowerCase() === 'ignite' ? 'bg-orange-100 text-orange-700' :
+                            r.planType.toLowerCase() === 'prime' ? 'bg-green-100 text-green-700' :
+                            'bg-gray-100 text-gray-700'
+                          }`}>
+                            {r.planType.charAt(0).toUpperCase() + r.planType.slice(1)}
+                          </span>
+                          <div className="flex flex-col gap-0.5">
+                            {addonLimit > 0 && (
+                              <span className="text-[10px] text-blue-600 font-medium">
+                                Addon: +{addonLimit}
+                              </span>
+                            )}
+                            {exceeded && (
+                              <span className="text-[10px] text-red-600 font-semibold">
+                                Total: {totalLimit} (Exceeded)
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       ) : '-'}
                     </td>
                     <td className="px-2 py-1">
@@ -327,7 +368,10 @@ export default function ClientJobAnalysis() {
                         ))}
                       </select>
                     </td>
-                    <td className="px-2 py-1 text-right">{totalApplications}</td>
+                    <td className={`px-2 py-1 text-right font-semibold ${exceeded ? 'text-red-600' : ''}`}>
+                      {totalApplications}
+                      {exceeded && <span className="text-[10px] block text-red-500">Exceeded</span>}
+                    </td>
                     <td className="px-2 py-1 text-right">{r.saved}</td>
                     <td className="px-2 py-1 text-right">{r.applied}</td>
                     <td className="px-2 py-1 text-right">{r.interviewing}</td>

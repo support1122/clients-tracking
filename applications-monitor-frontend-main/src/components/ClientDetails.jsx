@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 const API_BASE = import.meta.env.VITE_BASE;
 
-const ClientDetails = ({ clientEmail, onClose, userRole = 'admin' }) => {
+const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdate }) => {
   const [client, setClient] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -70,50 +70,53 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin' }) => {
     try {
       setLoading(true);
       
-      const response = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}`);
+      const response = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}?t=${Date.now()}`, {
+        cache: 'no-store'
+      });
       if (response.ok) {
         const data = await response.json();
-        setClient(data.client);
+        const clientData = data.client || data.updatedClientsTracking;
+        setClient(clientData);
         setFormData({
-          name: data.client.name || '',
-          email: data.client.email || clientEmail,
-          jobDeadline: data.client.jobDeadline || '',
-          applicationStartDate: data.client.applicationStartDate || '',
-          dashboardInternName: data.client.dashboardInternName || '',
-          dashboardTeamLeadName: data.client.dashboardTeamLeadName || '',
-          planType: data.client.planType || 'ignite',
-          onboardingDate: data.client.onboardingDate || '',
-          whatsappGroupMade: data.client.whatsappGroupMade || false,
-          whatsappGroupMadeDate: data.client.whatsappGroupMadeDate || '',
-          dashboardCredentialsShared: data.client.dashboardCredentialsShared || false,
-          dashboardCredentialsSharedDate: data.client.dashboardCredentialsSharedDate || '',
-          resumeSent: data.client.resumeSent || false,
-          resumeSentDate: data.client.resumeSentDate || '',
-          coverLetterSent: data.client.coverLetterSent || false,
-          coverLetterSentDate: data.client.coverLetterSentDate || '',
-          portfolioMade: data.client.portfolioMade || false,
-          portfolioMadeDate: data.client.portfolioMadeDate || '',
-          linkedinOptimization: data.client.linkedinOptimization || false,
-          linkedinOptimizationDate: data.client.linkedinOptimizationDate || '',
+          name: clientData.name || '',
+          email: clientData.email || clientEmail,
+          jobDeadline: clientData.jobDeadline || '',
+          applicationStartDate: clientData.applicationStartDate || '',
+          dashboardInternName: clientData.dashboardInternName || '',
+          dashboardTeamLeadName: clientData.dashboardTeamLeadName || '',
+          planType: clientData.planType || 'ignite',
+          onboardingDate: clientData.onboardingDate || '',
+          whatsappGroupMade: clientData.whatsappGroupMade || false,
+          whatsappGroupMadeDate: clientData.whatsappGroupMadeDate || '',
+          dashboardCredentialsShared: clientData.dashboardCredentialsShared || false,
+          dashboardCredentialsSharedDate: clientData.dashboardCredentialsSharedDate || '',
+          resumeSent: clientData.resumeSent || false,
+          resumeSentDate: clientData.resumeSentDate || '',
+          coverLetterSent: clientData.coverLetterSent || false,
+          coverLetterSentDate: clientData.coverLetterSentDate || '',
+          portfolioMade: clientData.portfolioMade || false,
+          portfolioMadeDate: clientData.portfolioMadeDate || '',
+          linkedinOptimization: clientData.linkedinOptimization || false,
+          linkedinOptimizationDate: clientData.linkedinOptimizationDate || '',
           gmailCredentials: {
-            email: data.client.gmailCredentials?.email || '',
-            password: data.client.gmailCredentials?.password || ''
+            email: clientData.gmailCredentials?.email || '',
+            password: clientData.gmailCredentials?.password || ''
           },
           dashboardCredentials: {
-            username: data.client.dashboardCredentials?.username || '',
-            password: data.client.dashboardCredentials?.password || ''
+            username: clientData.dashboardCredentials?.username || '',
+            password: clientData.dashboardCredentials?.password || ''
           },
           linkedinCredentials: {
-            username: data.client.linkedinCredentials?.username || '',
-            password: data.client.linkedinCredentials?.password || ''
+            username: clientData.linkedinCredentials?.username || '',
+            password: clientData.linkedinCredentials?.password || ''
           },
-          amountPaid: data.client.amountPaid || 0,
-          amountPaidDate: data.client.amountPaidDate || '',
-          modeOfPayment: data.client.modeOfPayment || 'paypal',
-          status: data.client.status || 'active',
-          jobStatus: data.client.jobStatus || 'still_searching',
-          companyName: data.client.companyName || '',
-          lastApplicationDate: data.client.lastApplicationDate || ''
+          amountPaid: clientData.amountPaid || 0,
+          amountPaidDate: clientData.amountPaidDate || '',
+          modeOfPayment: clientData.modeOfPayment || 'paypal',
+          status: clientData.status !== undefined && clientData.status !== null ? clientData.status : 'active',
+          jobStatus: clientData.jobStatus || 'still_searching',
+          companyName: clientData.companyName || '',
+          lastApplicationDate: clientData.lastApplicationDate || ''
         });
       } else {
         // Client doesn't exist, show empty form for creation
@@ -168,26 +171,52 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin' }) => {
     try {
       setLoading(true);
       
+      const saveData = {
+        ...formData,
+        status: formData.status !== undefined && formData.status !== null && formData.status !== ''
+          ? formData.status
+          : (client?.status !== undefined && client?.status !== null ? client.status : 'active')
+      };
+      
       const response = await fetch(`${API_BASE}/api/clients`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(saveData),
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        setClient(data?.updatedClientsTracking);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
         setIsEditing(false);
-        alert('Client details saved successfully!');
-        // Refetch client details to ensure UI is updated with latest data
+        setLoading(false);
+        console.error('Save failed - HTTP Status:', response.status, 'Response:', errorData);
+        alert(`Save failed (HTTP ${response.status}): ${errorData.error || errorData.message || 'Please check console for details'}`);
+        return;
+      }
+      
+      const data = await response.json();
+      const updatedClient = data?.updatedClientsTracking || data?.client;
+      
+      setIsEditing(false);
+      
+      if (updatedClient) {
+        setClient(updatedClient);
+      }
+      
+      try {
         await fetchClientDetails();
-      } else {
-        alert('Failed to save client details. Please try again.');
+      } catch (fetchError) {
+        console.error('Error refetching client details:', fetchError);
+      }
+      
+      if (onStatusUpdate && typeof onStatusUpdate === 'function') {
+        onStatusUpdate();
       }
     } catch (error) {
-      alert('Network error. Please try again.');
+      console.error('Error saving client details:', error);
+      setIsEditing(false);
+      alert(`Network error: ${error.message}. Please check your connection and try again.`);
     } finally {
       setLoading(false);
     }

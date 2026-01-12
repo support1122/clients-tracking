@@ -455,7 +455,7 @@ export const createOrUpdateClient = async (req, res) => {
           amountPaid: amountPaid || 0,
           amountPaidDate: amountPaidDate || " ",
           modeOfPayment: modeOfPayment || "paypal",
-          status: status || "active",
+          status: status !== undefined && status !== null && status !== '' ? status : "active",
           updatedAt: new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
         };
 
@@ -2549,7 +2549,6 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return a.email.localeCompare(b.email);
     });
 
-    await syncClientStatusFromJobs();
 
     res.status(200).json({ success: true, date: date || null, rows });
   } catch (e) {
@@ -3600,53 +3599,6 @@ const mergeLockPeriods = (periods1, periods2) => {
 };
 
 // Helper function to get default TODOs
-const syncClientStatusFromJobs = async () => {
-  try {
-    const allClients = await ClientModel.find().select('email').lean();
-    const clientEmailList = allClients.map(c => c.email.toLowerCase());
-
-    if (clientEmailList.length === 0) return;
-
-    const jobAnalysisPipeline = [
-      {
-        $match: {
-          userID: { $in: clientEmailList },
-          $or: [
-            { currentStatus: { $regex: /appl/i } },
-            { appliedDate: { $exists: true, $ne: null } }
-          ]
-        }
-      },
-      {
-        $group: {
-          _id: '$userID',
-          hasAppliedJobs: { $sum: 1 }
-        }
-      }
-    ];
-
-    const jobAnalysis = await JobModel.aggregate(jobAnalysisPipeline);
-    const activeClientsSet = new Set(jobAnalysis.map(j => j._id.toLowerCase()));
-
-    const updatePromises = [];
-    for (const client of allClients) {
-      const emailLower = client.email.toLowerCase();
-      const isActive = activeClientsSet.has(emailLower);
-      const newStatus = isActive ? 'active' : 'inactive';
-      
-      updatePromises.push(
-        ClientModel.updateOne(
-          { email: emailLower },
-          { $set: { status: newStatus, updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) } }
-        )
-      );
-    }
-
-    await Promise.all(updatePromises);
-  } catch (error) {
-    console.error('Error syncing client status from jobs:', error);
-  }
-};
 
 const getDefaultTodos = () => {
   const timestamp = Date.now();
@@ -3683,7 +3635,6 @@ const getDefaultTodos = () => {
 
 app.get('/api/client-todos/all', async (req, res) => {
   try {
-    await syncClientStatusFromJobs();
 
     const [allClientTodos, allClientOps, allClients] = await Promise.all([
       ClientTodosModel.find().lean(),
