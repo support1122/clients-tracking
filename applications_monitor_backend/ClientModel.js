@@ -35,7 +35,7 @@ export const ClientSchema = new mongoose.Schema({
   },
   planType: {
     type: String,
-    enum: ["ignite", "professional", "executive"],
+    enum: ["ignite", "professional", "executive", "prime"],
     required: true,
     default: "ignite"
   },
