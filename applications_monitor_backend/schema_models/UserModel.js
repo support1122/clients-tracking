@@ -1,6 +1,6 @@
 // UserModel.js
 import mongoose from "mongoose";
-import { baseResumeSchema, coverLetterSchema, optimizedResumeSchema, transcriptSchema } from "../schema_models/Opt.Resumes_Cover_Schema.js";
+import { baseResumeSchema, coverLetterSchema, optimizedResumeSchema, transcriptSchema } from "./Opt.Resumes_Cover_Schema.js";
 
 export const userSchema = new mongoose.Schema(
   {
@@ -20,7 +20,7 @@ export const userSchema = new mongoose.Schema(
       type: String, 
       required: true, 
       default: "Free Trial",
-      enum: ["Free Trial", "Ignite", "Professional", "Executive"]
+      enum: ["Free Trial", "Ignite", "Professional", "Executive", "Prime"]
     },
     joinTime: {
       type: String,

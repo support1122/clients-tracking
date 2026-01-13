@@ -256,7 +256,8 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
   const planOptions = [
     { value: 'ignite', label: 'Ignite $199' },
     { value: 'professional', label: 'Professional $349' },
-    { value: 'executive', label: 'Executive $599' }
+    { value: 'executive', label: 'Executive $599' },
+    { value: 'prime', label: 'Prime $119' }
   ];
 
   const navigationItems = [
