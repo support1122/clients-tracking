@@ -15,6 +15,13 @@ export default function ClientJobAnalysis() {
   const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
   const [savingDashboardManager, setSavingDashboardManager] = useState(new Set());
   const [clientAddons, setClientAddons] = useState({});
+  const [savingStatus, setSavingStatus] = useState(new Set());
+  const [userRole, setUserRole] = useState(null);
+
+  useEffect(() => {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    setUserRole(user?.role || null);
+  }, []);
 
   const convertToDMY = useCallback((iso) => {
     if (!iso) return '';
@@ -191,6 +198,39 @@ export default function ClientJobAnalysis() {
     }
   };
 
+  const handleStatusChange = async (email, status) => {
+    if (userRole !== 'admin') {
+      toast.error('Only admins can change client status');
+      return;
+    }
+    
+    setSavingStatus(prev => new Set(prev).add(email));
+    try {
+      const resp = await fetch(`${API_BASE}/api/clients`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, status, currentPath: window.location.pathname })
+      });
+      if (!resp.ok) throw new Error('Failed to save');
+      const data = await resp.json();
+      if (data.message || data.updatedClientsTracking) {
+        // Update the row in state
+        setRows(prev => prev.map(r => 
+          r.email === email ? { ...r, status } : r
+        ));
+        toast.success('Client status updated successfully');
+      }
+    } catch (e) {
+      toast.error('Failed to update client status');
+    } finally {
+      setSavingStatus(prev => {
+        const next = new Set(prev);
+        next.delete(email);
+        return next;
+      });
+    }
+  }
+
   return (
     <Layout>
       <div className="p-6 w-full">
@@ -288,10 +328,10 @@ export default function ClientJobAnalysis() {
                   const isActiveWithNoSaved = r.status === 'active' && Number(r.saved || 0) === 0;
                   
                   let rowColor;
-                  if (isActiveWithNoSaved) {
-                    rowColor = 'bg-orange-100';
-                  } else if (exceeded) {
+                  if (exceeded) {
                     rowColor = 'bg-red-100';
+                  } else if (isActiveWithNoSaved) {
+                    rowColor = 'bg-orange-100';
                   } else {
                     rowColor = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
                   }
@@ -303,7 +343,19 @@ export default function ClientJobAnalysis() {
                       <div className="text-gray-500 text-[10px] truncate max-w-[180px]">{r.email}</div>
                     </td>
                     <td className="px-2 py-1">
-                      {r.status ? (
+                      {userRole === 'admin' ? (
+                        <select
+                          value={r.status || 'active'}
+                          onChange={(e) => handleStatusChange(r.email, e.target.value)}
+                          disabled={savingStatus.has(r.email)}
+                          className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
+                            r.status === 'active' ? 'bg-green-100 text-green-700 border-green-300' : 'bg-red-100 text-red-700 border-red-300'
+                          }`}
+                        >
+                          <option value="active">Active</option>
+                          <option value="inactive">Inactive</option>
+                        </select>
+                      ) : r.status ? (
                         <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
                           r.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
                         }`}>

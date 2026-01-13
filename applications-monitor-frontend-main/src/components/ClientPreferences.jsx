@@ -97,7 +97,8 @@ export default function ClientPreferences() {
   const [expandedRows, setExpandedRows] = useState(new Set());
   const [editingClient, setEditingClient] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [filterStatus, setFilterStatus] = useState('all'); // all, hasTodos, hasLockPeriods, activeLock
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [pendingUpdates, setPendingUpdates] = useState(new Map());
 
   useEffect(() => {
     fetchClients();
@@ -193,11 +194,29 @@ export default function ClientPreferences() {
   };
 
   const toggleTodoStatus = async (client, todoId) => {
-    try {
-      const updatedTodos = (client.todos || []).map(todo =>
-        todo.id === todoId ? { ...todo, completed: !todo.completed, updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) } : todo
-      );
+    const updateKey = `${client.email}-${todoId}`;
+    if (pendingUpdates.has(updateKey)) return;
 
+    const originalTodo = (client.todos || []).find(t => t.id === todoId);
+    if (!originalTodo) return;
+
+    const newCompletedState = !originalTodo.completed;
+    const updatedTodos = (client.todos || []).map(todo =>
+      todo.id === todoId 
+        ? { ...todo, completed: newCompletedState, updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) }
+        : todo
+    );
+
+    setPendingUpdates(prev => new Map(prev).set(updateKey, true));
+    setClients(prevClients => 
+      prevClients.map(c => 
+        c.email === client.email 
+          ? { ...c, todos: updatedTodos }
+          : c
+      )
+    );
+
+    try {
       const token = localStorage.getItem('authToken');
       const response = await fetch(`${API_BASE}/api/client-todos/${client.email}`, {
         method: 'PUT',
@@ -211,14 +230,32 @@ export default function ClientPreferences() {
       });
 
       const data = await response.json();
-      if (data.success) {
-        fetchClients();
-      } else {
+      if (!data.success) {
         throw new Error(data.error || 'Failed to update');
       }
     } catch (error) {
       console.error('Error toggling todo:', error);
-      toast.error('Failed to update todo status');
+      setClients(prevClients => 
+        prevClients.map(c => 
+          c.email === client.email 
+            ? { ...c, todos: client.todos }
+            : c
+        )
+      );
+      toast.error(`Failed to update todo: "${originalTodo.title || 'Untitled TODO'}"`, {
+        duration: 4000,
+        style: {
+          background: '#ef4444',
+          color: '#fff',
+          fontWeight: '500'
+        }
+      });
+    } finally {
+      setPendingUpdates(prev => {
+        const next = new Map(prev);
+        next.delete(updateKey);
+        return next;
+      });
     }
   };
 
