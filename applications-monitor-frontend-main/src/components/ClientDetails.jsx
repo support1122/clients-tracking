@@ -113,7 +113,7 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
           amountPaid: clientData.amountPaid || 0,
           amountPaidDate: clientData.amountPaidDate || '',
           modeOfPayment: clientData.modeOfPayment || 'paypal',
-          status: clientData.status !== undefined && clientData.status !== null ? clientData.status : 'active',
+          status: (clientData.status === 'active' || clientData.status === 'inactive') ? clientData.status : 'active',
           jobStatus: clientData.jobStatus || 'still_searching',
           companyName: clientData.companyName || '',
           lastApplicationDate: clientData.lastApplicationDate || ''
@@ -173,9 +173,9 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
       
       const saveData = {
         ...formData,
-        status: formData.status !== undefined && formData.status !== null && formData.status !== ''
+        status: (formData.status === 'active' || formData.status === 'inactive')
           ? formData.status
-          : (client?.status !== undefined && client?.status !== null ? client.status : 'active')
+          : ((client?.status === 'active' || client?.status === 'inactive') ? client.status : 'active')
       };
       
       const response = await fetch(`${API_BASE}/api/clients`, {

@@ -3644,7 +3644,7 @@ app.get('/api/client-todos/all', async (req, res) => {
     allClients.forEach(client => {
       const emailLower = client.email.toLowerCase();
       clientMap[emailLower] = client.name;
-      clientStatusMap[emailLower] = client.status || 'active';
+      clientStatusMap[emailLower] = client.status;
       clientEmails.add(emailLower);
     });
 
@@ -3775,9 +3775,14 @@ app.get('/api/client-todos/all', async (req, res) => {
 
     clientsWithTodos.forEach(client => {
       const emailLower = client.email.toLowerCase();
-      const syncedStatus = clientStatusMap[emailLower] || 'active';
-      client.isJobActive = syncedStatus === 'active';
-      client.status = syncedStatus;
+      const dbStatus = clientStatusMap[emailLower];
+      if (dbStatus === 'active' || dbStatus === 'inactive') {
+        client.isJobActive = dbStatus === 'active';
+        client.status = dbStatus;
+      } else {
+        client.isJobActive = true;
+        client.status = 'active';
+      }
       const lastJob = lastAppliedMap.get(emailLower);
       if (lastJob) {
         client.lastAppliedJob = lastJob;

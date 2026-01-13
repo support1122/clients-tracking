@@ -447,7 +447,7 @@ function ClientCard({ client, clientDetails, onSelect }) {
       .join("")
       ?.toUpperCase() || "?";
 
-  const status = details?.status !== undefined && details?.status !== null ? details.status : "active";
+  const status = (details?.status === 'active' || details?.status === 'inactive') ? details.status : "active";
   const plan = details?.planType || "No plan";
 
   return (
@@ -843,7 +843,7 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
         portfolioMadeDate: clientDetails.portfolioMadeDate || '',
         linkedinOptimization: clientDetails.linkedinOptimization || false,
         linkedinOptimizationDate: clientDetails.linkedinOptimizationDate || '',
-        status: clientDetails.status !== undefined && clientDetails.status !== null ? clientDetails.status : 'active'
+        status: (clientDetails.status === 'active' || clientDetails.status === 'inactive') ? clientDetails.status : 'active'
       });
     }
   }, [clientDetails]);
@@ -861,9 +861,9 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
       const saveData = {
         email: clientEmail,
         ...formData,
-        status: formData.status !== undefined && formData.status !== null && formData.status !== '' 
+        status: (formData.status === 'active' || formData.status === 'inactive') 
           ? formData.status 
-          : (clientDetails?.status !== undefined && clientDetails?.status !== null ? clientDetails.status : 'active'),
+          : ((clientDetails?.status === 'active' || clientDetails?.status === 'inactive') ? clientDetails.status : 'active'),
         currentPath: window.location.pathname
       };
       
@@ -1713,9 +1713,7 @@ const [clientsPostFilter, setClientsPostFilter] = useState([]);
                 const emailLower = client.email.toLowerCase();
                 clientDetailsMap[emailLower] = {
                   ...client,
-                  status: client.status !== undefined && client.status !== null && client.status !== '' 
-                    ? client.status 
-                    : 'active'
+                  status: (client.status === 'active' || client.status === 'inactive') ? client.status : 'active'
                 };
               }
             });
@@ -2000,9 +1998,7 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
             const emailLower = client.email.toLowerCase();
             clientDetailsMap[emailLower] = {
               ...client,
-              status: client.status !== undefined && client.status !== null && client.status !== '' 
-                ? client.status 
-                : 'active'
+              status: (client.status === 'active' || client.status === 'inactive') ? client.status : 'active'
             };
           }
         });
