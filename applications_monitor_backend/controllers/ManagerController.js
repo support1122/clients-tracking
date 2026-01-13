@@ -1,6 +1,5 @@
 import { ManagerModel } from '../ManagerModel.js';
 import { uploadToCloudinary, deleteFromCloudinary } from '../utils/cloudinary.js';
-
 // Get all managers
 export const getAllManagers = async (req, res) => {
   try {
