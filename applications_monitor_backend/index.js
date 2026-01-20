@@ -2506,8 +2506,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     // Fetch client info (name, planType, status, operationsName, and dashboardTeamLeadName) from ClientModel for all userIDs
     const clientInfo = await ClientModel.find({
       email: { $in: allUserIDs }
-    }).select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName').lean();
-    const clientMap = new Map(clientInfo.map(c => [c.email, { name: c.name, planType: c.planType, planPrice: c.planPrice, status: c.status, jobStatus: c.jobStatus, operationsName: c.operationsName || '', dashboardTeamLeadName: c.dashboardTeamLeadName || '' }]));
+    }).select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused').lean();
+    const clientMap = new Map(clientInfo.map(c => [c.email, { name: c.name, planType: c.planType, planPrice: c.planPrice, status: c.status, jobStatus: c.jobStatus, operationsName: c.operationsName || '', dashboardTeamLeadName: c.dashboardTeamLeadName || '', isPaused: !!c.isPaused }]));
 
     // Prepare base rows from JobModel aggregates
     let rows = allUserIDs.map(email => {
@@ -2525,6 +2525,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         status: client.status || null,
         jobStatus: client.jobStatus || null,
         operationsName: client.operationsName || '',
+        isPaused: client.isPaused ?? false,
         dashboardTeamLeadName: client.dashboardTeamLeadName || '',
         saved: counts.saved || 0,
         applied: counts.applied || 0,

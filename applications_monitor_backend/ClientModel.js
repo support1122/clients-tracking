@@ -167,6 +167,11 @@ export const ClientSchema = new mongoose.Schema({
     required: true,
     default: "active"
   },
+  isPaused: {
+    type: Boolean,
+    required: false,
+    default: false
+  },
   jobStatus: {
     type: String,
     enum: ["still_searching", "job_done"],
