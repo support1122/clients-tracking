@@ -16,6 +16,7 @@ export default function ClientJobAnalysis() {
   const [savingDashboardManager, setSavingDashboardManager] = useState(new Set());
   const [clientAddons, setClientAddons] = useState({});
   const [savingStatus, setSavingStatus] = useState(new Set());
+  const [savingPause, setSavingPause] = useState(new Set());
   const [userRole, setUserRole] = useState(null);
 
   useEffect(() => {
@@ -231,6 +232,38 @@ export default function ClientJobAnalysis() {
     }
   }
 
+  const handlePauseChange = async (email, isPaused) => {
+    if (userRole !== 'admin') {
+      toast.error('Only admins can change client pause status');
+      return;
+    }
+    
+    setSavingPause(prev => new Set(prev).add(email));
+    try {
+      const resp = await fetch(`${API_BASE}/api/clients`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, isPaused, currentPath: window.location.pathname })
+      });
+      if (!resp.ok) throw new Error('Failed to save');
+      const data = await resp.json();
+      if (data.message || data.updatedClientsTracking) {
+        setRows(prev => prev.map(r =>
+          r.email === email ? { ...r, isPaused } : r
+        ));
+        toast.success(isPaused ? 'Client paused successfully' : 'Client unpaused successfully');
+      }
+    } catch (e) {
+      toast.error('Failed to update pause status');
+    } finally {
+      setSavingPause(prev => {
+        const next = new Set(prev);
+        next.delete(email);
+        return next;
+      });
+    }
+  };
+
   return (
     <Layout>
       <div className="p-6 w-full">
@@ -267,6 +300,7 @@ export default function ClientJobAnalysis() {
                 <tr>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Status</th>
+                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Pause</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Plan</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Operations</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Dashboard Mgr</th>
@@ -303,7 +337,6 @@ export default function ClientJobAnalysis() {
                     const cmp = sortDir === 'asc' ? av - bv : bv - av;
                     if (cmp !== 0) return cmp;
                   }
-                  // Sort by status: active first, then inactive
                   const statusOrder = { 'active': 0, 'inactive': 1 };
                   const statusA = statusOrder[a.status] ?? 2;
                   const statusB = statusOrder[b.status] ?? 2;
@@ -349,7 +382,8 @@ export default function ClientJobAnalysis() {
                           onChange={(e) => handleStatusChange(r.email, e.target.value)}
                           disabled={savingStatus.has(r.email)}
                           className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
-                            r.status === 'active' ? 'bg-green-100 text-green-700 border-green-300' : 'bg-red-100 text-red-700 border-red-300'
+                            r.status === 'active' ? 'bg-green-100 text-green-700 border-green-300' :
+                            'bg-red-100 text-red-700 border-red-300'
                           }`}
                         >
                           <option value="active">Active</option>
@@ -357,11 +391,35 @@ export default function ClientJobAnalysis() {
                         </select>
                       ) : r.status ? (
                         <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
-                          r.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                          r.status === 'active' ? 'bg-green-100 text-green-700' :
+                          'bg-red-100 text-red-700'
                         }`}>
                           {r.status.charAt(0).toUpperCase() + r.status.slice(1)}
                         </span>
                       ) : '-'}
+                    </td>
+                    <td className="px-2 py-1">
+                      {userRole === 'admin' ? (
+                        <select
+                          value={r.isPaused ? 'paused' : 'unpaused'}
+                          onChange={(e) => handlePauseChange(r.email, e.target.value === 'paused')}
+                          disabled={savingPause.has(r.email)}
+                          className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
+                            r.isPaused ? 'bg-yellow-100 text-yellow-700 border-yellow-300' :
+                            'bg-green-50 text-green-700 border-green-200'
+                          }`}
+                        >
+                          <option value="unpaused">Unpaused</option>
+                          <option value="paused">Paused</option>
+                        </select>
+                      ) : (
+                        <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
+                          r.isPaused ? 'bg-yellow-100 text-yellow-700' :
+                          'bg-green-50 text-green-700'
+                        }`}>
+                          {r.isPaused ? 'Paused' : 'Unpaused'}
+                        </span>
+                      )}
                     </td>
                     <td className="px-2 py-1">
                       {r.planType ? (
