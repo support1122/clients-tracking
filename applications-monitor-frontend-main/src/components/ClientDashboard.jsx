@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { toast } from 'react-hot-toast';
 import Layout from './Layout';
 import { Search, User, CreditCard, Zap, X, CheckCircle2, ArrowUp, Sparkles, Crown, Rocket, Star } from 'lucide-react';
+import { parseAmount, extractCurrency, formatAmount } from '../utils/currencyUtils';
 
 const API_BASE = import.meta.env.VITE_BASE || 'http://localhost:8001';
 
@@ -738,7 +739,9 @@ export default function ClientDashboard() {
                           </div>
                           <div className="text-right">
                             <label className="text-[10px] font-semibold text-blue-600 uppercase tracking-wide">Plan Price</label>
-                            <p className="text-blue-900 font-bold text-base mt-0.5">${clientDetails.planPrice || 'N/A'}</p>
+                            <p className="text-blue-900 font-bold text-base mt-0.5">
+                              {clientDetails.planPrice ? `$${clientDetails.planPrice}` : 'N/A'}
+                            </p>
                           </div>
                         </div>
                       </div>
@@ -747,7 +750,7 @@ export default function ClientDashboard() {
                         <div className="p-2 bg-white rounded-lg border border-gray-200">
                           <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Amount Paid</label>
                           <p className="text-gray-900 font-semibold mt-0.5 text-sm text-green-600">
-                            ${parseFloat(clientDetails.amountPaid?.toString().replace(/[$₹,\s]/g, '') || '0').toLocaleString()}
+                            {formatAmount(clientDetails.amountPaid || 0)}
                           </p>
                         </div>
                         <div className="p-2 bg-white rounded-lg border border-gray-200">
@@ -879,7 +882,7 @@ export default function ClientDashboard() {
                                 </div>
                               </div>
                               <div className="text-right ml-2 flex-shrink-0">
-                                <p className="text-base font-bold text-gray-900">${plan.price}</p>
+                                <p className="text-base font-bold text-gray-900">${plan.price.toLocaleString()}</p>
                                 <p className="text-[10px] text-gray-500">month</p>
                               </div>
                             </div>
