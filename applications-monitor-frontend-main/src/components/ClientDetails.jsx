@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { parseAmount, extractCurrency, formatAmount, getCurrencyPrefix } from '../utils/currencyUtils';
 
 const API_BASE = import.meta.env.VITE_BASE;
 
@@ -7,6 +8,7 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [activeSection, setActiveSection] = useState('personal');
+  const [currency, setCurrency] = useState('$');
   const [formData, setFormData] = useState({
     name: '',
     email: clientEmail,
@@ -77,6 +79,8 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
         const data = await response.json();
         const clientData = data.client || data.updatedClientsTracking;
         setClient(clientData);
+        const extractedCurrency = extractCurrency(clientData.amountPaid || '');
+        setCurrency(extractedCurrency || '$');
         setFormData({
           name: clientData.name || '',
           email: clientData.email || clientEmail,
@@ -110,7 +114,7 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
             username: clientData.linkedinCredentials?.username || '',
             password: clientData.linkedinCredentials?.password || ''
           },
-          amountPaid: clientData.amountPaid || 0,
+          amountPaid: parseAmount(clientData.amountPaid || 0),
           amountPaidDate: clientData.amountPaidDate || '',
           modeOfPayment: clientData.modeOfPayment || 'paypal',
           status: (clientData.status === 'active' || clientData.status === 'inactive') ? clientData.status : 'active',
@@ -172,6 +176,9 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
       
       const saveData = {
         ...formData,
+        amountPaid: formData.amountPaid && currency 
+          ? `${currency}${formData.amountPaid}` 
+          : 0,
         status: (formData.status === 'active' || formData.status === 'inactive')
           ? formData.status
           : ((client?.status === 'active' || client?.status === 'inactive') ? client.status : 'active')
@@ -457,24 +464,34 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
                           Amount Paid
                         </label>
                         {isEditing ? (
-                          <div className="relative">
-                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                              <span className="text-slate-500 sm:text-sm">$</span>
+                          <div className="grid grid-cols-4 gap-2">
+                            <div className="col-span-1">
+                              <select
+                                value={currency}
+                                onChange={(e) => setCurrency(e.target.value)}
+                                className="w-full px-3 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 bg-white shadow-sm hover:shadow-md"
+                              >
+                                <option value="$">$ (USD)</option>
+                                <option value="₹">₹ (INR)</option>
+                                <option value="CAD">CAD</option>
+                              </select>
                             </div>
-                            <input
-                              type="number"
-                              name="amountPaid"
-                              value={formData.amountPaid}
-                              onChange={handleInputChange}
-                              className="w-full pl-8 pr-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 bg-white shadow-sm hover:shadow-md"
-                              placeholder="0.00"
-                              min="0"
-                              step="0.01"
-                            />
+                            <div className="col-span-3">
+                              <input
+                                type="number"
+                                name="amountPaid"
+                                value={formData.amountPaid}
+                                onChange={handleInputChange}
+                                className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 bg-white shadow-sm hover:shadow-md"
+                                placeholder="0.00"
+                                min="0"
+                                step="0.01"
+                              />
+                            </div>
                           </div>
                         ) : (
                           <div className="px-4 py-3 bg-gradient-to-r from-white to-slate-50 border border-slate-200 rounded-xl text-slate-700 shadow-sm">
-                            ${client?.amountPaid || 0}
+                            {formatAmount(client?.amountPaid || 0)}
                           </div>
                         )}
                       </div>
