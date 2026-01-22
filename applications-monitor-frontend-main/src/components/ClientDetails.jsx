@@ -119,9 +119,8 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
           lastApplicationDate: clientData.lastApplicationDate || ''
         });
       } else {
-        // Client doesn't exist, show empty form for creation
         setClient(null);
-        setFormData(prev => ({ ...prev, email: clientEmail }));
+        setFormData(prev => ({ ...prev, email: clientEmail, status: 'active' }));
       }
     } catch (error) {
       console.error('Error fetching client details:', error);
