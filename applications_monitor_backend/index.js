@@ -393,22 +393,23 @@ export const createOrUpdateClient = async (req, res) => {
     const planPrices = { ignite: 199, professional: 349, executive: 599, prime: 119 };
     const dashboardManager = dashboardTeamLeadName;
 
-    const capitalizedPlan =
-      planType?.trim()?.toLowerCase() === "ignite"
-        ? "Ignite"
-        : planType?.trim()?.toLowerCase() === "professional"
-          ? "Professional"
-          : planType?.trim()?.toLowerCase() === "executive"
-            ? "Executive"
-            : planType?.trim()?.toLowerCase() === "prime"
-              ? "Prime"
-              : "Free Trial";
+    const capitalizedPlan = planType && planType.trim()
+      ? (planType.trim().toLowerCase() === "ignite"
+          ? "Ignite"
+          : planType.trim().toLowerCase() === "professional"
+            ? "Professional"
+            : planType.trim().toLowerCase() === "executive"
+              ? "Executive"
+              : planType.trim().toLowerCase() === "prime"
+                ? "Prime"
+                : null)
+      : null;
 
     const userData = {
       name,
       email: emailLower,
       passwordHashed: password ? encrypt(password) : encrypt("flashfire@123"),
-      planType: capitalizedPlan,
+      ...(capitalizedPlan && { planType: capitalizedPlan }),
       userType: "User",
       dashboardManager,
     };
@@ -419,7 +420,11 @@ export const createOrUpdateClient = async (req, res) => {
 
       // CREATE new user + client tracking if not exists
       if (!existingUser) {
-        const newUser = await NewUserModel.create(userData);
+        const newUserData = {
+          ...userData,
+          planType: capitalizedPlan || "Free Trial",
+        };
+        const newUser = await NewUserModel.create(newUserData);
 
         const fullClientData = {
           email: emailLower,
@@ -485,9 +490,13 @@ export const createOrUpdateClient = async (req, res) => {
       { $set: req.body },
       { runValidators: false }
     );
+    const updateFields = { name, dashboardManager: dashboardTeamLeadName };
+    if (capitalizedPlan) {
+      updateFields.planType = capitalizedPlan;
+    }
     await NewUserModel.updateOne(
       { email: emailLower },
-      { $set: { name, planType: capitalizedPlan, dashboardManager: dashboardTeamLeadName } },
+      { $set: updateFields },
       { runValidators: false }
     );
     const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
