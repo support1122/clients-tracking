@@ -27,6 +27,12 @@ export default function ClientDashboard() {
   const [upgrading, setUpgrading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [selectedAddon, setSelectedAddon] = useState(null);
+  // Referral Management state
+  const [referralUsers, setReferralUsers] = useState([]);
+  const [loadingReferralUsers, setLoadingReferralUsers] = useState(false);
+  const [updatingReferralStatus, setUpdatingReferralStatus] = useState({});
+  const [editingNotes, setEditingNotes] = useState({});
+  const [notesValues, setNotesValues] = useState({});
 
   const planOptions = [
     { value: 'Ignite', label: 'Ignite', price: 199, applications: 250, icon: Rocket, color: 'orange' },
@@ -85,6 +91,8 @@ export default function ClientDashboard() {
       loadAnalyticsData();
     } else if (activeTab === 'addon') {
       loadClients();
+    } else if (activeTab === 'referral') {
+      loadReferralUsers();
     }
   }, [activeTab]);
 
@@ -123,6 +131,119 @@ export default function ClientDashboard() {
     } catch (error) {
       console.error('Error fetching clients:', error);
     }
+  };
+
+  const loadReferralUsers = async () => {
+    setLoadingReferralUsers(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/referral-management/users`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setReferralUsers(data.users || []);
+        } else {
+          throw new Error(data.error || 'Failed to fetch users');
+        }
+      } else {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error('Error fetching referral users:', error);
+      toast.error('Failed to load users for referral management');
+    } finally {
+      setLoadingReferralUsers(false);
+    }
+  };
+
+  const handleReferralStatusChange = async (email, newStatus) => {
+    setUpdatingReferralStatus(prev => ({ ...prev, [email]: true }));
+    try {
+      const response = await fetch(`${API_BASE}/api/referral-management/users/${email}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ referralStatus: newStatus || null })
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success) {
+        // Update local state
+        setReferralUsers(prevUsers =>
+          prevUsers.map(user =>
+            user.email === email
+              ? { ...user, referralStatus: newStatus || null, notes: data.user.notes || "" }
+              : user
+          )
+        );
+        toast.success(`Referral status updated for ${email}`);
+      } else {
+        throw new Error(data.error || 'Failed to update referral status');
+      }
+    } catch (error) {
+      console.error('Error updating referral status:', error);
+      toast.error(error.message || 'Failed to update referral status');
+    } finally {
+      setUpdatingReferralStatus(prev => ({ ...prev, [email]: false }));
+    }
+  };
+
+  const handleNotesEdit = (email, currentNotes) => {
+    setEditingNotes(prev => ({ ...prev, [email]: true }));
+    setNotesValues(prev => ({ ...prev, [email]: currentNotes || "" }));
+  };
+
+  const handleNotesSave = async (email) => {
+    const notes = notesValues[email] || "";
+    setUpdatingReferralStatus(prev => ({ ...prev, [email]: true }));
+    
+    try {
+      const response = await fetch(`${API_BASE}/api/referral-management/users/${email}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ notes })
+      });
+
+      const data = await response.json();
+      if (response.ok && data.success) {
+        // Update local state
+        setReferralUsers(prevUsers =>
+          prevUsers.map(user =>
+            user.email === email
+              ? { ...user, notes: data.user.notes || "" }
+              : user
+          )
+        );
+        setEditingNotes(prev => {
+          const newState = { ...prev };
+          delete newState[email];
+          return newState;
+        });
+        toast.success(`Notes saved for ${email}`);
+      } else {
+        throw new Error(data.error || 'Failed to update notes');
+      }
+    } catch (error) {
+      console.error('Error updating notes:', error);
+      toast.error(error.message || 'Failed to update notes');
+    } finally {
+      setUpdatingReferralStatus(prev => ({ ...prev, [email]: false }));
+    }
+  };
+
+  const handleNotesCancel = (email, originalNotes) => {
+    setEditingNotes(prev => {
+      const newState = { ...prev };
+      delete newState[email];
+      return newState;
+    });
+    setNotesValues(prev => {
+      const newState = { ...prev };
+      delete newState[email];
+      return newState;
+    });
   };
 
   const fetchMonthlyStats = async () => {
@@ -221,13 +342,10 @@ export default function ClientDashboard() {
 
     setUpgrading(true);
     try {
-      const token = localStorage.getItem('authToken');
-
       const response = await fetch(`${API_BASE}/api/clients/${clientDetails.email}/upgrade-plan`, {
         method: 'PUT',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           planType: selectedPlan
@@ -257,15 +375,13 @@ export default function ClientDashboard() {
 
     setUpgrading(true);
     try {
-      const token = localStorage.getItem('authToken');
       const addonPrices = { '250': 120, '500': 200, '1000': 350 };
       const addonPrice = addonPrices[selectedAddon] || 0;
 
       const response = await fetch(`${API_BASE}/api/clients/${clientDetails.email}/add-addon`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           addonType: selectedAddon,
@@ -352,15 +468,17 @@ export default function ClientDashboard() {
               <div className="flex relative">
                 <div 
                   className={`absolute top-1.5 bottom-1.5 bg-white rounded-lg shadow-lg transition-all duration-300 ease-in-out border border-gray-100 ${
-                    activeTab === 'analytics' ? 'left-1.5' : 'left-1/2'
+                    activeTab === 'analytics' ? 'left-1.5' : 
+                    activeTab === 'addon' ? 'left-[calc(33.333%-4px)]' : 
+                    'left-[calc(66.666%-9px)]'
                   }`}
                   style={{ 
-                    width: 'calc(50% - 6px)'
+                    width: 'calc(33.333% - 6px)'
                   }}
                 />
                 <button
                   onClick={() => setActiveTab('analytics')}
-                  className={`relative z-10 flex items-center justify-center gap-2 px-10 py-3 font-semibold text-sm rounded-lg transition-all duration-300 min-w-[210px] ${
+                  className={`relative z-10 flex items-center justify-center gap-2 px-8 py-3 font-semibold text-sm rounded-lg transition-all duration-300 min-w-[180px] ${
                     activeTab === 'analytics'
                       ? 'text-gray-900 font-bold'
                       : 'text-gray-600 hover:text-gray-800'
@@ -373,7 +491,7 @@ export default function ClientDashboard() {
                 </button>
                 <button
                   onClick={() => setActiveTab('addon')}
-                  className={`relative z-10 flex items-center justify-center gap-2 px-10 py-3 font-semibold text-sm rounded-lg transition-all duration-300 min-w-[210px] ${
+                  className={`relative z-10 flex items-center justify-center gap-2 px-8 py-3 font-semibold text-sm rounded-lg transition-all duration-300 min-w-[180px] ${
                     activeTab === 'addon'
                       ? 'text-gray-900 font-bold'
                       : 'text-gray-600 hover:text-gray-800'
@@ -383,6 +501,19 @@ export default function ClientDashboard() {
                     <div className="absolute left-5 w-2 h-2 bg-blue-600 rounded-full shadow-sm ring-2 ring-blue-200"></div>
                   )}
                   <span className={activeTab === 'addon' ? 'ml-4' : ''}>Add On</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('referral')}
+                  className={`relative z-10 flex items-center justify-center gap-2 px-8 py-3 font-semibold text-sm rounded-lg transition-all duration-300 min-w-[180px] ${
+                    activeTab === 'referral'
+                      ? 'text-gray-900 font-bold'
+                      : 'text-gray-600 hover:text-gray-800'
+                  }`}
+                >
+                  {activeTab === 'referral' && (
+                    <div className="absolute left-5 w-2 h-2 bg-blue-600 rounded-full shadow-sm ring-2 ring-blue-200"></div>
+                  )}
+                  <span className={activeTab === 'referral' ? 'ml-4' : ''}>Referral Management</span>
                 </button>
               </div>
             </div>
@@ -981,6 +1112,159 @@ export default function ClientDashboard() {
                       </button>
                     </div>
                   </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'referral' && (
+          <div className="space-y-6">
+            <div className="mb-6">
+              <p className="text-gray-600">Manage referral benefits for clients. Select Professional (+200 applications) or Executive (+300 applications).</p>
+            </div>
+
+            {loadingReferralUsers ? (
+              <div className="bg-white rounded-xl shadow-md border p-8 text-center">
+                <div className="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                <p className="mt-4 text-gray-600">Loading users...</p>
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl shadow-md border overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                          Client Name
+                        </th>
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                          Email
+                        </th>
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                          Referral Status
+                        </th>
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                          Applications Benefit
+                        </th>
+                        <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                          Notes
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {referralUsers.length === 0 ? (
+                        <tr>
+                          <td colSpan="5" className="px-6 py-8 text-center text-gray-500">
+                            No users found
+                          </td>
+                        </tr>
+                      ) : (
+                        referralUsers.map((user) => {
+                          const isUpdating = updatingReferralStatus[user.email];
+                          const benefitAmount = user.referralStatus === 'Professional' ? 200 : 
+                                               user.referralStatus === 'Executive' ? 300 : 0;
+                          const isEditingNotes = editingNotes[user.email];
+                          const currentNotes = notesValues[user.email] !== undefined ? notesValues[user.email] : (user.notes || "");
+                          
+                          return (
+                            <tr key={user._id || user.email} className="hover:bg-gray-50 transition-colors">
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="text-sm font-medium text-gray-900">
+                                  {user.name || 'Unknown'}
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="text-sm text-gray-600">
+                                  {user.email}
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <select
+                                  value={user.referralStatus || ''}
+                                  onChange={(e) => handleReferralStatusChange(user.email, e.target.value || null)}
+                                  disabled={isUpdating}
+                                  className={`px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all ${
+                                    isUpdating ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-gray-400'
+                                  } ${
+                                    user.referralStatus === 'Professional' ? 'bg-blue-50 text-blue-700 border-blue-300' :
+                                    user.referralStatus === 'Executive' ? 'bg-purple-50 text-purple-700 border-purple-300' :
+                                    'bg-gray-50 text-gray-700'
+                                  }`}
+                                >
+                                  <option value="">Select Status</option>
+                                  <option value="Professional">Professional</option>
+                                  <option value="Executive">Executive</option>
+                                </select>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  {isUpdating && !isEditingNotes ? (
+                                    <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
+                                  ) : (
+                                    <span className={`text-sm font-semibold ${
+                                      benefitAmount > 0 ? 'text-green-600' : 'text-gray-400'
+                                    }`}>
+                                      {benefitAmount > 0 ? `+${benefitAmount}` : '0'} Applications
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-6 py-4">
+                                {isEditingNotes ? (
+                                  <div className="flex flex-col gap-2 min-w-[300px]">
+                                    <textarea
+                                      value={currentNotes}
+                                      onChange={(e) => setNotesValues(prev => ({ ...prev, [user.email]: e.target.value }))}
+                                      disabled={isUpdating}
+                                      rows={3}
+                                      className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                                      placeholder="Add notes about this client..."
+                                    />
+                                    <div className="flex gap-2">
+                                      <button
+                                        onClick={() => handleNotesSave(user.email)}
+                                        disabled={isUpdating}
+                                        className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                      >
+                                        {isUpdating ? 'Saving...' : 'Save'}
+                                      </button>
+                                      <button
+                                        onClick={() => handleNotesCancel(user.email, user.notes || "")}
+                                        disabled={isUpdating}
+                                        className="px-3 py-1.5 bg-gray-200 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-start gap-2 min-w-[300px]">
+                                    <div className="flex-1">
+                                      {user.notes ? (
+                                        <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+                                          {user.notes}
+                                        </p>
+                                      ) : (
+                                        <p className="text-sm text-gray-400 italic">No notes</p>
+                                      )}
+                                    </div>
+                                    <button
+                                      onClick={() => handleNotesEdit(user.email, user.notes || "")}
+                                      className="px-2 py-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded transition-colors flex-shrink-0"
+                                      title="Edit notes"
+                                    >
+                                      {user.notes ? 'Edit' : 'Add'}
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )}
