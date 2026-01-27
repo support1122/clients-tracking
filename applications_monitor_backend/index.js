@@ -3352,6 +3352,92 @@ const getClientDetails = async (req, res) => {
   }
 };
 
+// Get all users with referral status for referral management
+const getAllUsersForReferralManagement = async (req, res) => {
+  try {
+    const users = await NewUserModel.find({}, 'name email referralStatus notes').lean();
+    res.status(200).json({
+      success: true,
+      users: users.map(user => ({
+        _id: user._id,
+        name: user.name || 'Unknown',
+        email: user.email,
+        referralStatus: user.referralStatus || null,
+        notes: user.notes || ""
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching users for referral management:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+// Update user referral status
+const updateUserReferralStatus = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { referralStatus, notes } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email is required'
+      });
+    }
+
+    // Validate referralStatus
+    if (referralStatus !== null && referralStatus !== undefined && referralStatus !== 'Professional' && referralStatus !== 'Executive') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid referral status. Must be "Professional", "Executive", or null'
+      });
+    }
+
+    // Build update object
+    const updateData = {};
+    if (referralStatus !== undefined) {
+      updateData.referralStatus = referralStatus || null;
+    }
+    if (notes !== undefined) {
+      updateData.notes = notes || "";
+    }
+
+    const updatedUser = await NewUserModel.findOneAndUpdate(
+      { email: email.toLowerCase() },
+      { $set: updateData },
+      { new: true, select: 'name email referralStatus notes' }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'User data updated successfully',
+      user: {
+        _id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        referralStatus: updatedUser.referralStatus,
+        notes: updatedUser.notes || ""
+      }
+    });
+  } catch (error) {
+    console.error('Error updating user data:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 // Sync manager assignments from users collection to dashboardtrackings
 const syncManagerAssignments = async (req, res) => {
   try {
@@ -3541,6 +3627,8 @@ app.get('/api/operations/:email/available-clients', getAvailableClients);
 
 // Manager sync route
 app.post('/api/clients/sync-managers', syncManagerAssignments);
+app.get('/api/referral-management/users', getAllUsersForReferralManagement);
+app.put('/api/referral-management/users/:email', updateUserReferralStatus);
 
 
 const getCurrentISTTime = () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
