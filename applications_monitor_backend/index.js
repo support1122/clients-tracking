@@ -30,6 +30,17 @@ import { encrypt } from './utils/CryptoHelper.js';
 import { NewUserModel } from './schema_models/UserModel.js';
 import { ClientTodosModel } from './ClientTodosModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
+import multer from 'multer';
+import FormData from 'form-data';
+
+const FLASHFIRE_API_BASE_URL = process.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
+
+const fileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+  },
+});
 
 
 
@@ -2506,26 +2517,49 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       ]);
     }
 
-    // Merge results across all userIDs seen
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const overallMap = new Map(overall.map(r => [r.userID, r.counts]));
     const allUserIDs = Array.from(new Set([...overallMap.keys(), ...appliedMap.keys(), ...removedMap.keys()]));
 
-    // Fetch client info (name, planType, status, operationsName, and dashboardTeamLeadName) from ClientModel for all userIDs
     const clientInfo = await ClientModel.find({
       email: { $in: allUserIDs }
     }).select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused').lean();
     const clientMap = new Map(clientInfo.map(c => [c.email, { name: c.name, planType: c.planType, planPrice: c.planPrice, status: c.status, jobStatus: c.jobStatus, operationsName: c.operationsName || '', dashboardTeamLeadName: c.dashboardTeamLeadName || '', isPaused: !!c.isPaused }]));
 
-    // Prepare base rows from JobModel aggregates
+    const allJobs = await JobModel.find({}).select('userID operatorName appliedDate').lean();
+    const parseDateString = (dateStr) => {
+      if (!dateStr) return null;
+      try {
+        const parts = String(dateStr).split('/');
+        if (parts.length === 3) {
+          const [day, month, year] = parts.map(n => parseInt(n, 10));
+          return new Date(year, month - 1, day);
+        }
+        return new Date(dateStr);
+      } catch {
+        return null;
+      }
+    };
+    const lastAppliedMap = new Map();
+    for (const j of allJobs) {
+      if (!j.operatorName || j.operatorName === 'user' || !j.appliedDate) continue;
+      const email = (j.userID || '').toLowerCase();
+      if (!email) continue;
+      const d = parseDateString(j.appliedDate);
+      if (!d) continue;
+      const cur = lastAppliedMap.get(email);
+      if (!cur || d > cur.date) lastAppliedMap.set(email, { date: d, operatorName: j.operatorName });
+    }
+    const lastAppliedOperatorMap = new Map();
+    lastAppliedMap.forEach((v, k) => lastAppliedOperatorMap.set(k, v.operatorName));
+
     let rows = allUserIDs.map(email => {
       const counts = overallMap.get(email) || {};
       const client = clientMap.get(email) || {};
-      // Use date-filtered removed count if date is selected, otherwise use total count
       const removedCount = multiFormatDateRegex
-        ? (removedMap.get(email) || 0)  // If date selected, show 0 if no jobs moved on that date
-        : (counts.deleted || 0);         // If no date selected, show total count
+        ? (removedMap.get(email) || 0)
+        : (counts.deleted || 0);
       return {
         email,
         name: client.name || email,
@@ -2536,6 +2570,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         operationsName: client.operationsName || '',
         isPaused: client.isPaused ?? false,
         dashboardTeamLeadName: client.dashboardTeamLeadName || '',
+        lastAppliedOperatorName: lastAppliedOperatorMap.get(email.toLowerCase()) || '',
         saved: counts.saved || 0,
         applied: counts.applied || 0,
         interviewing: counts.interviewing || 0,
@@ -3643,6 +3678,30 @@ const getDefaultTodos = () => {
   ];
 };
 
+const getDefaultOptimizations = () => ({
+  resumeOptimization: {
+    completed: false,
+    attachmentUrl: "",
+    attachmentName: "",
+    updatedAt: getCurrentISTTime(),
+    updatedBy: ""
+  },
+  linkedinOptimization: {
+    completed: false,
+    attachmentUrl: "",
+    attachmentName: "",
+    updatedAt: getCurrentISTTime(),
+    updatedBy: ""
+  },
+  coverLetterOptimization: {
+    completed: false,
+    attachmentUrl: "",
+    attachmentName: "",
+    updatedAt: getCurrentISTTime(),
+    updatedBy: ""
+  }
+});
+
 app.get('/api/client-todos/all', async (req, res) => {
   try {
 
@@ -3671,6 +3730,7 @@ app.get('/api/client-todos/all', async (req, res) => {
         name: clientMap[email] || todoData.clientEmail,
         todos: todoData.todos || [],
         lockPeriods: todoData.lockPeriods || [],
+        optimizations: todoData.optimizations || getDefaultOptimizations(),
         createdAt: todoData.createdAt,
         updatedAt: todoData.updatedAt
       });
@@ -3683,6 +3743,12 @@ app.get('/api/client-todos/all', async (req, res) => {
       if (existing) {
         existing.todos = mergeTodos(existing.todos, opsData.todos || []);
         existing.lockPeriods = mergeLockPeriods(existing.lockPeriods, opsData.lockPeriods || []);
+        if (opsData.optimizations) {
+          existing.optimizations = {
+            ...existing.optimizations,
+            ...opsData.optimizations
+          };
+        }
         const existingTime = new Date(existing.updatedAt || 0);
         const opsTime = new Date(opsData.updatedAt || 0);
         if (opsTime > existingTime) {
@@ -3694,6 +3760,7 @@ app.get('/api/client-todos/all', async (req, res) => {
           name: clientMap[email] || opsData.clientEmail,
           todos: opsData.todos || [],
           lockPeriods: opsData.lockPeriods || [],
+          optimizations: opsData.optimizations || getDefaultOptimizations(),
           createdAt: opsData.createdAt,
           updatedAt: opsData.updatedAt
         });
@@ -3710,6 +3777,7 @@ app.get('/api/client-todos/all', async (req, res) => {
           name: client.name,
           todos: [],
           lockPeriods: [],
+          optimizations: getDefaultOptimizations(),
           createdAt: null,
           updatedAt: null
         });
@@ -4081,6 +4149,157 @@ app.post('/api/client-todos/migrate-defaults', verifyToken, verifyAdmin, async (
 
 
 // Client details route (removed duplicate - using getClientByEmail instead)
+
+app.put('/api/client-optimizations/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { optimizations } = req.body;
+    const emailLower = email.toLowerCase();
+
+    if (!optimizations) {
+      return res.status(400).json({ success: false, error: 'Optimizations data is required' });
+    }
+
+    const updateData = {
+      optimizations,
+      updatedAt: getCurrentISTTime()
+    };
+
+    const [clientTodos, clientOps] = await Promise.all([
+      ClientTodosModel.findOneAndUpdate(
+        { clientEmail: emailLower },
+        { $set: updateData },
+        { new: true, upsert: true }
+      ),
+      ClientOperationsModel.findOneAndUpdate(
+        { clientEmail: emailLower },
+        { $set: updateData },
+        { new: true, upsert: true }
+      )
+    ]);
+
+    res.status(200).json({ success: true, message: 'Optimizations updated successfully', data: clientTodos });
+  } catch (error) {
+    console.error('Error updating optimizations:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/client-optimizations/upload', fileUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    const { email, documentType = 'resume' } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+
+    const formData = new FormData();
+    formData.append('file', req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+    });
+    formData.append('email', email);
+    formData.append('documentType', documentType);
+
+    const response = await fetch(`${FLASHFIRE_API_BASE_URL}/api/internal/upload-client-document`, {
+      method: 'POST',
+      body: formData,
+      headers: formData.getHeaders ? formData.getHeaders() : {},
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to upload file to dashboard');
+    }
+
+    res.status(200).json({
+      success: true,
+      url: data.url,
+      fileName: data.fileName,
+      documentType: data.documentType,
+      storage: data.storage,
+      message: data.message || 'File uploaded and synced to dashboard successfully'
+    });
+  } catch (error) {
+    console.error('Error uploading file:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/client-optimizations/documents/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+
+    const response = await fetch(`${FLASHFIRE_API_BASE_URL}/api/internal/client-documents/${encodeURIComponent(email)}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to fetch documents');
+    }
+
+    res.status(200).json({ 
+      success: true, 
+      documents: data.documents,
+      resumeUrl: data.documents?.resumeUrl,
+      coverLetterUrl: data.documents?.coverLetterUrl,
+      linkedinUrl: data.documents?.linkedinUrl,
+      resumeLinks: data.documents?.resumeLinks || [],
+      coverLetters: data.documents?.coverLetters || [],
+    });
+  } catch (error) {
+    console.error('Error fetching documents:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/client-optimizations/sync-to-dashboard', async (req, res) => {
+  try {
+    const { email, resumeUrl, coverLetterUrl, linkedinUrl } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+
+    const updatePayload = {};
+    if (resumeUrl) updatePayload.resumeUrl = resumeUrl;
+    if (coverLetterUrl) updatePayload.coverLetterUrl = coverLetterUrl;
+    if (linkedinUrl) updatePayload.linkedinUrl = linkedinUrl;
+
+    if (Object.keys(updatePayload).length === 0) {
+      return res.status(400).json({ success: false, error: 'No fields to update' });
+    }
+
+    const response = await fetch(`${FLASHFIRE_API_BASE_URL}/api/internal/client-optimization/${encodeURIComponent(email)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(updatePayload),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.message || 'Failed to sync to dashboard');
+    }
+
+    res.status(200).json({ success: true, message: 'Synced to dashboard successfully', profile: data.profile });
+  } catch (error) {
+    console.error('Error syncing to dashboard:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Start automated call status cleanup job
 // Runs every 30 seconds to update stuck "calling" calls to "completed" (after 30 seconds timeout - NO MATTER WHAT)
