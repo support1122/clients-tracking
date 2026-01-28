@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Layout from './Layout';
 import toast from 'react-hot-toast';
 import {
@@ -14,16 +14,21 @@ import {
   ChevronUp,
   Search,
   Filter,
-  X
+  X,
+  FileText,
+  Upload,
+  Paperclip,
+  ExternalLink,
+  Linkedin,
+  FileCheck
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
+const FLASHFIRE_API = import.meta.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
 
-// Helper function to parse flexible date formats
 function parseFlexibleDate(input) {
   if (!input) return null;
 
-  // Try dd/mm/yyyy format first
   const m = String(input).trim().match(
     /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?)?$/i
   );
@@ -39,16 +44,13 @@ function parseFlexibleDate(input) {
     return new Date(y, mo, d, h, mi, s);
   }
 
-  // If input is already a Date or ISO string
   const native = new Date(input);
   return isNaN(native.getTime()) ? null : native;
 }
 
-// Helper function to format relative time (e.g., "2 hours ago", "3 days ago")
 function formatRelativeTime(dateInput) {
   if (!dateInput) return "—";
   
-  // Parse the date input (handles various formats)
   const date = parseFlexibleDate(dateInput);
   if (!date || isNaN(date.getTime())) return "—";
   
@@ -61,33 +63,372 @@ function formatRelativeTime(dateInput) {
   const diffMonths = Math.floor(diffDays / 30);
   const diffYears = Math.floor(diffDays / 365);
   
-  // Less than a minute ago
   if (diffSeconds < 60) {
     return diffSeconds <= 0 ? "just now" : `${diffSeconds} second${diffSeconds === 1 ? '' : 's'} ago`;
   }
   
-  // Less than an hour ago
   if (diffMinutes < 60) {
     return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
   }
   
-  // Less than a day ago
   if (diffHours < 24) {
     return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
   }
   
-  // Less than a month ago
   if (diffDays < 30) {
     return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
   }
   
-  // Less than a year ago
   if (diffMonths < 12) {
     return `${diffMonths} month${diffMonths === 1 ? '' : 's'} ago`;
   }
   
-  // More than a year ago
   return `${diffYears} year${diffYears === 1 ? '' : 's'} ago`;
+}
+
+const getDefaultOptimizations = () => ({
+  resumeOptimization: { completed: false, attachmentUrl: "", attachmentName: "" },
+  linkedinOptimization: { completed: false, attachmentUrl: "", attachmentName: "" },
+  coverLetterOptimization: { completed: false, attachmentUrl: "", attachmentName: "" }
+});
+
+function AttachmentModal({ isOpen, onClose, client, onSave, onUpload }) {
+  const [optimizations, setOptimizations] = useState(getDefaultOptimizations());
+  const [uploading, setUploading] = useState({ resume: false, linkedin: false, coverLetter: false });
+  const [saving, setSaving] = useState(false);
+  const [dashboardDocs, setDashboardDocs] = useState(null);
+  const [loadingDocs, setLoadingDocs] = useState(false);
+  const fileInputRefs = {
+    resume: useRef(null),
+    linkedin: useRef(null),
+    coverLetter: useRef(null)
+  };
+
+  useEffect(() => {
+    if (client && client.optimizations) {
+      setOptimizations({
+        resumeOptimization: client.optimizations.resumeOptimization || getDefaultOptimizations().resumeOptimization,
+        linkedinOptimization: client.optimizations.linkedinOptimization || getDefaultOptimizations().linkedinOptimization,
+        coverLetterOptimization: client.optimizations.coverLetterOptimization || getDefaultOptimizations().coverLetterOptimization
+      });
+    } else {
+      setOptimizations(getDefaultOptimizations());
+    }
+  }, [client]);
+
+  useEffect(() => {
+    if (isOpen && client?.email) {
+      fetchDashboardDocuments();
+    }
+  }, [isOpen, client?.email]);
+
+  const fetchDashboardDocuments = async () => {
+    if (!client?.email) return;
+    setLoadingDocs(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE}/api/client-optimizations/documents/${encodeURIComponent(client.email)}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setDashboardDocs(data);
+      }
+    } catch (error) {
+      console.error('Error fetching dashboard documents:', error);
+    } finally {
+      setLoadingDocs(false);
+    }
+  };
+
+  if (!isOpen || !client) return null;
+
+  const handleToggle = (type) => {
+    const current = optimizations[type];
+    const hasAttachment = current?.attachmentUrl && current.attachmentUrl.trim() !== '';
+    
+    setOptimizations(prev => ({
+      ...prev,
+      [type]: {
+        ...prev[type],
+        completed: !hasAttachment,
+        attachmentUrl: hasAttachment ? '' : 'linkedin-optimized',
+        attachmentName: hasAttachment ? '' : ''
+      }
+    }));
+  };
+
+  const handleFileUpload = async (type, file) => {
+    if (!file) return;
+
+    const uploadKey = type === 'resumeOptimization' ? 'resume' : 
+                      type === 'linkedinOptimization' ? 'linkedin' : 'coverLetter';
+    
+    const documentType = type === 'resumeOptimization' ? 'resume' : 
+                         type === 'coverLetterOptimization' ? 'coverLetter' : 'resume';
+    
+    setUploading(prev => ({ ...prev, [uploadKey]: true }));
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('email', client.email);
+      formData.append('documentType', documentType);
+
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE}/api/client-optimizations/upload`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setOptimizations(prev => ({
+          ...prev,
+          [type]: {
+            ...prev[type],
+            attachmentUrl: data.url,
+            attachmentName: data.fileName || file.name,
+            completed: true
+          }
+        }));
+        toast.success(`${file.name} uploaded and synced to dashboard`);
+      } else {
+        throw new Error(data.error || 'Upload failed');
+      }
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error(error.message || 'Failed to upload file');
+    } finally {
+      setUploading(prev => ({ ...prev, [uploadKey]: false }));
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave(client.email, optimizations);
+      onClose();
+    } catch (error) {
+      console.error('Save error:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const optimizationItems = [
+    {
+      key: 'resumeOptimization',
+      label: 'Resume Optimization',
+      icon: FileText,
+      uploadKey: 'resume',
+      color: 'blue'
+    },
+    {
+      key: 'linkedinOptimization',
+      label: 'LinkedIn Optimization',
+      icon: Linkedin,
+      uploadKey: 'linkedin',
+      color: 'sky'
+    },
+    {
+      key: 'coverLetterOptimization',
+      label: 'Cover Letter Optimization',
+      icon: FileCheck,
+      uploadKey: 'coverLetter',
+      color: 'purple'
+    }
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
+        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Client Optimizations</h2>
+              <p className="text-indigo-100 text-sm">{client.name} ({client.email})</p>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5 text-white" />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-4">
+          {loadingDocs && (
+            <div className="flex items-center justify-center py-4">
+              <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mr-2" />
+              <span className="text-sm text-gray-500">Loading dashboard documents...</span>
+            </div>
+          )}
+
+          {dashboardDocs && (dashboardDocs.resumeUrl || dashboardDocs.coverLetterUrl || dashboardDocs.linkedinUrl) && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4">
+              <h4 className="text-sm font-semibold text-blue-800 mb-2">Documents on Dashboard</h4>
+              <div className="space-y-2 text-sm">
+                {dashboardDocs.resumeUrl && (
+                  <a href={dashboardDocs.resumeUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-blue-600 hover:underline">
+                    <FileText className="w-4 h-4" /> Base Resume <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+                {dashboardDocs.coverLetterUrl && (
+                  <a href={dashboardDocs.coverLetterUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-blue-600 hover:underline">
+                    <FileCheck className="w-4 h-4" /> Cover Letter <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+                {dashboardDocs.linkedinUrl && (
+                  <a href={dashboardDocs.linkedinUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-blue-600 hover:underline">
+                    <Linkedin className="w-4 h-4" /> LinkedIn Profile <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {optimizationItems.map(({ key, label, icon: Icon, uploadKey, color }) => {
+            const hasAttachment = optimizations[key]?.attachmentUrl && optimizations[key].attachmentUrl.trim() !== '';
+            return (
+              <div 
+                key={key}
+                className={`border rounded-xl p-4 transition-all ${
+                  hasAttachment 
+                    ? 'border-green-300 bg-green-50' 
+                    : 'border-red-300 bg-red-50'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${
+                      hasAttachment 
+                        ? 'bg-green-100 text-green-600' 
+                        : 'bg-red-100 text-red-600'
+                    }`}>
+                      <Icon className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-800">{label}</span>
+                      {!hasAttachment && (
+                        <p className="text-xs text-red-500">No attachment - upload required</p>
+                      )}
+                    </div>
+                  </div>
+                  {hasAttachment ? (
+                    <CheckCircle2 className="w-6 h-6 text-green-500" />
+                  ) : (
+                    <Circle className="w-6 h-6 text-red-400" />
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <input
+                    type="file"
+                    ref={fileInputRefs[uploadKey]}
+                    onChange={(e) => handleFileUpload(key, e.target.files[0])}
+                    className="hidden"
+                    accept=".pdf,.doc,.docx,.txt"
+                  />
+                  {key !== 'linkedinOptimization' ? (
+                    <button
+                      onClick={() => fileInputRefs[uploadKey].current?.click()}
+                      disabled={uploading[uploadKey]}
+                      className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors disabled:opacity-50 ${
+                        hasAttachment 
+                          ? 'bg-white border border-gray-300 hover:bg-gray-50' 
+                          : 'bg-red-600 text-white hover:bg-red-700'
+                      }`}
+                    >
+                      {uploading[uploadKey] ? (
+                        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Upload className="w-4 h-4" />
+                      )}
+                      {uploading[uploadKey] ? 'Uploading...' : hasAttachment ? 'Replace File' : 'Upload & Sync to Dashboard'}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleToggle(key)}
+                      className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${
+                        hasAttachment 
+                          ? 'bg-white border border-gray-300 hover:bg-gray-50' 
+                          : 'bg-red-600 text-white hover:bg-red-700'
+                      }`}
+                    >
+                      {hasAttachment ? 'Mark Incomplete' : 'Mark as Done'}
+                    </button>
+                  )}
+
+                  {hasAttachment && optimizations[key]?.attachmentUrl && (
+                    <a
+                      href={optimizations[key].attachmentUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 px-3 py-2 text-sm text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
+                    >
+                      <Paperclip className="w-4 h-4" />
+                      {optimizations[key].attachmentName || 'View File'}
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="px-6 py-4 bg-gray-50 border-t flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+          >
+            {saving ? (
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <Save className="w-4 h-4" />
+            )}
+            {saving ? 'Saving...' : 'Save Changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OptimizationBadge({ optimization, label, icon: Icon }) {
+  const hasAttachment = optimization?.attachmentUrl && optimization.attachmentUrl.trim() !== '';
+  const isCompleted = hasAttachment;
+  
+  return (
+    <div 
+      className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium transition-all ${
+        isCompleted 
+          ? 'bg-green-100 text-green-700 border border-green-200' 
+          : 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'
+      }`}
+      title={`${label}: ${isCompleted ? 'Completed' : 'Pending - Click to upload'}`}
+    >
+      {isCompleted ? (
+        <CheckCircle2 className="w-3 h-3" />
+      ) : (
+        <Circle className="w-3 h-3" />
+      )}
+      <span className="hidden xl:inline">{label}</span>
+    </div>
+  );
 }
 
 export default function ClientPreferences() {
@@ -99,6 +440,7 @@ export default function ClientPreferences() {
   const [saving, setSaving] = useState(false);
   const [filterStatus, setFilterStatus] = useState('all');
   const [pendingUpdates, setPendingUpdates] = useState(new Map());
+  const [attachmentModalClient, setAttachmentModalClient] = useState(null);
 
   useEffect(() => {
     fetchClients();
@@ -116,7 +458,11 @@ export default function ClientPreferences() {
       const data = await response.json();
 
       if (data.success) {
-        setClients(data.clients || []);
+        const clientsWithOptimizations = (data.clients || []).map(client => ({
+          ...client,
+          optimizations: client.optimizations || getDefaultOptimizations()
+        }));
+        setClients(clientsWithOptimizations);
       } else {
         throw new Error(data.error || 'Failed to load clients');
       }
@@ -193,40 +539,70 @@ export default function ClientPreferences() {
     }
   };
 
-  const toggleTodoStatus = async (client, todoId) => {
-    const updateKey = `${client.email}-${todoId}`;
+  const saveOptimizations = async (email, optimizations) => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE}/api/client-optimizations/${email}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ optimizations })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        toast.success('Optimizations saved successfully!');
+        setClients(prev => prev.map(c => 
+          c.email.toLowerCase() === email.toLowerCase() 
+            ? { ...c, optimizations } 
+            : c
+        ));
+      } else {
+        throw new Error(data.error || 'Failed to save');
+      }
+    } catch (error) {
+      console.error('Error saving optimizations:', error);
+      toast.error(error.message || 'Failed to save optimizations');
+      throw error;
+    }
+  };
+
+  const toggleOptimization = async (client, optimizationType) => {
+    const updateKey = `${client.email}-${optimizationType}`;
     if (pendingUpdates.has(updateKey)) return;
 
-    const originalTodo = (client.todos || []).find(t => t.id === todoId);
-    if (!originalTodo) return;
+    const currentOptimization = client.optimizations?.[optimizationType] || { completed: false };
+    const newCompletedState = !currentOptimization.completed;
 
-    const newCompletedState = !originalTodo.completed;
-    const updatedTodos = (client.todos || []).map(todo =>
-      todo.id === todoId 
-        ? { ...todo, completed: newCompletedState, updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) }
-        : todo
-    );
+    const updatedOptimizations = {
+      ...client.optimizations,
+      [optimizationType]: {
+        ...currentOptimization,
+        completed: newCompletedState,
+        updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
+      }
+    };
 
     setPendingUpdates(prev => new Map(prev).set(updateKey, true));
     setClients(prevClients => 
       prevClients.map(c => 
         c.email === client.email 
-          ? { ...c, todos: updatedTodos }
+          ? { ...c, optimizations: updatedOptimizations }
           : c
       )
     );
 
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch(`${API_BASE}/api/client-todos/${client.email}`, {
+      const response = await fetch(`${API_BASE}/api/client-optimizations/${client.email}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({
-          todos: updatedTodos
-        })
+        body: JSON.stringify({ optimizations: updatedOptimizations })
       });
 
       const data = await response.json();
@@ -234,22 +610,15 @@ export default function ClientPreferences() {
         throw new Error(data.error || 'Failed to update');
       }
     } catch (error) {
-      console.error('Error toggling todo:', error);
+      console.error('Error toggling optimization:', error);
       setClients(prevClients => 
         prevClients.map(c => 
           c.email === client.email 
-            ? { ...c, todos: client.todos }
+            ? { ...c, optimizations: client.optimizations }
             : c
         )
       );
-      toast.error(`Failed to update todo: "${originalTodo.title || 'Untitled TODO'}"`, {
-        duration: 4000,
-        style: {
-          background: '#ef4444',
-          color: '#fff',
-          fontWeight: '500'
-        }
-      });
+      toast.error('Failed to update optimization status');
     } finally {
       setPendingUpdates(prev => {
         const next = new Map(prev);
@@ -300,43 +669,6 @@ export default function ClientPreferences() {
     });
   };
 
-  const addLockPeriod = (clientEmail) => {
-    if (!editingClient || editingClient.email !== clientEmail) return;
-
-    const newPeriod = {
-      id: `lock-${Date.now()}`,
-      startDate: '',
-      endDate: '',
-      reason: '',
-      createdAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
-    };
-
-    setEditingClient({
-      ...editingClient,
-      lockPeriods: [...editingClient.lockPeriods, newPeriod]
-    });
-  };
-
-  const updateLockPeriod = (clientEmail, periodId, updates) => {
-    if (!editingClient || editingClient.email !== clientEmail) return;
-
-    setEditingClient({
-      ...editingClient,
-      lockPeriods: editingClient.lockPeriods.map(period =>
-        period.id === periodId ? { ...period, ...updates } : period
-      )
-    });
-  };
-
-  const deleteLockPeriod = (clientEmail, periodId) => {
-    if (!editingClient || editingClient.email !== clientEmail) return;
-
-    setEditingClient({
-      ...editingClient,
-      lockPeriods: editingClient.lockPeriods.filter(period => period.id !== periodId)
-    });
-  };
-
   const isDateInLockPeriod = (date, lockPeriods) => {
     if (!lockPeriods || lockPeriods.length === 0) return false;
     const now = new Date(date);
@@ -365,6 +697,15 @@ export default function ClientPreferences() {
     });
   };
 
+  const getCompletedOptimizationsCount = (optimizations) => {
+    if (!optimizations) return 0;
+    let count = 0;
+    if (optimizations.resumeOptimization?.attachmentUrl) count++;
+    if (optimizations.linkedinOptimization?.attachmentUrl) count++;
+    if (optimizations.coverLetterOptimization?.attachmentUrl) count++;
+    return count;
+  };
+
   const filteredClients = clients.filter(client => {
     const matchesSearch = !searchQuery ||
       client.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -380,6 +721,12 @@ export default function ClientPreferences() {
     }
     if (filterStatus === 'activeLock') {
       return getActiveLockPeriod(client.lockPeriods) !== null;
+    }
+    if (filterStatus === 'pendingOptimizations') {
+      return getCompletedOptimizationsCount(client.optimizations) < 3;
+    }
+    if (filterStatus === 'completedOptimizations') {
+      return getCompletedOptimizationsCount(client.optimizations) === 3;
     }
 
     return true;
@@ -406,13 +753,11 @@ export default function ClientPreferences() {
   return (
     <Layout>
       <div className="p-6 w-full">
-        {/* Header */}
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Client Preferences</h1>
-          <p className="text-gray-600">Manage TODOs and lock periods for all clients</p>
+          <p className="text-gray-600">Manage optimizations and lock periods for all clients</p>
         </div>
 
-        {/* Search and Filter Bar */}
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
           <div className="flex flex-col sm:flex-row gap-4">
             <div className="flex-1 relative">
@@ -433,7 +778,8 @@ export default function ClientPreferences() {
                 className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               >
                 <option value="all">All Clients</option>
-                <option value="hasTodos">Has TODOs</option>
+                <option value="pendingOptimizations">Pending Optimizations</option>
+                <option value="completedOptimizations">All Optimizations Done</option>
                 <option value="hasLockPeriods">Has Lock Periods</option>
                 <option value="activeLock">Active Lock Period</option>
               </select>
@@ -447,7 +793,6 @@ export default function ClientPreferences() {
           </div>
         </div>
 
-        {/* Table */}
         <div className="bg-white rounded-lg shadow-lg overflow-hidden border border-gray-200">
           <div className="overflow-x-auto">
             <table className="w-full divide-y divide-gray-200 table-fixed">
@@ -458,11 +803,11 @@ export default function ClientPreferences() {
                   </th>
                   <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-8">
                   </th>
-                  <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[12%]">
+                  <th className="px-2 py-2 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[14%]">
                     Email
                   </th>
-                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[15%]">
-                    TODOs
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[22%]">
+                    Optimizations
                   </th>
                   <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[8%]">
                     Lock Periods
@@ -470,13 +815,13 @@ export default function ClientPreferences() {
                   <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[8%]">
                     Status
                   </th>
-                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[15%]">
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[14%]">
                     Last Applied Job
                   </th>
-                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[12%]">
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[10%]">
                     Operator
                   </th>
-                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[8%]">
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[10%]">
                     Actions
                   </th>
                 </tr>
@@ -494,16 +839,11 @@ export default function ClientPreferences() {
                     const isEditing = editingClient?.email === client.email;
                     const displayData = isEditing ? editingClient : client;
                     const displayTodos = displayData?.todos || [];
-                    const incompleteTodos = displayTodos.filter(t => !t.completed);
-                    const completedTodos = displayTodos.filter(t => t.completed);
-                    const todoStats = {
-                      total: displayTodos.length,
-                      pending: incompleteTodos.length,
-                      completed: completedTodos.length
-                    };
                     const activeLock = getActiveLockPeriod(client.lockPeriods);
                     const isJobActive = client.isJobActive !== false;
                     const rowBgClass = isJobActive ? (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50') : 'bg-red-50';
+                    const optimizations = client.optimizations || getDefaultOptimizations();
+                    const completedCount = getCompletedOptimizationsCount(optimizations);
 
                     return (
                       <React.Fragment key={client.email}>
@@ -526,29 +866,58 @@ export default function ClientPreferences() {
                           <td className="px-2 py-2">
                             <div className={`text-[11px] truncate ${isJobActive ? 'text-gray-600' : 'text-red-700'}`} title={client.email}>{client.email}</div>
                           </td>
-                          <td className="px-2 py-2 text-center">
-                            <div className="flex items-center justify-center">
-                              {incompleteTodos.length > 0 ? (
-                                <div className="w-full max-h-20 overflow-y-auto bg-gray-50 rounded border border-gray-200 p-1 text-left">
-                                  <div className="space-y-0.5">
-                                    {incompleteTodos.map((todo) => (
-                                      <div
-                                        key={todo.id}
-                                        className="flex items-start gap-1 text-[10px] cursor-pointer hover:bg-gray-100 p-0.5 rounded transition-colors group/todo"
-                                        onClick={() => toggleTodoStatus(client, todo.id)}
-                                        title="Click to mark as complete"
-                                      >
-                                        <Circle className="w-3 h-3 text-gray-400 flex-shrink-0 mt-0.5 group-hover/todo:text-indigo-500" />
-                                        <span className="text-gray-700 leading-tight truncate">{todo.title}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="flex items-center gap-1">
-                                  <CheckCircle2 className="w-3 h-3 text-green-500" />
-                                  <span className="text-[10px] text-green-600 font-medium">All Complete</span>
-                                </div>
+                          <td className="px-2 py-2">
+                            <div className="flex items-center justify-center gap-1 flex-wrap">
+                              <button
+                                onClick={() => {
+                                  const hasAttachment = optimizations.resumeOptimization?.attachmentUrl;
+                                  if (!hasAttachment) {
+                                    setAttachmentModalClient(client);
+                                  }
+                                }}
+                                className="cursor-pointer"
+                                title={optimizations.resumeOptimization?.attachmentUrl ? "Resume uploaded" : "Click to upload resume"}
+                              >
+                                <OptimizationBadge 
+                                  optimization={optimizations.resumeOptimization} 
+                                  label="Resume" 
+                                  icon={FileText}
+                                />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const hasAttachment = optimizations.linkedinOptimization?.attachmentUrl;
+                                  if (!hasAttachment) {
+                                    setAttachmentModalClient(client);
+                                  }
+                                }}
+                                className="cursor-pointer"
+                                title={optimizations.linkedinOptimization?.attachmentUrl ? "LinkedIn completed" : "Click to mark LinkedIn"}
+                              >
+                                <OptimizationBadge 
+                                  optimization={optimizations.linkedinOptimization} 
+                                  label="LinkedIn" 
+                                  icon={Linkedin}
+                                />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const hasAttachment = optimizations.coverLetterOptimization?.attachmentUrl;
+                                  if (!hasAttachment) {
+                                    setAttachmentModalClient(client);
+                                  }
+                                }}
+                                className="cursor-pointer"
+                                title={optimizations.coverLetterOptimization?.attachmentUrl ? "Cover Letter uploaded" : "Click to upload cover letter"}
+                              >
+                                <OptimizationBadge 
+                                  optimization={optimizations.coverLetterOptimization} 
+                                  label="Cover Letter" 
+                                  icon={FileCheck}
+                                />
+                              </button>
+                              {completedCount === 3 && (
+                                <span className="ml-1 text-[9px] text-green-600 font-semibold">All Done</span>
                               )}
                             </div>
                           </td>
@@ -604,270 +973,149 @@ export default function ClientPreferences() {
                             )}
                           </td>
                           <td className="px-2 py-2 text-center">
-                            {isEditing ? (
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  onClick={saveClientData}
-                                  disabled={saving}
-                                  className="p-1 text-white hover:bg-green-900 bg-green-600 rounded transition-colors"
-                                  title="Save"
-                                >
-                                  Save
-                                </button>
-                                <button
-                                  onClick={cancelEditing}
-                                  className="p-1 text-gray-600 hover:bg-gray-100 rounded transition-colors"
-                                  title="Cancel"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              </div>
-                            ) : (
+                            <div className="flex items-center justify-center gap-1">
                               <button
-                                onClick={() => handleEditClick(client)}
+                                onClick={() => setAttachmentModalClient(client)}
                                 className="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
-                                title="Edit"
+                                title="Manage Attachments"
                               >
-                                <Edit2 className="w-3 h-3" />
+                                <Paperclip className="w-3.5 h-3.5" />
                               </button>
-                            )}
+                              {isEditing ? (
+                                <>
+                                  <button
+                                    onClick={saveClientData}
+                                    disabled={saving}
+                                    className="p-1 text-white hover:bg-green-900 bg-green-600 rounded transition-colors text-[10px] px-2"
+                                    title="Save"
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    onClick={cancelEditing}
+                                    className="p-1 text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                                    title="Cancel"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => handleEditClick(client)}
+                                  className="p-1 text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
+                                  title="Edit"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
 
-                        {/* Expanded Row Content */}
                         {isExpanded && (
                           <tr>
                             <td colSpan={9} className="px-2 py-2 bg-gray-50">
-                              <div className="grid grid-cols-1 gap-6">
-                                {/* TODOs Section */}
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                 <div className="bg-white rounded-lg border border-gray-200 p-4">
-                                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
-                                    <div>
-                                      <h3 className="text-lg font-semibold text-gray-900">TODOs</h3>
-                                      <p className="text-xs text-gray-500">
-                                        {todoStats.pending} pending &middot; {todoStats.total} total
-                                      </p>
-                                    </div>
-                                    {isEditing && (
-                                      <button
-                                        onClick={() => addTodo(client.email)}
-                                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
-                                      >
-                                        <Plus className="w-3 h-3" />
-                                        Add TODO
-                                      </button>
-                                    )}
-                                  </div>
-                                  <div className="flex flex-wrap items-center gap-4 text-[11px] text-gray-600 mb-4">
-                                    <div className="flex items-center gap-1">
-                                      <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                                      Pending {todoStats.pending}
-                                    </div>
-                                    <div className="flex items-center gap-1">
-                                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                                      Completed {todoStats.completed}
-                                    </div>
-                                  </div>
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-96 overflow-y-auto pr-1 auto-rows-max">
-                                    {displayTodos.length > 0 ? (
-                                      displayTodos.map((todo) => (
-                                        isEditing ? (
-                                          <div
-                                            key={todo.id}
-                                            className={`relative group rounded-lg border p-3 text-xs transition-all ${todo.completed ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200 hover:border-indigo-200'}`}
-                                          >
-                                            <div className="flex items-start gap-3">
-                                              <button
-                                                onClick={() => updateTodo(client.email, todo.id, { completed: !todo.completed })}
-                                                className="flex-shrink-0 mt-1 text-gray-500 hover:text-indigo-500"
-                                              >
-                                                {todo.completed ? (
-                                                  <CheckCircle2 className="w-5 h-5 text-green-500" />
-                                                ) : (
-                                                  <Circle className="w-5 h-5 text-gray-400" />
-                                                )}
-                                              </button>
-                                              <div className="flex-1 space-y-2">
-                                                <div className="flex items-start justify-between gap-2">
-                                                  <input
-                                                    type="text"
-                                                    value={todo.title}
-                                                    onChange={(e) => updateTodo(client.email, todo.id, { title: e.target.value })}
-                                                    placeholder="TODO title..."
-                                                    className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                                                  />
-                                                  <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-full ${todo.completed ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                                                    {todo.completed ? 'Completed' : 'Pending'}
-                                                  </span>
-                                                </div>
-                                                {/* <textarea
-                                                  value={todo.notes || ''}
-                                                  onChange={(e) => updateTodo(client.email, todo.id, { notes: e.target.value })}
-                                                  placeholder="Add notes..."
-                                                  rows={3}
-                                                  className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none"
-                                                /> */}
-                                                <div className="flex flex-wrap gap-3 text-[10px] text-gray-500">
-                                                  {todo.createdBy && (
-                                                    <span>Created by {todo.createdBy}</span>
-                                                  )}
-                                                  {todo.createdAt && (
-                                                    <span>Added {formatRelativeTime(todo.createdAt)}</span>
-                                                  )}
-                                                  {todo.updatedAt && (
-                                                    <span>Updated {formatRelativeTime(todo.updatedAt)}</span>
-                                                  )}
-                                                </div>
-                                              </div>
-                                              {/* <button
-                                                onClick={() => deleteTodo(client.email, todo.id)}
-                                                className="flex-shrink-0 p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-all"
-                                              >
-                                                <Trash2 className="w-4 h-4" />
-                                              </button> */}
-                                            </div>
-                                          </div>
-                                        ) : (
-                                          <div
-                                            key={todo.id}
-                                            className={`group rounded-lg border p-3 text-xs transition-all cursor-pointer ${todo.completed ? 'bg-white border-gray-200 hover:border-green-300' : 'bg-amber-50 border-amber-200 hover:border-amber-300'}`}
-                                            onClick={() => toggleTodoStatus(client, todo.id)}
-                                            title={todo.completed ? "Click to mark as incomplete" : "Click to mark as complete"}
-                                          >
-                                            <div className="flex items-start gap-3">
-                                              {todo.completed ? (
-                                                <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Optimization Details</h3>
+                                  <div className="space-y-3">
+                                    {[
+                                      { key: 'resumeOptimization', label: 'Resume Optimization', icon: FileText },
+                                      { key: 'linkedinOptimization', label: 'LinkedIn Optimization', icon: Linkedin },
+                                      { key: 'coverLetterOptimization', label: 'Cover Letter Optimization', icon: FileCheck }
+                                    ].map(({ key, label, icon: Icon }) => {
+                                      const opt = optimizations[key] || {};
+                                      const hasAttachment = opt.attachmentUrl && opt.attachmentUrl.trim() !== '';
+                                      return (
+                                        <div 
+                                          key={key}
+                                          className={`flex items-center justify-between p-3 rounded-lg border ${
+                                            hasAttachment 
+                                              ? 'bg-green-50 border-green-200' 
+                                              : 'bg-red-50 border-red-200'
+                                          }`}
+                                        >
+                                          <div className="flex items-center gap-3">
+                                            <Icon className={`w-5 h-5 ${hasAttachment ? 'text-green-600' : 'text-red-400'}`} />
+                                            <div>
+                                              <span className="text-sm font-medium text-gray-800">{label}</span>
+                                              {hasAttachment ? (
+                                                <a 
+                                                  href={opt.attachmentUrl} 
+                                                  target="_blank" 
+                                                  rel="noopener noreferrer"
+                                                  className="flex items-center gap-1 text-xs text-indigo-600 hover:underline mt-1"
+                                                >
+                                                  <Paperclip className="w-3 h-3" />
+                                                  {opt.attachmentName || 'View Attachment'}
+                                                </a>
                                               ) : (
-                                                <Circle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5 group-hover:text-indigo-500" />
+                                                <span className="text-xs text-red-500 mt-1">No attachment uploaded</span>
                                               )}
-                                              <div className="flex-1 space-y-2">
-                                                <div className="flex items-start justify-between gap-3">
-                                                  <p className={`text-sm ${todo.completed ? 'text-gray-600 line-through' : 'text-gray-900 font-semibold'}`}>
-                                                    {todo.title || 'Untitled TODO'}
-                                                  </p>
-                                                  <span className={`px-2 py-0.5 text-[10px] font-semibold rounded-full ${todo.completed ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                                                    {todo.completed ? 'Completed' : 'Pending'}
-                                                  </span>
-                                                </div>
-                                                {todo.notes && (
-                                                  <p className="text-[11px] text-gray-600 leading-snug">{todo.notes}</p>
-                                                )}
-                                                <div className="flex flex-wrap gap-3 text-[10px] text-gray-500">
-                                                  {todo.createdBy && (
-                                                    <span>Created by {todo.createdBy}</span>
-                                                  )}
-                                                  {todo.createdAt && (
-                                                    <span>Added {formatRelativeTime(todo.createdAt)}</span>
-                                                  )}
-                                                  {todo.updatedAt && (
-                                                    <span>Updated {formatRelativeTime(todo.updatedAt)}</span>
-                                                  )}
-                                                </div>
-                                              </div>
                                             </div>
                                           </div>
-                                        )
-                                      ))
-                                    ) : (
-                                      <p className="text-xs text-gray-500 text-center py-4">No TODOs</p>
-                                    )}
+                                          {hasAttachment ? (
+                                            <CheckCircle2 className="w-6 h-6 text-green-500" />
+                                          ) : (
+                                            <button
+                                              onClick={() => setAttachmentModalClient(client)}
+                                              className="px-3 py-1 text-xs bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors"
+                                            >
+                                              Upload
+                                            </button>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
                                   </div>
+                                  <button
+                                    onClick={() => setAttachmentModalClient(client)}
+                                    className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-medium"
+                                  >
+                                    <Upload className="w-4 h-4" />
+                                    Upload Attachments
+                                  </button>
                                 </div>
 
-                                {/* Lock Periods Section */}
-                                {/* <div className="bg-white rounded-lg border border-gray-200 p-2">
-                                  <div className="flex items-center justify-between mb-2">
-                                    <h3 className="text-sm font-semibold text-gray-900">Lock Periods</h3>
-                                    {isEditing && (
-                                      <button
-                                        onClick={() => addLockPeriod(client.email)}
-                                        className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded transition-colors"
-                                      >
-                                        <Plus className="w-3 h-3" />
-                                        Add Period
-                                      </button>
-                                    )}
-                                  </div>
-                                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                                    {displayData.lockPeriods && displayData.lockPeriods.length > 0 ? (
-                                      displayData.lockPeriods.map((period) => {
-                                        const isActive = isDateInLockPeriod(new Date(), [period]);
-
-                                        return (
-                                          <div
-                                            key={period.id}
-                                            className={`p-2 rounded border ${isActive
-                                              ? 'bg-red-50 border-red-300'
-                                              : 'bg-gray-50 border-gray-200'
-                                              } group`}
-                                          >
-                                            {isEditing ? (
-                                              <div className="space-y-1.5">
-                                                <div className="grid grid-cols-2 gap-1.5">
-                                                  <div>
-                                                    <label className="block text-[10px] font-medium text-gray-700 mb-0.5">Start Date</label>
-                                                    <input
-                                                      type="date"
-                                                      value={period.startDate}
-                                                      onChange={(e) => updateLockPeriod(client.email, period.id, { startDate: e.target.value })}
-                                                      className="w-full px-1.5 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                                                    />
-                                                  </div>
-                                                  <div>
-                                                    <label className="block text-[10px] font-medium text-gray-700 mb-0.5">End Date</label>
-                                                    <input
-                                                      type="date"
-                                                      value={period.endDate}
-                                                      onChange={(e) => updateLockPeriod(client.email, period.id, { endDate: e.target.value })}
-                                                      className="w-full px-1.5 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                                                    />
-                                                  </div>
-                                                </div>
-                                                <div>
-                                                  <label className="block text-[10px] font-medium text-gray-700 mb-0.5">Reason</label>
-                                                  <input
-                                                    type="text"
-                                                    value={period.reason || ''}
-                                                    onChange={(e) => updateLockPeriod(client.email, period.id, { reason: e.target.value })}
-                                                    placeholder="Reason for lock period..."
-                                                    className="w-full px-1.5 py-1 text-xs border border-gray-300 rounded focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                                                  />
-                                                </div>
-                                                <button
-                                                  onClick={() => deleteLockPeriod(client.email, period.id)}
-                                                  className="w-full px-2 py-1 text-[10px] font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
-                                                >
-                                                  Delete Period
-                                                </button>
-                                              </div>
+                                {displayTodos.length > 0 && (
+                                  <div className="bg-white rounded-lg border border-gray-200 p-4">
+                                    <div className="flex items-center justify-between mb-4">
+                                      <h3 className="text-lg font-semibold text-gray-900">Additional TODOs</h3>
+                                      {isEditing && (
+                                        <button
+                                          onClick={() => addTodo(client.email)}
+                                          className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
+                                        >
+                                          <Plus className="w-3 h-3" />
+                                          Add TODO
+                                        </button>
+                                      )}
+                                    </div>
+                                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                                      {displayTodos.filter(t => 
+                                        !['Create optimized resume', 'LinkedIn Optimization', 'Cover letter Optimization'].includes(t.title)
+                                      ).map(todo => (
+                                        <div 
+                                          key={todo.id}
+                                          className={`p-3 rounded-lg border ${
+                                            todo.completed ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'
+                                          }`}
+                                        >
+                                          <div className="flex items-center gap-3">
+                                            {todo.completed ? (
+                                              <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" />
                                             ) : (
-                                              <div className="flex items-start justify-between">
-                                                <div className="flex-1">
-                                                  <div className="flex items-center gap-1.5 mb-0.5">
-                                                    <Calendar className="w-3 h-3 text-gray-500" />
-                                                    <span className="text-xs font-medium text-gray-900">
-                                                      {new Date(period.startDate).toLocaleDateString()} - {new Date(period.endDate).toLocaleDateString()}
-                                                    </span>
-                                                    {isActive && (
-                                                      <span className="px-1.5 py-0.5 text-[9px] font-medium bg-red-500 text-white rounded">
-                                                        Active
-                                                      </span>
-                                                    )}
-                                                  </div>
-                                                  {period.reason && (
-                                                    <p className="text-[10px] text-gray-600 mt-0.5">{period.reason}</p>
-                                                  )}
-                                                </div>
-                                              </div>
+                                              <Circle className="w-5 h-5 text-amber-500 flex-shrink-0" />
                                             )}
+                                            <span className={`text-sm ${todo.completed ? 'line-through text-gray-500' : 'text-gray-800'}`}>
+                                              {todo.title}
+                                            </span>
                                           </div>
-                                        );
-                                      })
-                                    ) : (
-                                      <p className="text-xs text-gray-500 text-center py-2">No lock periods</p>
-                                    )}
+                                        </div>
+                                      ))}
+                                    </div>
                                   </div>
-                                </div> */}
+                                )}
                               </div>
                             </td>
                           </tr>
@@ -881,22 +1129,21 @@ export default function ClientPreferences() {
           </div>
         </div>
 
-        {/* Summary Stats */}
         <div className="mt-6 grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
             <div className="text-sm text-gray-600 mb-1">Total Clients</div>
             <div className="text-2xl font-bold text-gray-900">{clients.length}</div>
           </div>
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-            <div className="text-sm text-gray-600 mb-1">Clients with TODOs</div>
-            <div className="text-2xl font-bold text-orange-600">
-              {clients.filter(c => c.todos && c.todos.length > 0).length}
+            <div className="text-sm text-gray-600 mb-1">All Optimizations Done</div>
+            <div className="text-2xl font-bold text-green-600">
+              {clients.filter(c => getCompletedOptimizationsCount(c.optimizations) === 3).length}
             </div>
           </div>
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-            <div className="text-sm text-gray-600 mb-1">Pending TODOs</div>
+            <div className="text-sm text-gray-600 mb-1">Pending Optimizations</div>
             <div className="text-2xl font-bold text-amber-600">
-              {clients.reduce((sum, c) => sum + (c.todos?.filter(t => !t.completed).length || 0), 0)}
+              {clients.filter(c => getCompletedOptimizationsCount(c.optimizations) < 3).length}
             </div>
           </div>
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
@@ -907,7 +1154,13 @@ export default function ClientPreferences() {
           </div>
         </div>
       </div>
+
+      <AttachmentModal
+        isOpen={!!attachmentModalClient}
+        onClose={() => setAttachmentModalClient(null)}
+        client={attachmentModalClient}
+        onSave={saveOptimizations}
+      />
     </Layout>
   );
 }
-

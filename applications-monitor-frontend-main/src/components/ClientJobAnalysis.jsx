@@ -10,8 +10,6 @@ export default function ClientJobAnalysis() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sortDir, setSortDir] = useState('desc');
-  const [operationsNames, setOperationsNames] = useState([]);
-  const [savingOperations, setSavingOperations] = useState(new Set());
   const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
   const [savingDashboardManager, setSavingDashboardManager] = useState(new Set());
   const [clientAddons, setClientAddons] = useState({});
@@ -78,24 +76,6 @@ export default function ClientJobAnalysis() {
     }
   }, [convertToDMY, fetchClientAddons]);
 
-  // Fetch operations names on mount
-  useEffect(() => {
-    const fetchOperationsNames = async () => {
-      try {
-        const resp = await fetch(`${API_BASE}/api/operations/names`);
-        if (!resp.ok) throw new Error('Failed to fetch operations names');
-        const data = await resp.json();
-        if (data.success) {
-          setOperationsNames(data.names || []);
-        }
-      } catch (e) {
-        console.error('Failed to load operations names:', e);
-      }
-    };
-    fetchOperationsNames();
-  }, []);
-
-  // Fetch dashboard manager names on mount
   useEffect(() => {
     const fetchDashboardManagerNames = async () => {
       try {
@@ -142,34 +122,6 @@ export default function ClientJobAnalysis() {
       toast.error('Failed to fetch applied-on-date');
     }
   }, [date, convertToDMY]);
-
-  const handleOperationsNameChange = async (email, operationsName) => {
-    setSavingOperations(prev => new Set(prev).add(email));
-    try {
-      const resp = await fetch(`${API_BASE}/api/clients/update-operations-name`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, operationsName })
-      });
-      if (!resp.ok) throw new Error('Failed to save');
-      const data = await resp.json();
-      if (data.success) {
-        // Update the row in state
-        setRows(prev => prev.map(r => 
-          r.email === email ? { ...r, operationsName } : r
-        ));
-        toast.success('Operations name updated successfully');
-      }
-    } catch (e) {
-      toast.error('Failed to update operations name');
-    } finally {
-      setSavingOperations(prev => {
-        const next = new Set(prev);
-        next.delete(email);
-        return next;
-      });
-    }
-  };
 
   const handleDashboardManagerChange = async (email, dashboardTeamLeadName) => {
     setSavingDashboardManager(prev => new Set(prev).add(email));
@@ -302,7 +254,7 @@ export default function ClientJobAnalysis() {
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Status</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Pause</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Plan</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Operations</th>
+                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Last applied by</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Dashboard Mgr</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Total Apps</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Saved</th>
@@ -449,19 +401,9 @@ export default function ClientJobAnalysis() {
                       ) : '-'}
                     </td>
                     <td className="px-2 py-1">
-                      <select
-                        value={r.operationsName || ''}
-                        onChange={(e) => handleOperationsNameChange(r.email, e.target.value)}
-                        disabled={savingOperations.has(r.email)}
-                        className="px-2 py-1 text-[11px] border border-slate-300 rounded-full bg-white shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <option value="">-- Select --</option>
-                        {operationsNames.map((name) => (
-                          <option key={name} value={name}>
-                            {name}
-                          </option>
-                        ))}
-                      </select>
+                      <span className="text-[11px] text-slate-700 truncate max-w-[120px] block" title={r.lastAppliedOperatorName || ''}>
+                        {r.lastAppliedOperatorName || '-'}
+                      </span>
                     </td>
                     <td className="px-2 py-1">
                       <select
@@ -501,7 +443,7 @@ export default function ClientJobAnalysis() {
                 )})}
                 {rows.length===0 && (
                   <tr>
-                    <td colSpan={13} className="px-2 py-8 text-center text-gray-500 text-sm">No data</td>
+                    <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">No data</td>
                   </tr>
                 )}
               </tbody>

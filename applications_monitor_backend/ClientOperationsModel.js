@@ -1,5 +1,28 @@
 import mongoose from "mongoose";
 
+const OptimizationSchema = new mongoose.Schema({
+  completed: {
+    type: Boolean,
+    default: false
+  },
+  attachmentUrl: {
+    type: String,
+    default: ""
+  },
+  attachmentName: {
+    type: String,
+    default: ""
+  },
+  updatedAt: {
+    type: String,
+    default: () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+  },
+  updatedBy: {
+    type: String,
+    default: ""
+  }
+}, { _id: false });
+
 const ClientOperationsSchema = new mongoose.Schema({
   clientEmail: {
     type: String,
@@ -8,6 +31,20 @@ const ClientOperationsSchema = new mongoose.Schema({
     lowercase: true,
     trim: true,
     index: true
+  },
+  optimizations: {
+    resumeOptimization: {
+      type: OptimizationSchema,
+      default: () => ({ completed: false, attachmentUrl: "", attachmentName: "", updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }), updatedBy: "" })
+    },
+    linkedinOptimization: {
+      type: OptimizationSchema,
+      default: () => ({ completed: false, attachmentUrl: "", attachmentName: "", updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }), updatedBy: "" })
+    },
+    coverLetterOptimization: {
+      type: OptimizationSchema,
+      default: () => ({ completed: false, attachmentUrl: "", attachmentName: "", updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }), updatedBy: "" })
+    }
   },
   todos: [{
     id: {
