@@ -4,6 +4,7 @@ import OperationsDetails from "./OperationsDetails";
 import RegisterClient from "./RegisterClient";
 import {Link, useNavigate, useOutletContext} from 'react-router-dom';
 import { AnimatedCounter } from "./AnimatedCounter";
+import { hasLinkedInOptimization, hasCoverLetter, planFeatureLabel } from "../utils/planFeatures";
 
 const API_BASE = import.meta.env.VITE_BASE || "https://applications-monitor-api.flashfirejobs.com";
 
@@ -1263,7 +1264,7 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
             )}
           </div>
           
-          <div className="flex flex-col space-y-1">
+          <div className={`flex flex-col space-y-1 ${!hasCoverLetter(formData.planType) ? 'opacity-75 bg-gray-50 rounded p-2 border border-gray-200' : ''}`} title={!hasCoverLetter(formData.planType) ? planFeatureLabel('coverLetter') : undefined}>
             <div className="flex items-center space-x-2">
               {isEditing ? (
                 <input
@@ -1271,18 +1272,19 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
                   name="coverLetterSent"
                   checked={formData.coverLetterSent}
                   onChange={handleInputChange}
-                  className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+                  disabled={!hasCoverLetter(formData.planType)}
+                  className={`w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 ${!hasCoverLetter(formData.planType) ? 'cursor-not-allowed opacity-60' : ''}`}
                 />
               ) : (
                 <div className="w-3 h-3 rounded-full flex items-center justify-center">
                   {clientDetails.coverLetterSent ? (
                     <div className="w-3 h-3 bg-green-500 rounded-full"></div>
                   ) : (
-                    <div className="w-3 h-3 bg-gray-300 rounded-full"></div>
+                    <div className={`w-3 h-3 rounded-full ${hasCoverLetter(formData.planType) ? 'bg-gray-300' : 'bg-gray-200'}`}></div>
                   )}
                 </div>
               )}
-              <span className="text-xs text-slate-600">Cover Letter</span>
+              <span className={`text-xs ${hasCoverLetter(formData.planType) ? 'text-slate-600' : 'text-gray-500'}`}>Cover Letter{!hasCoverLetter(formData.planType) && ' (not in plan)'}</span>
             </div>
             {isEditing ? (
               <input
@@ -1290,7 +1292,8 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
                 name="coverLetterSentDate"
                 value={formData.coverLetterSentDate}
                 onChange={handleInputChange}
-                className="text-xs px-2 py-1 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                disabled={!hasCoverLetter(formData.planType)}
+                className={`text-xs px-2 py-1 border rounded focus:ring-1 ${hasCoverLetter(formData.planType) ? 'border-slate-300 focus:ring-blue-500 focus:border-blue-500' : 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed'}`}
               />
             ) : (
               <span className="text-xs text-slate-500 ml-5">
@@ -1335,7 +1338,7 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
             )}
           </div>
           
-          <div className="flex flex-col space-y-1">
+          <div className={`flex flex-col space-y-1 ${!hasLinkedInOptimization(formData.planType) ? 'opacity-75 bg-gray-50 rounded p-2 border border-gray-200' : ''}`} title={!hasLinkedInOptimization(formData.planType) ? planFeatureLabel('linkedin') : undefined}>
             <div className="flex items-center space-x-2">
               {isEditing ? (
                 <input
@@ -1343,18 +1346,19 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
                   name="linkedinOptimization"
                   checked={formData.linkedinOptimization}
                   onChange={handleInputChange}
-                  className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+                  disabled={!hasLinkedInOptimization(formData.planType)}
+                  className={`w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 ${!hasLinkedInOptimization(formData.planType) ? 'cursor-not-allowed opacity-60' : ''}`}
                 />
               ) : (
                 <div className="w-3 h-3 rounded-full flex items-center justify-center">
                   {clientDetails.linkedinOptimization ? (
                     <div className="w-3 h-3 bg-green-500 rounded-full"></div>
                   ) : (
-                    <div className="w-3 h-3 bg-gray-300 rounded-full"></div>
+                    <div className={`w-3 h-3 rounded-full ${hasLinkedInOptimization(formData.planType) ? 'bg-gray-300' : 'bg-gray-200'}`}></div>
                   )}
                 </div>
               )}
-              <span className="text-xs text-slate-600">LinkedIn Optimization</span>
+              <span className={`text-xs ${hasLinkedInOptimization(formData.planType) ? 'text-slate-600' : 'text-gray-500'}`}>LinkedIn Optimization{!hasLinkedInOptimization(formData.planType) && ' (not in plan)'}</span>
             </div>
             {isEditing ? (
               <input
@@ -1362,7 +1366,8 @@ function ClientDetailsSection({ clientEmail, clientDetails, onClientUpdate, user
                 name="linkedinOptimizationDate"
                 value={formData.linkedinOptimizationDate}
                 onChange={handleInputChange}
-                className="text-xs px-2 py-1 border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                disabled={!hasLinkedInOptimization(formData.planType)}
+                className={`text-xs px-2 py-1 border rounded focus:ring-1 ${hasLinkedInOptimization(formData.planType) ? 'border-slate-300 focus:ring-blue-500 focus:border-blue-500' : 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed'}`}
               />
             ) : (
               <span className="text-xs text-slate-500 ml-5">

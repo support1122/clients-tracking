@@ -3708,16 +3708,18 @@ app.get('/api/client-todos/all', async (req, res) => {
     const [allClientTodos, allClientOps, allClients] = await Promise.all([
       ClientTodosModel.find().lean(),
       ClientOperationsModel.find().lean(),
-      ClientModel.find().select('email name status').lean()
+      ClientModel.find().select('email name status planType').lean()
     ]);
 
     const clientMap = {};
     const clientStatusMap = {};
+    const clientPlanMap = {};
     const clientEmails = new Set();
     allClients.forEach(client => {
       const emailLower = client.email.toLowerCase();
       clientMap[emailLower] = client.name;
       clientStatusMap[emailLower] = client.status;
+      clientPlanMap[emailLower] = client.planType || null;
       clientEmails.add(emailLower);
     });
 
@@ -3728,6 +3730,7 @@ app.get('/api/client-todos/all', async (req, res) => {
       mergedDataMap.set(email, {
         email: todoData.clientEmail,
         name: clientMap[email] || todoData.clientEmail,
+        planType: clientPlanMap[email] ?? null,
         todos: todoData.todos || [],
         lockPeriods: todoData.lockPeriods || [],
         optimizations: todoData.optimizations || getDefaultOptimizations(),
@@ -3743,6 +3746,7 @@ app.get('/api/client-todos/all', async (req, res) => {
       if (existing) {
         existing.todos = mergeTodos(existing.todos, opsData.todos || []);
         existing.lockPeriods = mergeLockPeriods(existing.lockPeriods, opsData.lockPeriods || []);
+        if (existing.planType == null) existing.planType = clientPlanMap[email] ?? null;
         if (opsData.optimizations) {
           existing.optimizations = {
             ...existing.optimizations,
@@ -3758,6 +3762,7 @@ app.get('/api/client-todos/all', async (req, res) => {
         mergedDataMap.set(email, {
           email: opsData.clientEmail,
           name: clientMap[email] || opsData.clientEmail,
+          planType: clientPlanMap[email] ?? null,
           todos: opsData.todos || [],
           lockPeriods: opsData.lockPeriods || [],
           optimizations: opsData.optimizations || getDefaultOptimizations(),
@@ -3775,12 +3780,15 @@ app.get('/api/client-todos/all', async (req, res) => {
         clientsWithTodos.push({
           email: client.email,
           name: client.name,
+          planType: client.planType || null,
           todos: [],
           lockPeriods: [],
           optimizations: getDefaultOptimizations(),
           createdAt: null,
           updatedAt: null
         });
+      } else if (exists.planType == null) {
+        exists.planType = client.planType || null;
       }
     });
 
@@ -4197,24 +4205,57 @@ app.post('/api/client-optimizations/upload', fileUpload.single('file'), async (r
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
 
+    if (!documentType || !['resume', 'coverLetter'].includes(documentType)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: "documentType must be 'resume' or 'coverLetter'" 
+      });
+    }
+
+    console.log(`[Upload] Attempting to upload ${documentType} for ${email} to ${FLASHFIRE_API_BASE_URL}/api/internal/upload-client-document`);
+    console.log(`[Upload] File details: ${req.file.originalname}, size: ${req.file.size}, type: ${req.file.mimetype}`);
+
     const formData = new FormData();
     formData.append('file', req.file.buffer, {
       filename: req.file.originalname,
       contentType: req.file.mimetype,
+      knownLength: req.file.buffer.length,
     });
     formData.append('email', email);
     formData.append('documentType', documentType);
 
+    // Send as buffer so the full multipart body is sent (avoids "Unexpected end of form" on receiver)
+    const bodyBuffer = formData.getBuffer();
+    const headers = formData.getHeaders();
+    headers['Content-Length'] = String(bodyBuffer.length);
+    console.log(`[Upload] Request headers:`, headers);
+
     const response = await fetch(`${FLASHFIRE_API_BASE_URL}/api/internal/upload-client-document`, {
       method: 'POST',
-      body: formData,
-      headers: formData.getHeaders ? formData.getHeaders() : {},
+      body: bodyBuffer,
+      headers: headers,
     });
 
-    const data = await response.json();
+    console.log(`[Upload] Response status: ${response.status} ${response.statusText}`);
+    console.log(`[Upload] Response headers:`, Object.fromEntries(response.headers.entries()));
+
+    let data;
+    const contentType = response.headers.get('content-type');
+    
+    if (contentType && contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      const text = await response.text();
+      console.error(`[Upload] Non-JSON response received:`, text.substring(0, 500));
+      throw new Error(`Dashboard backend returned non-JSON response (${response.status}): ${text.substring(0, 200)}`);
+    }
+
+    console.log(`[Upload] Response data:`, JSON.stringify(data, null, 2));
 
     if (!response.ok) {
-      throw new Error(data.message || 'Failed to upload file to dashboard');
+      const errorMessage = data.message || data.error || `HTTP ${response.status}: ${response.statusText}`;
+      console.error(`[Upload] Upload failed:`, errorMessage);
+      throw new Error(errorMessage);
     }
 
     res.status(200).json({
@@ -4226,14 +4267,25 @@ app.post('/api/client-optimizations/upload', fileUpload.single('file'), async (r
       message: data.message || 'File uploaded and synced to dashboard successfully'
     });
   } catch (error) {
-    console.error('Error uploading file:', error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('[Upload] Error uploading file:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      cause: error.cause
+    });
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Failed to upload file to dashboard',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
 app.get('/api/client-optimizations/documents/:email', async (req, res) => {
   try {
     const { email } = req.params;
+
+    console.log(`[Fetch Documents] Fetching documents for ${email} from ${FLASHFIRE_API_BASE_URL}/api/internal/client-documents/${encodeURIComponent(email)}`);
 
     const response = await fetch(`${FLASHFIRE_API_BASE_URL}/api/internal/client-documents/${encodeURIComponent(email)}`, {
       method: 'GET',
@@ -4242,10 +4294,25 @@ app.get('/api/client-optimizations/documents/:email', async (req, res) => {
       },
     });
 
-    const data = await response.json();
+    console.log(`[Fetch Documents] Response status: ${response.status} ${response.statusText}`);
+
+    let data;
+    const contentType = response.headers.get('content-type');
+    
+    if (contentType && contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      const text = await response.text();
+      console.error(`[Fetch Documents] Non-JSON response received:`, text.substring(0, 500));
+      throw new Error(`Dashboard backend returned non-JSON response (${response.status}): ${text.substring(0, 200)}`);
+    }
+
+    console.log(`[Fetch Documents] Response data:`, JSON.stringify(data, null, 2));
 
     if (!response.ok) {
-      throw new Error(data.message || 'Failed to fetch documents');
+      const errorMessage = data.message || data.error || `HTTP ${response.status}: ${response.statusText}`;
+      console.error(`[Fetch Documents] Fetch failed:`, errorMessage);
+      throw new Error(errorMessage);
     }
 
     res.status(200).json({ 
@@ -4258,8 +4325,17 @@ app.get('/api/client-optimizations/documents/:email', async (req, res) => {
       coverLetters: data.documents?.coverLetters || [],
     });
   } catch (error) {
-    console.error('Error fetching documents:', error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('[Fetch Documents] Error fetching documents:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      cause: error.cause
+    });
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Failed to fetch documents',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -4280,6 +4356,9 @@ app.post('/api/client-optimizations/sync-to-dashboard', async (req, res) => {
       return res.status(400).json({ success: false, error: 'No fields to update' });
     }
 
+    console.log(`[Sync] Syncing optimization data for ${email} to ${FLASHFIRE_API_BASE_URL}/api/internal/client-optimization/${encodeURIComponent(email)}`);
+    console.log(`[Sync] Payload:`, JSON.stringify(updatePayload, null, 2));
+
     const response = await fetch(`${FLASHFIRE_API_BASE_URL}/api/internal/client-optimization/${encodeURIComponent(email)}`, {
       method: 'PUT',
       headers: {
@@ -4288,16 +4367,40 @@ app.post('/api/client-optimizations/sync-to-dashboard', async (req, res) => {
       body: JSON.stringify(updatePayload),
     });
 
-    const data = await response.json();
+    console.log(`[Sync] Response status: ${response.status} ${response.statusText}`);
+
+    let data;
+    const contentType = response.headers.get('content-type');
+    
+    if (contentType && contentType.includes('application/json')) {
+      data = await response.json();
+    } else {
+      const text = await response.text();
+      console.error(`[Sync] Non-JSON response received:`, text.substring(0, 500));
+      throw new Error(`Dashboard backend returned non-JSON response (${response.status}): ${text.substring(0, 200)}`);
+    }
+
+    console.log(`[Sync] Response data:`, JSON.stringify(data, null, 2));
 
     if (!response.ok) {
-      throw new Error(data.message || 'Failed to sync to dashboard');
+      const errorMessage = data.message || data.error || `HTTP ${response.status}: ${response.statusText}`;
+      console.error(`[Sync] Sync failed:`, errorMessage);
+      throw new Error(errorMessage);
     }
 
     res.status(200).json({ success: true, message: 'Synced to dashboard successfully', profile: data.profile });
   } catch (error) {
-    console.error('Error syncing to dashboard:', error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('[Sync] Error syncing to dashboard:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      cause: error.cause
+    });
+    res.status(500).json({ 
+      success: false, 
+      error: error.message || 'Failed to sync to dashboard',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -4329,6 +4432,7 @@ function startCallSweepJob() {
 // Start the server
 app.listen(process.env.PORT, () => {
   console.log(`✅ Server is live at port: ${process.env.PORT}`);
+  console.log(`📡 Dashboard Backend URL: ${FLASHFIRE_API_BASE_URL}`);
 
   // Start the automated call sweep job
   startCallSweepJob();

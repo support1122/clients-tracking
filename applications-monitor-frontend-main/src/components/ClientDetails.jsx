@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { hasLinkedInOptimization, planFeatureLabel } from '../utils/planFeatures';
 
 const API_BASE = import.meta.env.VITE_BASE;
 
@@ -407,24 +408,33 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
           {/* Sidebar Navigation */}
           <div className="w-80 bg-white border-r border-slate-200 p-6 overflow-y-auto">
             <div className="space-y-2">
-              {navigationItems.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveSection(item.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all duration-200 ${
-                    activeSection === item.id
-                      ? 'bg-blue-50 text-blue-700 border border-blue-200 shadow-sm'
-                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'
-                  }`}
-                >
-                  <div className={`p-2 rounded-lg ${
-                    activeSection === item.id ? 'bg-blue-100' : 'bg-slate-100'
-                  }`}>
-                    {item.icon}
-                  </div>
-                  <span className="font-medium">{item.label}</span>
-                </button>
-              ))}
+              {navigationItems.map((item) => {
+                const linkedInDisabled = item.id === 'linkedin' && !hasLinkedInOptimization(formData.planType);
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => !linkedInDisabled && setActiveSection(item.id)}
+                    title={linkedInDisabled ? planFeatureLabel('linkedin') : undefined}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all duration-200 ${
+                      linkedInDisabled
+                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed opacity-80'
+                        : activeSection === item.id
+                          ? 'bg-blue-50 text-blue-700 border border-blue-200 shadow-sm'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'
+                    }`}
+                  >
+                    <div className={`p-2 rounded-lg ${
+                      linkedInDisabled ? 'bg-gray-200' : activeSection === item.id ? 'bg-blue-100' : 'bg-slate-100'
+                    }`}>
+                      {item.icon}
+                    </div>
+                    <span className="font-medium">{item.label}</span>
+                    {linkedInDisabled && (
+                      <span className="ml-auto text-[10px] text-gray-500">Not in plan</span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -731,46 +741,75 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
             )}
 
             {activeSection === 'linkedin' && (
-              <div className="bg-white rounded-2xl p-6 shadow-lg border border-slate-200 hover:shadow-xl transition-shadow duration-300">
-                <h3 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-3">
-                  <div className="p-2 bg-blue-100 rounded-lg">
-                    <svg className="w-5 h-5 text-blue-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className={`rounded-2xl p-6 shadow-lg border transition-shadow duration-300 ${
+                hasLinkedInOptimization(formData.planType)
+                  ? 'bg-white border-slate-200 hover:shadow-xl'
+                  : 'bg-gray-100 border-gray-200 opacity-90'
+              }`}>
+                <h3 className={`text-lg font-semibold mb-4 flex items-center gap-3 ${
+                  hasLinkedInOptimization(formData.planType) ? 'text-slate-900' : 'text-gray-500'
+                }`}>
+                  <div className={`p-2 rounded-lg ${
+                    hasLinkedInOptimization(formData.planType) ? 'bg-blue-100' : 'bg-gray-200'
+                  }`}>
+                    <svg className={`w-5 h-5 ${hasLinkedInOptimization(formData.planType) ? 'text-blue-700' : 'text-gray-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                     </svg>
                   </div>
                   LinkedIn Credentials
+                  {!hasLinkedInOptimization(formData.planType) && (
+                    <span className="text-sm font-normal text-gray-500" title={planFeatureLabel('linkedin')}>— Not in plan</span>
+                  )}
                 </h3>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">Username/Email</label>
+                    <label className={`block text-sm font-semibold mb-2 ${hasLinkedInOptimization(formData.planType) ? 'text-slate-700' : 'text-gray-500'}`}>Username/Email</label>
                     {isEditing ? (
                       <input
                         type="text"
                         name="linkedinCredentials.username"
                         value={formData.linkedinCredentials.username}
                         onChange={handleInputChange}
-                        className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 bg-white shadow-sm hover:shadow-md"
+                        disabled={!hasLinkedInOptimization(formData.planType)}
+                        className={`w-full px-4 py-3 border rounded-xl transition-all duration-200 shadow-sm ${
+                          hasLinkedInOptimization(formData.planType)
+                            ? 'border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
+                            : 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed'
+                        }`}
                         placeholder="LinkedIn username or email"
                       />
                     ) : (
-                      <div className="px-4 py-3 bg-gradient-to-r from-white to-slate-50 border border-slate-200 rounded-xl text-slate-700 shadow-sm">
+                      <div className={`px-4 py-3 rounded-xl shadow-sm ${
+                        hasLinkedInOptimization(formData.planType)
+                          ? 'bg-gradient-to-r from-white to-slate-50 border border-slate-200 text-slate-700'
+                          : 'bg-gray-100 border border-gray-200 text-gray-500'
+                      }`}>
                         {client?.linkedinCredentials?.username || <span className="text-slate-400 italic">Not set</span>}
                       </div>
                     )}
                   </div>
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">Password</label>
+                    <label className={`block text-sm font-semibold mb-2 ${hasLinkedInOptimization(formData.planType) ? 'text-slate-700' : 'text-gray-500'}`}>Password</label>
                     {isEditing ? (
                       <input
                         type="text"
                         name="linkedinCredentials.password"
                         value={formData.linkedinCredentials.password}
                         onChange={handleInputChange}
-                        className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 bg-white shadow-sm hover:shadow-md"
+                        disabled={!hasLinkedInOptimization(formData.planType)}
+                        className={`w-full px-4 py-3 border rounded-xl transition-all duration-200 shadow-sm ${
+                          hasLinkedInOptimization(formData.planType)
+                            ? 'border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500'
+                            : 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed'
+                        }`}
                         placeholder="LinkedIn password"
                       />
                     ) : (
-                      <div className="px-4 py-3 bg-gradient-to-r from-white to-slate-50 border border-slate-200 rounded-xl text-slate-700 shadow-sm">
+                      <div className={`px-4 py-3 rounded-xl shadow-sm ${
+                        hasLinkedInOptimization(formData.planType)
+                          ? 'bg-gradient-to-r from-white to-slate-50 border border-slate-200 text-slate-700'
+                          : 'bg-gray-100 border border-gray-200 text-gray-500'
+                      }`}>
                         {client?.linkedinCredentials?.password || <span className="text-slate-400 italic">Not set</span>}
                       </div>
                     )}

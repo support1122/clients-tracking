@@ -296,7 +296,8 @@ export default function ClientJobAnalysis() {
                   // Secondary sort: email alphabetically
                   return a.email.localeCompare(b.email);
                 }).map((r, idx) => {
-                  const totalApplications = (Number(r.saved||0) + Number(r.applied||0) + Number(r.interviewing||0) + Number(r.offer||0));
+                  // Total applications = saved + applied + interviewing + offer + rejected (removed is excluded)
+                  const totalApplications = (Number(r.saved||0) + Number(r.applied||0) + Number(r.interviewing||0) + Number(r.offer||0) + Number(r.rejected||0));
                   const plan = String(r.planType || '')
                     .trim()
                     .toLowerCase();
