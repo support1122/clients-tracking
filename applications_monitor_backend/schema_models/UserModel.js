@@ -31,6 +31,15 @@ export const userSchema = new mongoose.Schema(
     planLimit: { type: Number, default: null },
     userType:  { type: String, default: "User" },
     dashboardManager: { type: String, required: false, default: "" },
+    referralStatus: {
+      type: String,
+      enum: ["Professional", "Executive", null],
+      default: null
+    },
+    notes: {
+      type: String,
+      default: ""
+    },
   },
   { timestamps: true }
 );
