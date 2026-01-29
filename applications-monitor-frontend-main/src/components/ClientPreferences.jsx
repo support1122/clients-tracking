@@ -22,6 +22,7 @@ import {
   Linkedin,
   FileCheck
 } from 'lucide-react';
+import { hasLinkedInOptimization, hasCoverLetter, planFeatureLabel, totalOptimizationsInPlan, completedOptimizationsInPlan } from '../utils/planFeatures';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
 const FLASHFIRE_API = import.meta.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
@@ -295,18 +296,25 @@ function AttachmentModal({ isOpen, onClose, client, onSave, onUpload }) {
 
           {optimizationItems.map(({ key, label, icon: Icon, uploadKey, color }) => {
             const hasAttachment = optimizations[key]?.attachmentUrl && optimizations[key].attachmentUrl.trim() !== '';
+            const linkedinDisabled = key === 'linkedinOptimization' && !hasLinkedInOptimization(client?.planType);
+            const coverLetterDisabled = key === 'coverLetterOptimization' && !hasCoverLetter(client?.planType);
+            const notInPlan = linkedinDisabled || coverLetterDisabled;
+            const planTooltip = linkedinDisabled ? planFeatureLabel('linkedin') : coverLetterDisabled ? planFeatureLabel('coverLetter') : '';
             return (
               <div 
                 key={key}
                 className={`border rounded-xl p-4 transition-all ${
-                  hasAttachment 
-                    ? 'border-green-300 bg-green-50' 
-                    : 'border-red-300 bg-red-50'
+                  notInPlan
+                    ? 'border-gray-200 bg-gray-100 opacity-75'
+                    : hasAttachment 
+                      ? 'border-green-300 bg-green-50' 
+                      : 'border-red-300 bg-red-50'
                 }`}
               >
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className={`p-2 rounded-lg ${
+                      notInPlan ? 'bg-gray-200 text-gray-500' :
                       hasAttachment 
                         ? 'bg-green-100 text-green-600' 
                         : 'bg-red-100 text-red-600'
@@ -314,70 +322,77 @@ function AttachmentModal({ isOpen, onClose, client, onSave, onUpload }) {
                       <Icon className="w-5 h-5" />
                     </div>
                     <div>
-                      <span className="font-medium text-gray-800">{label}</span>
-                      {!hasAttachment && (
+                      <span className={`font-medium ${notInPlan ? 'text-gray-500' : 'text-gray-800'}`}>{label}</span>
+                      {notInPlan && (
+                        <p className="text-xs text-gray-500 mt-0.5" title={planTooltip}>Not in plan</p>
+                      )}
+                      {!notInPlan && !hasAttachment && (
                         <p className="text-xs text-red-500">No attachment - upload required</p>
                       )}
                     </div>
                   </div>
-                  {hasAttachment ? (
+                  {notInPlan ? (
+                    <Lock className="w-5 h-5 text-gray-400" title={planTooltip} />
+                  ) : hasAttachment ? (
                     <CheckCircle2 className="w-6 h-6 text-green-500" />
                   ) : (
                     <Circle className="w-6 h-6 text-red-400" />
                   )}
                 </div>
 
-                <div className="flex items-center gap-2 flex-wrap">
-                  <input
-                    type="file"
-                    ref={fileInputRefs[uploadKey]}
-                    onChange={(e) => handleFileUpload(key, e.target.files[0])}
-                    className="hidden"
-                    accept=".pdf,.doc,.docx,.txt"
-                  />
-                  {key !== 'linkedinOptimization' ? (
-                    <button
-                      onClick={() => fileInputRefs[uploadKey].current?.click()}
-                      disabled={uploading[uploadKey]}
-                      className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors disabled:opacity-50 ${
-                        hasAttachment 
-                          ? 'bg-white border border-gray-300 hover:bg-gray-50' 
-                          : 'bg-red-600 text-white hover:bg-red-700'
-                      }`}
-                    >
-                      {uploading[uploadKey] ? (
-                        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        <Upload className="w-4 h-4" />
-                      )}
-                      {uploading[uploadKey] ? 'Uploading...' : hasAttachment ? 'Replace File' : 'Upload & Sync to Dashboard'}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleToggle(key)}
-                      className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${
-                        hasAttachment 
-                          ? 'bg-white border border-gray-300 hover:bg-gray-50' 
-                          : 'bg-red-600 text-white hover:bg-red-700'
-                      }`}
-                    >
-                      {hasAttachment ? 'Mark Incomplete' : 'Mark as Done'}
-                    </button>
-                  )}
+                {!notInPlan && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input
+                      type="file"
+                      ref={fileInputRefs[uploadKey]}
+                      onChange={(e) => handleFileUpload(key, e.target.files[0])}
+                      className="hidden"
+                      accept=".pdf,.doc,.docx,.txt"
+                    />
+                    {key !== 'linkedinOptimization' ? (
+                      <button
+                        onClick={() => fileInputRefs[uploadKey].current?.click()}
+                        disabled={uploading[uploadKey]}
+                        className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors disabled:opacity-50 ${
+                          hasAttachment 
+                            ? 'bg-white border border-gray-300 hover:bg-gray-50' 
+                            : 'bg-red-600 text-white hover:bg-red-700'
+                        }`}
+                      >
+                        {uploading[uploadKey] ? (
+                          <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <Upload className="w-4 h-4" />
+                        )}
+                        {uploading[uploadKey] ? 'Uploading...' : hasAttachment ? 'Replace File' : 'Upload & Sync to Dashboard'}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleToggle(key)}
+                        className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${
+                          hasAttachment 
+                            ? 'bg-white border border-gray-300 hover:bg-gray-50' 
+                            : 'bg-red-600 text-white hover:bg-red-700'
+                        }`}
+                      >
+                        {hasAttachment ? 'Mark Incomplete' : 'Mark as Done'}
+                      </button>
+                    )}
 
-                  {hasAttachment && optimizations[key]?.attachmentUrl && (
-                    <a
-                      href={optimizations[key].attachmentUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 px-3 py-2 text-sm text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
-                    >
-                      <Paperclip className="w-4 h-4" />
-                      {optimizations[key].attachmentName || 'View File'}
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
-                </div>
+                    {hasAttachment && optimizations[key]?.attachmentUrl && (
+                      <a
+                        href={optimizations[key].attachmentUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 px-3 py-2 text-sm text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
+                      >
+                        <Paperclip className="w-4 h-4" />
+                        {optimizations[key].attachmentName || 'View File'}
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -408,9 +423,21 @@ function AttachmentModal({ isOpen, onClose, client, onSave, onUpload }) {
   );
 }
 
-function OptimizationBadge({ optimization, label, icon: Icon }) {
+function OptimizationBadge({ optimization, label, icon: Icon, disabledByPlan, planTooltip }) {
   const hasAttachment = optimization?.attachmentUrl && optimization.attachmentUrl.trim() !== '';
   const isCompleted = hasAttachment;
+  
+  if (disabledByPlan) {
+    return (
+      <div 
+        className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500 border border-gray-200 opacity-80"
+        title={planTooltip || `${label} not in plan`}
+      >
+        <Lock className="w-3 h-3" />
+        <span className="hidden xl:inline">{label}</span>
+      </div>
+    );
+  }
   
   return (
     <div 
@@ -697,13 +724,16 @@ export default function ClientPreferences() {
     });
   };
 
-  const getCompletedOptimizationsCount = (optimizations) => {
-    if (!optimizations) return 0;
-    let count = 0;
-    if (optimizations.resumeOptimization?.attachmentUrl) count++;
-    if (optimizations.linkedinOptimization?.attachmentUrl) count++;
-    if (optimizations.coverLetterOptimization?.attachmentUrl) count++;
-    return count;
+  const getCompletedOptimizationsCount = (optimizations, planType) => {
+    return completedOptimizationsInPlan(optimizations, planType);
+  };
+
+  const getTotalInPlanCount = (planType) => totalOptimizationsInPlan(planType);
+
+  const isAllOptimizationsDoneForPlan = (optimizations, planType) => {
+    const total = getTotalInPlanCount(planType);
+    const completed = getCompletedOptimizationsCount(optimizations, planType);
+    return total > 0 && completed === total;
   };
 
   const filteredClients = clients.filter(client => {
@@ -723,10 +753,11 @@ export default function ClientPreferences() {
       return getActiveLockPeriod(client.lockPeriods) !== null;
     }
     if (filterStatus === 'pendingOptimizations') {
-      return getCompletedOptimizationsCount(client.optimizations) < 3;
+      const total = getTotalInPlanCount(client.planType);
+      return getCompletedOptimizationsCount(client.optimizations, client.planType) < total;
     }
     if (filterStatus === 'completedOptimizations') {
-      return getCompletedOptimizationsCount(client.optimizations) === 3;
+      return isAllOptimizationsDoneForPlan(client.optimizations, client.planType);
     }
 
     return true;
@@ -843,7 +874,8 @@ export default function ClientPreferences() {
                     const isJobActive = client.isJobActive !== false;
                     const rowBgClass = isJobActive ? (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50') : 'bg-red-50';
                     const optimizations = client.optimizations || getDefaultOptimizations();
-                    const completedCount = getCompletedOptimizationsCount(optimizations);
+                    const totalInPlan = getTotalInPlanCount(client.planType);
+                    const completedCount = getCompletedOptimizationsCount(optimizations, client.planType);
 
                     return (
                       <React.Fragment key={client.email}>
@@ -884,39 +916,43 @@ export default function ClientPreferences() {
                                   icon={FileText}
                                 />
                               </button>
-                              <button
-                                onClick={() => {
-                                  const hasAttachment = optimizations.linkedinOptimization?.attachmentUrl;
-                                  if (!hasAttachment) {
-                                    setAttachmentModalClient(client);
-                                  }
-                                }}
-                                className="cursor-pointer"
-                                title={optimizations.linkedinOptimization?.attachmentUrl ? "LinkedIn completed" : "Click to mark LinkedIn"}
-                              >
-                                <OptimizationBadge 
-                                  optimization={optimizations.linkedinOptimization} 
-                                  label="LinkedIn" 
-                                  icon={Linkedin}
-                                />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  const hasAttachment = optimizations.coverLetterOptimization?.attachmentUrl;
-                                  if (!hasAttachment) {
-                                    setAttachmentModalClient(client);
-                                  }
-                                }}
-                                className="cursor-pointer"
-                                title={optimizations.coverLetterOptimization?.attachmentUrl ? "Cover Letter uploaded" : "Click to upload cover letter"}
-                              >
-                                <OptimizationBadge 
-                                  optimization={optimizations.coverLetterOptimization} 
-                                  label="Cover Letter" 
-                                  icon={FileCheck}
-                                />
-                              </button>
-                              {completedCount === 3 && (
+                              {(() => {
+                                const linkedInInPlan = hasLinkedInOptimization(client.planType);
+                                return (
+                                  <button
+                                    onClick={() => linkedInInPlan && !optimizations.linkedinOptimization?.attachmentUrl && setAttachmentModalClient(client)}
+                                    className={linkedInInPlan ? 'cursor-pointer' : 'cursor-not-allowed'}
+                                    title={!linkedInInPlan ? planFeatureLabel('linkedin') : (optimizations.linkedinOptimization?.attachmentUrl ? "LinkedIn completed" : "Click to mark LinkedIn")}
+                                  >
+                                    <OptimizationBadge 
+                                      optimization={optimizations.linkedinOptimization} 
+                                      label="LinkedIn" 
+                                      icon={Linkedin}
+                                      disabledByPlan={!linkedInInPlan}
+                                      planTooltip={planFeatureLabel('linkedin')}
+                                    />
+                                  </button>
+                                );
+                              })()}
+                              {(() => {
+                                const coverLetterInPlan = hasCoverLetter(client.planType);
+                                return (
+                                  <button
+                                    onClick={() => coverLetterInPlan && !optimizations.coverLetterOptimization?.attachmentUrl && setAttachmentModalClient(client)}
+                                    className={coverLetterInPlan ? 'cursor-pointer' : 'cursor-not-allowed'}
+                                    title={!coverLetterInPlan ? planFeatureLabel('coverLetter') : (optimizations.coverLetterOptimization?.attachmentUrl ? "Cover Letter uploaded" : "Click to upload cover letter")}
+                                  >
+                                    <OptimizationBadge 
+                                      optimization={optimizations.coverLetterOptimization} 
+                                      label="Cover Letter" 
+                                      icon={FileCheck}
+                                      disabledByPlan={!coverLetterInPlan}
+                                      planTooltip={planFeatureLabel('coverLetter')}
+                                    />
+                                  </button>
+                                );
+                              })()}
+                              {totalInPlan > 0 && completedCount === totalInPlan && (
                                 <span className="ml-1 text-[9px] text-green-600 font-semibold">All Done</span>
                               )}
                             </div>
@@ -1026,20 +1062,28 @@ export default function ClientPreferences() {
                                     ].map(({ key, label, icon: Icon }) => {
                                       const opt = optimizations[key] || {};
                                       const hasAttachment = opt.attachmentUrl && opt.attachmentUrl.trim() !== '';
+                                      const linkedinNotInPlan = key === 'linkedinOptimization' && !hasLinkedInOptimization(client.planType);
+                                      const coverLetterNotInPlan = key === 'coverLetterOptimization' && !hasCoverLetter(client.planType);
+                                      const notInPlan = linkedinNotInPlan || coverLetterNotInPlan;
                                       return (
                                         <div 
                                           key={key}
                                           className={`flex items-center justify-between p-3 rounded-lg border ${
-                                            hasAttachment 
-                                              ? 'bg-green-50 border-green-200' 
-                                              : 'bg-red-50 border-red-200'
+                                            notInPlan
+                                              ? 'bg-gray-100 border-gray-200 opacity-80'
+                                              : hasAttachment 
+                                                ? 'bg-green-50 border-green-200' 
+                                                : 'bg-red-50 border-red-200'
                                           }`}
                                         >
                                           <div className="flex items-center gap-3">
-                                            <Icon className={`w-5 h-5 ${hasAttachment ? 'text-green-600' : 'text-red-400'}`} />
+                                            <Icon className={`w-5 h-5 ${notInPlan ? 'text-gray-400' : hasAttachment ? 'text-green-600' : 'text-red-400'}`} />
                                             <div>
-                                              <span className="text-sm font-medium text-gray-800">{label}</span>
-                                              {hasAttachment ? (
+                                              <span className={`text-sm font-medium ${notInPlan ? 'text-gray-500' : 'text-gray-800'}`}>{label}</span>
+                                              {notInPlan && (
+                                                <span className="text-xs text-gray-500 mt-1 block">Not in plan</span>
+                                              )}
+                                              {!notInPlan && hasAttachment && (
                                                 <a 
                                                   href={opt.attachmentUrl} 
                                                   target="_blank" 
@@ -1049,12 +1093,15 @@ export default function ClientPreferences() {
                                                   <Paperclip className="w-3 h-3" />
                                                   {opt.attachmentName || 'View Attachment'}
                                                 </a>
-                                              ) : (
+                                              )}
+                                              {!notInPlan && !hasAttachment && (
                                                 <span className="text-xs text-red-500 mt-1">No attachment uploaded</span>
                                               )}
                                             </div>
                                           </div>
-                                          {hasAttachment ? (
+                                          {notInPlan ? (
+                                            <Lock className="w-5 h-5 text-gray-400" />
+                                          ) : hasAttachment ? (
                                             <CheckCircle2 className="w-6 h-6 text-green-500" />
                                           ) : (
                                             <button
@@ -1137,13 +1184,13 @@ export default function ClientPreferences() {
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
             <div className="text-sm text-gray-600 mb-1">All Optimizations Done</div>
             <div className="text-2xl font-bold text-green-600">
-              {clients.filter(c => getCompletedOptimizationsCount(c.optimizations) === 3).length}
+              {clients.filter(c => isAllOptimizationsDoneForPlan(c.optimizations, c.planType)).length}
             </div>
           </div>
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
             <div className="text-sm text-gray-600 mb-1">Pending Optimizations</div>
             <div className="text-2xl font-bold text-amber-600">
-              {clients.filter(c => getCompletedOptimizationsCount(c.optimizations) < 3).length}
+              {clients.filter(c => getCompletedOptimizationsCount(c.optimizations, c.planType) < getTotalInPlanCount(c.planType)).length}
             </div>
           </div>
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
