@@ -5,6 +5,14 @@ import { Link } from 'react-router-dom';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
 
+/** Capitalize first letter of operator name (e.g. sonali -> Sonali, raj deep -> Raj deep). */
+function capitalizeOperatorName(name) {
+  if (!name || typeof name !== 'string') return '';
+  const t = name.trim();
+  if (!t) return '';
+  return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+}
+
 export default function ClientJobAnalysis() {
   const [date, setDate] = useState('');
   const [rows, setRows] = useState([]);
@@ -403,7 +411,7 @@ export default function ClientJobAnalysis() {
                     </td>
                     <td className="px-2 py-1">
                       <span className="text-[11px] text-slate-700 truncate max-w-[120px] block" title={r.lastAppliedOperatorName || ''}>
-                        {r.lastAppliedOperatorName || '-'}
+                        {r.lastAppliedOperatorName ? capitalizeOperatorName(r.lastAppliedOperatorName) : '-'}
                       </span>
                     </td>
                     <td className="px-2 py-1">

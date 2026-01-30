@@ -22,7 +22,7 @@ import {
   Linkedin,
   FileCheck
 } from 'lucide-react';
-import { hasLinkedInOptimization, hasCoverLetter, planFeatureLabel, totalOptimizationsInPlan, completedOptimizationsInPlan } from '../utils/planFeatures';
+import { hasLinkedInOptimization, hasCoverLetter, planFeatureLabel, totalOptimizationsInPlan, completedOptimizationsInPlan, normalizePlan } from '../utils/planFeatures';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
 const FLASHFIRE_API = import.meta.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
@@ -85,6 +85,24 @@ function formatRelativeTime(dateInput) {
   }
   
   return `${diffYears} year${diffYears === 1 ? '' : 's'} ago`;
+}
+
+function planDisplayLabel(planType) {
+  const p = normalizePlan(planType);
+  if (!p) return null;
+  return p.charAt(0).toUpperCase() + p.slice(1);
+}
+
+function formatCreatedRelative(dateInput) {
+  if (!dateInput) return "—";
+  const date = parseFlexibleDate(dateInput);
+  if (!date || isNaN(date.getTime())) return "—";
+  const now = new Date();
+  const sameDay = now.getFullYear() === date.getFullYear() &&
+    now.getMonth() === date.getMonth() && now.getDate() === date.getDate();
+  if (sameDay) return "Created today";
+  const relative = formatRelativeTime(dateInput);
+  return relative === "—" ? "—" : `Created ${relative}`;
 }
 
 const getDefaultOptimizations = () => ({
@@ -253,6 +271,9 @@ function AttachmentModal({ isOpen, onClose, client, onSave, onUpload }) {
             <div>
               <h2 className="text-lg font-semibold text-white">Client Optimizations</h2>
               <p className="text-indigo-100 text-sm">{client.name} ({client.email})</p>
+              {planDisplayLabel(client.planType) && (
+                <p className="text-indigo-200 text-xs mt-0.5">Plan: {planDisplayLabel(client.planType)} — used for which optimizations are available</p>
+              )}
             </div>
             <button
               onClick={onClose}
@@ -336,7 +357,15 @@ function AttachmentModal({ isOpen, onClose, client, onSave, onUpload }) {
                   ) : hasAttachment ? (
                     <CheckCircle2 className="w-6 h-6 text-green-500" />
                   ) : (
-                    <Circle className="w-6 h-6 text-red-400" />
+                    /* FEATURE: Allow marking complete without attachment for legacy clients; can be commented out later to require upload. */
+                    <button
+                      type="button"
+                      onClick={() => handleToggle(key)}
+                      className="p-0.5 rounded-full hover:bg-red-200/50 transition-colors focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-1"
+                      title="Mark as done without upload (legacy)"
+                    >
+                      <Circle className="w-6 h-6 text-red-400" />
+                    </button>
                   )}
                 </div>
 
@@ -423,9 +452,10 @@ function AttachmentModal({ isOpen, onClose, client, onSave, onUpload }) {
   );
 }
 
-function OptimizationBadge({ optimization, label, icon: Icon, disabledByPlan, planTooltip }) {
+function OptimizationBadge({ optimization, label, icon: Icon, disabledByPlan, planTooltip, appliedJobsCount }) {
   const hasAttachment = optimization?.attachmentUrl && optimization.attachmentUrl.trim() !== '';
-  const isCompleted = hasAttachment;
+  const hasAppliedJob = (appliedJobsCount ?? 0) >= 1;
+  const isCompleted = hasAttachment || hasAppliedJob;
   
   if (disabledByPlan) {
     return (
@@ -451,6 +481,7 @@ function OptimizationBadge({ optimization, label, icon: Icon, disabledByPlan, pl
       {isCompleted ? (
         <CheckCircle2 className="w-3 h-3" />
       ) : (
+        
         <Circle className="w-3 h-3" />
       )}
       <span className="hidden xl:inline">{label}</span>
@@ -841,16 +872,10 @@ export default function ClientPreferences() {
                     Optimizations
                   </th>
                   <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[8%]">
-                    Lock Periods
-                  </th>
-                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[8%]">
                     Status
                   </th>
-                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[14%]">
-                    Last Applied Job
-                  </th>
-                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[10%]">
-                    Operator
+                  <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[12%]">
+                    Dashboard created
                   </th>
                   <th className="px-2 py-2 text-center text-[10px] font-semibold text-gray-600 uppercase tracking-wider w-[10%]">
                     Actions
@@ -860,7 +885,7 @@ export default function ClientPreferences() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredClients.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-12 text-center text-gray-500">
+                    <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
                       {searchQuery ? 'No clients found matching your search' : 'No clients found'}
                     </td>
                   </tr>
@@ -881,7 +906,19 @@ export default function ClientPreferences() {
                       <React.Fragment key={client.email}>
                         <tr className={`hover:bg-gray-100 transition-colors ${rowBgClass}`}>
                           <td className="px-2 py-2">
-                            <div className={`text-[11px] font-medium truncate ${isJobActive ? 'text-gray-900' : 'text-red-900'}`} title={client.name}>{client.name}</div>
+                            <div className="flex flex-col gap-0.5 min-w-0">
+                              <div className={`text-[11px] font-medium truncate ${isJobActive ? 'text-gray-900' : 'text-red-900'}`} title={client.name}>{client.name}</div>
+                              {planDisplayLabel(client.planType) ? (
+                                <span
+                                  className="inline-flex w-fit px-1.5 py-0.5 rounded text-[9px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-100"
+                                  title="Plan used for optimization availability (e.g. LinkedIn/Cover Letter)"
+                                >
+                                  {planDisplayLabel(client.planType)}
+                                </span>
+                              ) : (
+                                <span className="text-[9px] text-gray-400" title="No plan set">—</span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-1 py-2">
                             <button
@@ -914,6 +951,7 @@ export default function ClientPreferences() {
                                   optimization={optimizations.resumeOptimization} 
                                   label="Resume" 
                                   icon={FileText}
+                                  appliedJobsCount={client.appliedJobsCount}
                                 />
                               </button>
                               {(() => {
@@ -930,6 +968,7 @@ export default function ClientPreferences() {
                                       icon={Linkedin}
                                       disabledByPlan={!linkedInInPlan}
                                       planTooltip={planFeatureLabel('linkedin')}
+                                      appliedJobsCount={client.appliedJobsCount}
                                     />
                                   </button>
                                 );
@@ -948,25 +987,13 @@ export default function ClientPreferences() {
                                       icon={FileCheck}
                                       disabledByPlan={!coverLetterInPlan}
                                       planTooltip={planFeatureLabel('coverLetter')}
+                                      appliedJobsCount={client.appliedJobsCount}
                                     />
                                   </button>
                                 );
                               })()}
                               {totalInPlan > 0 && completedCount === totalInPlan && (
                                 <span className="ml-1 text-[9px] text-green-600 font-semibold">All Done</span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="px-2 py-2 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <span className="text-[11px] font-medium text-gray-900">
-                                {client.lockPeriods?.length || 0}
-                              </span>
-                              {activeLock && (
-                                <span className="px-1 py-0.5 bg-red-100 text-red-700 text-[9px] rounded-full flex items-center gap-0.5">
-                                  <Lock className="w-2.5 h-2.5" />
-                                  Active
-                                </span>
                               )}
                             </div>
                           </td>
@@ -986,26 +1013,20 @@ export default function ClientPreferences() {
                             )}
                           </td>
                           <td className="px-2 py-2 text-center">
-                            {client.lastAppliedJob ? (
-                              <div className="flex flex-col items-center gap-0.5">
-                                <span className={`text-[11px] font-medium truncate w-full ${isJobActive ? 'text-gray-900' : 'text-red-900'}`} title={client.lastAppliedJob.companyName || 'N/A'}>
-                                  {client.lastAppliedJob.companyName || 'N/A'}
+                            {client.createdAt ? (
+                              <div className="flex flex-col items-center gap-0.5" title={client.createdAt}>
+                                <span className="text-[11px] font-medium text-gray-800">
+                                  {(() => {
+                                    const d = parseFlexibleDate(client.createdAt);
+                                    return d && !isNaN(d.getTime()) ? d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : client.createdAt;
+                                  })()}
                                 </span>
-                                <span className={`text-[9px] ${isJobActive ? 'text-gray-500' : 'text-red-600'}`} title={client.lastAppliedJob.appliedDate || 'N/A'}>
-                                  {formatRelativeTime(client.lastAppliedJob.appliedDate) || 'N/A'}
+                                <span className="text-[10px] text-gray-500">
+                                  {formatCreatedRelative(client.createdAt)}
                                 </span>
                               </div>
                             ) : (
-                              <span className={`text-[11px] ${isJobActive ? 'text-gray-400' : 'text-red-400'}`}>-</span>
-                            )}
-                          </td>
-                          <td className="px-2 py-2 text-center">
-                            {client.lastAppliedJob?.operatorName ? (
-                              <span className={`text-[11px] font-medium truncate ${isJobActive ? 'text-gray-700' : 'text-red-800'}`} title={client.lastAppliedJob.operatorName}>
-                                {client.lastAppliedJob.operatorName}
-                              </span>
-                            ) : (
-                              <span className={`text-[11px] ${isJobActive ? 'text-gray-400' : 'text-red-400'}`}>-</span>
+                              <span className="text-[11px] text-gray-400">—</span>
                             )}
                           </td>
                           <td className="px-2 py-2 text-center">
@@ -1050,7 +1071,7 @@ export default function ClientPreferences() {
 
                         {isExpanded && (
                           <tr>
-                            <td colSpan={9} className="px-2 py-2 bg-gray-50">
+                            <td colSpan={7} className="px-2 py-2 bg-gray-50">
                               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                                 <div className="bg-white rounded-lg border border-gray-200 p-4">
                                   <h3 className="text-lg font-semibold text-gray-900 mb-4">Optimization Details</h3>
