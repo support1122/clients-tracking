@@ -32,6 +32,7 @@ import { ClientTodosModel } from './ClientTodosModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
 import multer from 'multer';
 import FormData from 'form-data';
+import cron from 'node-cron';
 
 const FLASHFIRE_API_BASE_URL = process.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
 
@@ -3853,7 +3854,9 @@ app.get('/api/client-todos/all', async (req, res) => {
       }
     });
 
-    const activeClientsSet = new Set(jobAnalysis.map(j => j._id.toLowerCase()));
+    const appliedJobsCountMap = new Map(
+      jobAnalysis.map(j => [j._id.toLowerCase(), j.hasAppliedJobs || 0])
+    );
     const lastAppliedMap = new Map();
     jobsByUser.forEach((jobData, email) => {
       lastAppliedMap.set(email, {
@@ -3879,6 +3882,7 @@ app.get('/api/client-todos/all', async (req, res) => {
       } else {
         client.lastAppliedJob = null;
       }
+      client.appliedJobsCount = appliedJobsCountMap.get(emailLower) || 0;
     });
 
     clientsWithTodos.sort((a, b) => {
@@ -4429,6 +4433,80 @@ function startCallSweepJob() {
   // console.log('✅ [Call Sweep] Automated call status cleanup job started (runs every 30 seconds, auto-completes calls stuck in "calling" for >30 seconds - NO MATTER WHAT)');
 }
 
+// --- Job card reminder cron (11:30 PM IST daily) ---
+const DISCORD_JOBCARD_REMINDER_WEBHOOK = process.env.DISCORD_JOBCARD_REMINDER || '';
+
+function capitalizeOperatorName(name) {
+  if (!name || typeof name !== 'string') return '';
+  const t = name.trim();
+  if (!t) return '';
+  return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+}
+
+async function runJobCardReminder() {
+  if (!DISCORD_JOBCARD_REMINDER_WEBHOOK) return;
+  try {
+    const savedByUser = await JobModel.aggregate([
+      { $match: { currentStatus: { $regex: /save/i } } },
+      { $group: { _id: '$userID', saved: { $sum: 1 } } },
+      { $match: { saved: { $gt: 0 } } }
+    ]);
+    const userIDsWithSaved = (savedByUser || []).map((r) => (r._id || '').toLowerCase()).filter(Boolean);
+    if (userIDsWithSaved.length === 0) return;
+
+    const allJobs = await JobModel.find({ userID: { $in: userIDsWithSaved } })
+      .select('userID operatorName appliedDate')
+      .lean();
+    const parseDateString = (dateStr) => {
+      if (!dateStr) return null;
+      try {
+        const parts = String(dateStr).split('/');
+        if (parts.length === 3) {
+          const [d, m, y] = parts.map((n) => parseInt(n, 10));
+          return new Date(y, m - 1, d);
+        }
+        return new Date(dateStr);
+      } catch {
+        return null;
+      }
+    };
+    const lastAppliedByUser = new Map();
+    for (const j of allJobs || []) {
+      if (!j.operatorName || j.operatorName === 'user' || !j.appliedDate) continue;
+      const email = (j.userID || '').toLowerCase();
+      if (!email) continue;
+      const d = parseDateString(j.appliedDate);
+      if (!d) continue;
+      const cur = lastAppliedByUser.get(email);
+      if (!cur || d > cur.date) lastAppliedByUser.set(email, { date: d, operatorName: j.operatorName });
+    }
+
+    const clients = await ClientModel.find({ email: { $in: userIDsWithSaved } })
+      .select('email name')
+      .lean();
+    const clientNameMap = new Map((clients || []).map((c) => [c.email.toLowerCase(), c.name || c.email]));
+    const savedMap = new Map((savedByUser || []).map((r) => [r._id.toLowerCase(), r.saved]));
+
+    for (const email of userIDsWithSaved) {
+      const saved = savedMap.get(email) || 0;
+      if (saved <= 0) continue;
+      const lastApplied = lastAppliedByUser.get(email);
+      const operatorName = lastApplied ? lastApplied.operatorName : 'Team';
+      const clientName = clientNameMap.get(email) || email;
+      const capitalizedOperator = capitalizeOperatorName(operatorName);
+      const message = `Hi ${capitalizedOperator}, there are ${saved} job card(s) in saved for in ${clientName}'s dashboard, please apply them.`;
+      await fetch(DISCORD_JOBCARD_REMINDER_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: message })
+      });
+    }
+    console.log(`📬 [JobCard Reminder] Sent Discord reminders for ${userIDsWithSaved.length} client(s) with saved jobs`);
+  } catch (err) {
+    console.error('❌ [JobCard Reminder] Error:', err);
+  }
+}
+
 // Start the server
 app.listen(process.env.PORT, () => {
   console.log(`✅ Server is live at port: ${process.env.PORT}`);
@@ -4436,6 +4514,12 @@ app.listen(process.env.PORT, () => {
 
   // Start the automated call sweep job
   startCallSweepJob();
+
+  // Job card reminder: 11:30 PM IST daily (18:00 UTC)
+  if (DISCORD_JOBCARD_REMINDER_WEBHOOK) {
+    cron.schedule('0 18 * * *', runJobCardReminder);
+    console.log('📬 [JobCard Reminder] Cron scheduled for 11:30 PM IST daily');
+  }
 });
 
 // Graceful shutdown
