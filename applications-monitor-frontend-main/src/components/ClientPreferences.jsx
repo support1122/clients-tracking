@@ -504,36 +504,6 @@ export default function ClientPreferences() {
     fetchClients();
   }, []);
 
-  const fetchJobCountsForClients = async (clientEmails) => {
-    const jobCountsMap = new Map();
-    const token = localStorage.getItem('authToken');
-
-    // Fetch job counts for all clients in parallel
-    const jobCountPromises = clientEmails.map(async (email) => {
-      try {
-        const response = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(email)}/jobs`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (response.ok) {
-          const data = await response.json();
-          const jobCount = (data.jobs || []).length;
-          return { email, count: jobCount };
-        }
-        return { email, count: 0 };
-      } catch (error) {
-        console.error(`Error fetching jobs for ${email}:`, error);
-        return { email, count: 0 };
-      }
-    });
-
-    const results = await Promise.all(jobCountPromises);
-    results.forEach(({ email, count }) => {
-      jobCountsMap.set(email.toLowerCase(), count);
-    });
-
-    return jobCountsMap;
-  };
-
   const fetchClients = async () => {
     setLoading(true);
     try {
@@ -550,22 +520,7 @@ export default function ClientPreferences() {
           ...client,
           optimizations: client.optimizations || getDefaultOptimizations()
         }));
-
-        // Fetch job counts for all clients
-        const clientEmails = clientsWithOptimizations.map(c => c.email);
-        const jobCountsMap = await fetchJobCountsForClients(clientEmails);
-
-        // Add hasFivePlusJobs property to each client
-        const clientsWithJobInfo = clientsWithOptimizations.map(client => {
-          const jobCount = jobCountsMap.get(client.email.toLowerCase()) || 0;
-          return {
-            ...client,
-            hasFivePlusJobs: jobCount >= 5,
-            jobCount
-          };
-        });
-
-        setClients(clientsWithJobInfo);
+        setClients(clientsWithOptimizations);
       } else {
         throw new Error(data.error || 'Failed to load clients');
       }
@@ -942,25 +897,14 @@ export default function ClientPreferences() {
                     const displayTodos = displayData?.todos || [];
                     const activeLock = getActiveLockPeriod(client.lockPeriods);
                     const isJobActive = client.isJobActive !== false;
-                    const hasFivePlusJobs = client.hasFivePlusJobs === true;
-                    
-                    // Determine row background: green if 5+ jobs, red if inactive, otherwise normal alternating
-                    let rowBgClass;
-                    if (hasFivePlusJobs) {
-                      rowBgClass = 'bg-green-50';
-                    } else if (!isJobActive) {
-                      rowBgClass = 'bg-red-50';
-                    } else {
-                      rowBgClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
-                    }
-                    
+                    const rowBgClass = isJobActive ? (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50') : 'bg-red-50';
                     const optimizations = client.optimizations || getDefaultOptimizations();
                     const totalInPlan = getTotalInPlanCount(client.planType);
                     const completedCount = getCompletedOptimizationsCount(optimizations, client.planType);
 
                     return (
                       <React.Fragment key={client.email}>
-                        <tr className={`${hasFivePlusJobs ? 'hover:bg-green-100' : 'hover:bg-gray-100'} transition-colors ${rowBgClass}`}>
+                        <tr className={`hover:bg-gray-100 transition-colors ${rowBgClass}`}>
                           <td className="px-2 py-2">
                             <div className="flex flex-col gap-0.5 min-w-0">
                               <div className={`text-[11px] font-medium truncate ${isJobActive ? 'text-gray-900' : 'text-red-900'}`} title={client.name}>{client.name}</div>
