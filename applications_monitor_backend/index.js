@@ -3907,9 +3907,15 @@ app.get('/api/client-todos/all', async (req, res) => {
       appliedDate: { $exists: true, $ne: null }
     };
 
-    const [jobAnalysis, allAppliedJobs] = await Promise.all([
+    const dashboardJobCountPipeline = [
+      { $match: { userID: { $in: clientEmailList } } },
+      { $group: { _id: '$userID', count: { $sum: 1 } } }
+    ];
+
+    const [jobAnalysis, allAppliedJobs, dashboardJobCounts] = await Promise.all([
       JobModel.aggregate(jobAnalysisPipeline),
-      JobModel.find(lastAppliedJobsQuery).select('userID companyName appliedDate operatorName').lean()
+      JobModel.find(lastAppliedJobsQuery).select('userID companyName appliedDate operatorName').lean(),
+      JobModel.aggregate(dashboardJobCountPipeline)
     ]);
 
     const parseDateString = (dateStr) => {
@@ -3945,6 +3951,9 @@ app.get('/api/client-todos/all', async (req, res) => {
     const appliedJobsCountMap = new Map(
       jobAnalysis.map(j => [j._id.toLowerCase(), j.hasAppliedJobs || 0])
     );
+    const dashboardJobCountMap = new Map(
+      (dashboardJobCounts || []).map(j => [j._id.toLowerCase(), j.count || 0])
+    );
     const lastAppliedMap = new Map();
     jobsByUser.forEach((jobData, email) => {
       lastAppliedMap.set(email, {
@@ -3971,6 +3980,7 @@ app.get('/api/client-todos/all', async (req, res) => {
         client.lastAppliedJob = null;
       }
       client.appliedJobsCount = appliedJobsCountMap.get(emailLower) || 0;
+      client.dashboardJobCount = dashboardJobCountMap.get(emailLower) || 0;
     });
 
     clientsWithTodos.sort((a, b) => {

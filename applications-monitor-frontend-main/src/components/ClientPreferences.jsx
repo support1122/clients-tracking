@@ -897,15 +897,27 @@ export default function ClientPreferences() {
                     const displayTodos = displayData?.todos || [];
                     const activeLock = getActiveLockPeriod(client.lockPeriods);
                     const isJobActive = client.isJobActive !== false;
-                    const rowBgClass = isJobActive ? (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50') : 'bg-red-50';
                     const optimizations = client.optimizations || getDefaultOptimizations();
                     const totalInPlan = getTotalInPlanCount(client.planType);
                     const completedCount = getCompletedOptimizationsCount(optimizations, client.planType);
+                    const appliedJobs = (client.appliedJobsCount ?? 0) >= 1;
+                    const allInPlanDoneByAttachments = totalInPlan > 0 && completedCount === totalInPlan;
+                    const allInPlanDoneByAppliedJob = totalInPlan > 0 && appliedJobs;
+                    const allTodosDone = allInPlanDoneByAttachments || allInPlanDoneByAppliedJob;
+                    const highlightRow = allTodosDone;
+                    const rowBgClass = !isJobActive
+                      ? 'bg-red-50'
+                      : highlightRow
+                        ? 'bg-emerald-50'
+                        : idx % 2 === 0
+                          ? 'bg-white'
+                          : 'bg-gray-50';
+                    const cellBgClass = rowBgClass + (highlightRow ? ' hover:!bg-emerald-100' : ' hover:!bg-gray-100');
 
                     return (
                       <React.Fragment key={client.email}>
-                        <tr className={`hover:bg-gray-100 transition-colors ${rowBgClass}`}>
-                          <td className="px-2 py-2">
+                        <tr className="transition-colors">
+                          <td className={`px-2 py-2 ${cellBgClass}`}>
                             <div className="flex flex-col gap-0.5 min-w-0">
                               <div className={`text-[11px] font-medium truncate ${isJobActive ? 'text-gray-900' : 'text-red-900'}`} title={client.name}>{client.name}</div>
                               {planDisplayLabel(client.planType) ? (
@@ -920,7 +932,7 @@ export default function ClientPreferences() {
                               )}
                             </div>
                           </td>
-                          <td className="px-1 py-2">
+                          <td className={`px-1 py-2 ${cellBgClass}`}>
                             <button
                               onClick={() => toggleRowExpansion(client.email)}
                               className="p-0.5 hover:bg-gray-200 rounded transition-colors"
@@ -932,10 +944,10 @@ export default function ClientPreferences() {
                               )}
                             </button>
                           </td>
-                          <td className="px-2 py-2">
+                          <td className={`px-2 py-2 ${cellBgClass}`}>
                             <div className={`text-[11px] truncate ${isJobActive ? 'text-gray-600' : 'text-red-700'}`} title={client.email}>{client.email}</div>
                           </td>
-                          <td className="px-2 py-2">
+                          <td className={`px-2 py-2 ${cellBgClass}`}>
                             <div className="flex items-center justify-center gap-1 flex-wrap">
                               <button
                                 onClick={() => {
@@ -997,7 +1009,7 @@ export default function ClientPreferences() {
                               )}
                             </div>
                           </td>
-                          <td className="px-2 py-2 text-center">
+                          <td className={`px-2 py-2 text-center ${cellBgClass}`}>
                             {activeLock ? (
                               <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] font-medium rounded">
                                 Locked
@@ -1012,7 +1024,7 @@ export default function ClientPreferences() {
                               </span>
                             )}
                           </td>
-                          <td className="px-2 py-2 text-center">
+                          <td className={`px-2 py-2 text-center ${cellBgClass}`}>
                             {client.createdAt ? (
                               <div className="flex flex-col items-center gap-0.5" title={client.createdAt}>
                                 <span className="text-[11px] font-medium text-gray-800">
@@ -1029,7 +1041,7 @@ export default function ClientPreferences() {
                               <span className="text-[11px] text-gray-400">—</span>
                             )}
                           </td>
-                          <td className="px-2 py-2 text-center">
+                          <td className={`px-2 py-2 text-center ${cellBgClass}`}>
                             <div className="flex items-center justify-center gap-1">
                               <button
                                 onClick={() => setAttachmentModalClient(client)}
