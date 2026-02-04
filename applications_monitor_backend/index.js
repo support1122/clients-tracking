@@ -4579,13 +4579,16 @@ async function runJobCardReminder() {
       if (!cur || d > cur.date) lastAppliedByUser.set(email, { date: d, operatorName: j.operatorName });
     }
 
-    const clients = await ClientModel.find({ email: { $in: userIDsWithSaved } })
+    const clients = await ClientModel.find({ email: { $in: userIDsWithSaved }, status: 'active' })
       .select('email name')
       .lean();
     const clientNameMap = new Map((clients || []).map((c) => [c.email.toLowerCase(), c.name || c.email]));
     const savedMap = new Map((savedByUser || []).map((r) => [r._id.toLowerCase(), r.saved]));
 
-    for (const email of userIDsWithSaved) {
+    let sentCount = 0;
+    for (const c of clients || []) {
+      const email = (c.email || '').toLowerCase();
+      if (!email) continue;
       const saved = savedMap.get(email) || 0;
       if (saved <= 0) continue;
       const lastApplied = lastAppliedByUser.get(email);
@@ -4598,8 +4601,9 @@ async function runJobCardReminder() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: message })
       });
+      sentCount += 1;
     }
-    console.log(`📬 [JobCard Reminder] Sent Discord reminders for ${userIDsWithSaved.length} client(s) with saved jobs`);
+    console.log(`📬 [JobCard Reminder] Sent Discord reminders for ${sentCount} client(s) with saved jobs`);
   } catch (err) {
     console.error('❌ [JobCard Reminder] Error:', err);
   }
