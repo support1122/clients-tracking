@@ -316,7 +316,8 @@ export default function ClientJobAnalysis() {
                   
                   const planLimit = isPrime ? 160 : isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1000 : Infinity;
                   const addonLimit = clientAddons[r.email] || 0;
-                  const totalLimit = planLimit + addonLimit;
+                  const referralBonus = Number(r.referralApplicationsAdded || 0);
+                  const totalLimit = planLimit + addonLimit + referralBonus;
                   const exceeded = totalLimit !== Infinity && totalApplications > totalLimit;
                   
                   const isActiveWithNoSaved = r.status === 'active' && Number(r.saved || 0) === 0;
@@ -398,6 +399,11 @@ export default function ClientJobAnalysis() {
                             {addonLimit > 0 && (
                               <span className="text-[10px] text-blue-600 font-medium">
                                 Addon: +{addonLimit}
+                              </span>
+                            )}
+                            {referralBonus > 0 && (
+                              <span className="text-[10px] text-emerald-700 font-medium">
+                                Referrals: +{referralBonus}
                               </span>
                             )}
                             {exceeded && (

@@ -30,9 +30,15 @@ export default function ClientDashboard() {
   // Referral Management state
   const [referralUsers, setReferralUsers] = useState([]);
   const [loadingReferralUsers, setLoadingReferralUsers] = useState(false);
-  const [updatingReferralStatus, setUpdatingReferralStatus] = useState({});
+  const [updatingReferralUser, setUpdatingReferralUser] = useState({});
   const [editingNotes, setEditingNotes] = useState({});
   const [notesValues, setNotesValues] = useState({});
+  const [activeReferralUser, setActiveReferralUser] = useState(null);
+  const [showReferralModal, setShowReferralModal] = useState(false);
+  const [newReferralName, setNewReferralName] = useState('');
+  const [newReferralPlan, setNewReferralPlan] = useState('Professional');
+  const [newReferralNotes, setNewReferralNotes] = useState('');
+  const [savingReferral, setSavingReferral] = useState(false);
 
   const planOptions = [
     { value: 'Ignite', label: 'Ignite', price: 199, applications: 250, icon: Rocket, color: 'orange' },
@@ -140,7 +146,16 @@ export default function ClientDashboard() {
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
-          setReferralUsers(data.users || []);
+          setReferralUsers((data.users || []).map(user => ({
+            ...user,
+            referrals: Array.isArray(user.referrals) ? user.referrals : [],
+            referralCount: typeof user.referralCount === 'number'
+              ? user.referralCount
+              : (Array.isArray(user.referrals) ? user.referrals.length : 0),
+            referralApplicationsAdded: typeof user.referralApplicationsAdded === 'number'
+              ? user.referralApplicationsAdded
+              : 0,
+          })));
         } else {
           throw new Error(data.error || 'Failed to fetch users');
         }
@@ -155,39 +170,6 @@ export default function ClientDashboard() {
     }
   };
 
-  const handleReferralStatusChange = async (email, newStatus) => {
-    setUpdatingReferralStatus(prev => ({ ...prev, [email]: true }));
-    try {
-      const response = await fetch(`${API_BASE}/api/referral-management/users/${email}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ referralStatus: newStatus || null })
-      });
-
-      const data = await response.json();
-      if (response.ok && data.success) {
-        // Update local state
-        setReferralUsers(prevUsers =>
-          prevUsers.map(user =>
-            user.email === email
-              ? { ...user, referralStatus: newStatus || null, notes: data.user.notes || "" }
-              : user
-          )
-        );
-        toast.success(`Referral status updated for ${email}`);
-      } else {
-        throw new Error(data.error || 'Failed to update referral status');
-      }
-    } catch (error) {
-      console.error('Error updating referral status:', error);
-      toast.error(error.message || 'Failed to update referral status');
-    } finally {
-      setUpdatingReferralStatus(prev => ({ ...prev, [email]: false }));
-    }
-  };
-
   const handleNotesEdit = (email, currentNotes) => {
     setEditingNotes(prev => ({ ...prev, [email]: true }));
     setNotesValues(prev => ({ ...prev, [email]: currentNotes || "" }));
@@ -195,7 +177,7 @@ export default function ClientDashboard() {
 
   const handleNotesSave = async (email) => {
     const notes = notesValues[email] || "";
-    setUpdatingReferralStatus(prev => ({ ...prev, [email]: true }));
+    setUpdatingReferralUser(prev => ({ ...prev, [email]: true }));
     
     try {
       const response = await fetch(`${API_BASE}/api/referral-management/users/${email}`, {
@@ -229,7 +211,7 @@ export default function ClientDashboard() {
       console.error('Error updating notes:', error);
       toast.error(error.message || 'Failed to update notes');
     } finally {
-      setUpdatingReferralStatus(prev => ({ ...prev, [email]: false }));
+      setUpdatingReferralUser(prev => ({ ...prev, [email]: false }));
     }
   };
 
@@ -244,6 +226,96 @@ export default function ClientDashboard() {
       delete newState[email];
       return newState;
     });
+  };
+
+  const openReferralModal = (user) => {
+    setActiveReferralUser(user);
+    setNewReferralName('');
+    setNewReferralPlan('Professional');
+    setNewReferralNotes('');
+    setShowReferralModal(true);
+  };
+
+  const closeReferralModal = () => {
+    setShowReferralModal(false);
+    setActiveReferralUser(null);
+    setNewReferralName('');
+    setNewReferralPlan('Professional');
+    setNewReferralNotes('');
+  };
+
+  const handleAddReferral = async () => {
+    if (!activeReferralUser) return;
+
+    const email = activeReferralUser.email;
+
+    if (!newReferralName.trim()) {
+      toast.error('Please enter the referred client name');
+      return;
+    }
+
+    if (!newReferralPlan) {
+      toast.error('Please select a plan for this referral');
+      return;
+    }
+
+    setSavingReferral(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/referral-management/users/${email}/referrals`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          referredName: newReferralName.trim(),
+          plan: newReferralPlan,
+          notes: newReferralNotes.trim(),
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setReferralUsers(prevUsers =>
+          prevUsers.map(user =>
+            user.email === email
+              ? {
+                  ...user,
+                  referrals: Array.isArray(data.user.referrals) ? data.user.referrals : [],
+                  referralCount: Array.isArray(data.user.referrals) ? data.user.referrals.length : 0,
+                  referralApplicationsAdded: data.user.referralApplicationsAdded || 0,
+                  notes: data.user.notes || user.notes || "",
+                }
+              : user
+          )
+        );
+
+        // Keep local modal state in sync so existing referrals list matches immediately
+        setActiveReferralUser((prev) =>
+          prev && prev.email === email
+            ? {
+                ...prev,
+                referrals: Array.isArray(data.user.referrals) ? data.user.referrals : [],
+              }
+            : prev
+        );
+
+        toast.success('Referral added successfully');
+
+        // Reset form and close modal for smoother UX
+        setNewReferralName('');
+        setNewReferralPlan('Professional');
+        setNewReferralNotes('');
+        closeReferralModal();
+      } else {
+        throw new Error(data.error || 'Failed to add referral');
+      }
+    } catch (error) {
+      console.error('Error adding referral:', error);
+      toast.error(error.message || 'Failed to add referral');
+    } finally {
+      setSavingReferral(false);
+    }
   };
 
   const fetchMonthlyStats = async () => {
@@ -1142,7 +1214,7 @@ export default function ClientDashboard() {
                           Email
                         </th>
                         <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                          Referral Status
+                          Referrals
                         </th>
                         <th className="px-6 py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
                           Applications Benefit
@@ -1161,9 +1233,14 @@ export default function ClientDashboard() {
                         </tr>
                       ) : (
                         referralUsers.map((user) => {
-                          const isUpdating = updatingReferralStatus[user.email];
-                          const benefitAmount = user.referralStatus === 'Professional' ? 200 : 
-                                               user.referralStatus === 'Executive' ? 300 : 0;
+                          const isUpdating = updatingReferralUser[user.email];
+                          const referrals = Array.isArray(user.referrals) ? user.referrals : [];
+                          const referralCount = typeof user.referralCount === 'number'
+                            ? user.referralCount
+                            : referrals.length;
+                          const benefitAmount = typeof user.referralApplicationsAdded === 'number'
+                            ? user.referralApplicationsAdded
+                            : 0;
                           const isEditingNotes = editingNotes[user.email];
                           const currentNotes = notesValues[user.email] !== undefined ? notesValues[user.email] : (user.notes || "");
                           
@@ -1179,23 +1256,46 @@ export default function ClientDashboard() {
                                   {user.email}
                                 </div>
                               </td>
-                              <td className="px-6 py-4 whitespace-nowrap">
-                                <select
-                                  value={user.referralStatus || ''}
-                                  onChange={(e) => handleReferralStatusChange(user.email, e.target.value || null)}
-                                  disabled={isUpdating}
-                                  className={`px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all ${
-                                    isUpdating ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-gray-400'
-                                  } ${
-                                    user.referralStatus === 'Professional' ? 'bg-blue-50 text-blue-700 border-blue-300' :
-                                    user.referralStatus === 'Executive' ? 'bg-purple-50 text-purple-700 border-purple-300' :
-                                    'bg-gray-50 text-gray-700'
-                                  }`}
-                                >
-                                  <option value="">Select Status</option>
-                                  <option value="Professional">Professional</option>
-                                  <option value="Executive">Executive</option>
-                                </select>
+                              <td className="px-6 py-4 whitespace-nowrap align-top">
+                                <div className="flex flex-col gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => openReferralModal(user)}
+                                    className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg border border-gray-300 text-xs font-semibold text-gray-800 bg-white hover:bg-gray-50 shadow-sm transition-colors"
+                                  >
+                                    Add Referral
+                                  </button>
+                                  <div className="text-xs text-gray-500">
+                                    {referralCount > 0 ? (
+                                      <span>{referralCount} referral{referralCount === 1 ? '' : 's'}</span>
+                                    ) : (
+                                      <span className="italic text-gray-400">No referrals yet</span>
+                                    )}
+                                  </div>
+                                  {referralCount > 0 && (
+                                    <div className="mt-1 w-64 h-20 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 px-2 py-1">
+                                      {referrals.map((referral, index) => (
+                                        <div
+                                          key={`${referral.name}-${index}`}
+                                          className="flex items-center justify-between gap-2 py-0.5"
+                                        >
+                                          <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-medium text-gray-800 truncate">
+                                              {referral.name}
+                                            </p>
+                                          </div>
+                                          <span className={`ml-1 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                            referral.plan === 'Executive'
+                                              ? 'bg-purple-100 text-purple-700'
+                                              : 'bg-blue-100 text-blue-700'
+                                          }`}>
+                                            {referral.plan === 'Executive' ? '+300' : '+200'}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
                               </td>
                               <td className="px-6 py-4 whitespace-nowrap">
                                 <div className="flex items-center gap-2">
@@ -1271,6 +1371,153 @@ export default function ClientDashboard() {
           </div>
         )}
       </div>
+      {showReferralModal && activeReferralUser && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full mx-4 overflow-hidden">
+            <div className="px-6 py-5 border-b flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                  Referral Management
+                </p>
+                <h2 className="mt-1 text-lg font-bold text-gray-900">
+                  {activeReferralUser.name || 'Unknown'}{" "}
+                  <span className="text-gray-500 text-sm">({activeReferralUser.email})</span>
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={closeReferralModal}
+                className="p-2 rounded-full hover:bg-gray-100 text-gray-500"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-5">
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-700 uppercase tracking-[0.18em] mb-1.5">
+                    Referred Client Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newReferralName}
+                    onChange={(e) => setNewReferralName(e.target.value)}
+                    placeholder="Who did this client refer?"
+                    className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/80 focus:border-gray-900/80 transition-all"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-700 uppercase tracking-[0.18em] mb-1.5">
+                    Plan for Referral
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={newReferralPlan}
+                      onChange={(e) => setNewReferralPlan(e.target.value)}
+                      className="w-full appearance-none px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-gray-900/80 focus:border-gray-900/80 transition-all"
+                    >
+                      <option value="Professional">Professional (+200 applications)</option>
+                      <option value="Executive">Executive (+300 applications)</option>
+                    </select>
+                    <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-400">
+                      <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                        <path
+                          fillRule="evenodd"
+                          d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.25a.75.75 0 01-1.06 0L5.21 8.27a.75.75 0 01.02-1.06z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-700 uppercase tracking-[0.18em] mb-1.5">
+                  Notes (optional)
+                </label>
+                <textarea
+                  value={newReferralNotes}
+                  onChange={(e) => setNewReferralNotes(e.target.value)}
+                  rows={3}
+                  placeholder="Add any important context about this referral for the team..."
+                  className="w-full px-3.5 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/80 focus:border-gray-900/80 transition-all resize-none"
+                />
+              </div>
+
+              <div className="border rounded-xl bg-gray-50/80 px-3.5 py-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-semibold text-gray-700 uppercase tracking-[0.18em]">
+                    Existing Referrals
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {Array.isArray(activeReferralUser.referrals) ? activeReferralUser.referrals.length : 0} total
+                  </span>
+                </div>
+                <div className="max-h-32 overflow-y-auto space-y-1.5 pr-1">
+                  {Array.isArray(activeReferralUser.referrals) && activeReferralUser.referrals.length > 0 ? (
+                    activeReferralUser.referrals.map((referral, index) => (
+                      <div
+                        key={`${referral.name}-${index}`}
+                        className="flex items-start justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5 border border-gray-200"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-gray-900 truncate">{referral.name}</p>
+                          {referral.notes && (
+                            <p className="mt-0.5 text-[11px] text-gray-500 line-clamp-2">
+                              {referral.notes}
+                            </p>
+                          )}
+                        </div>
+                        <span
+                          className={`ml-1 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            referral.plan === 'Executive'
+                              ? 'bg-purple-100 text-purple-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}
+                        >
+                          {referral.plan === 'Executive' ? 'Executive · +300' : 'Professional · +200'}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-[11px] text-gray-400 italic px-1 py-1">No referrals recorded yet.</p>
+                  )}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAddReferral}
+                disabled={savingReferral}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 text-xs font-semibold text-white py-2.75 py-3 shadow-md hover:bg-black transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {savingReferral && (
+                  <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                )}
+                <span>+ Add Referral</span>
+              </button>
+            </div>
+            <div className="px-6 py-4 border-t flex items-center justify-between bg-gray-50">
+              <div className="text-xs text-gray-500">
+                Each Professional referral adds <span className="font-semibold text-gray-700">+200</span> applications.
+                Executive adds <span className="font-semibold text-gray-700">+300</span>.
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={closeReferralModal}
+                  disabled={savingReferral}
+                  className="px-3 py-2 rounded-lg border border-gray-300 text-xs font-semibold text-gray-700 bg-white hover:bg-gray-100 disabled:opacity-60"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }
