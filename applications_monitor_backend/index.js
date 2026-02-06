@@ -244,6 +244,92 @@ const addReferralForUser = async (req, res) => {
   }
 };
 
+// Remove a referral entry for a user by index
+const removeReferralForUser = async (req, res) => {
+  try {
+    const { email, index } = req.params;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: "Email is required",
+      });
+    }
+
+    const referralIndex = Number(index);
+    if (Number.isNaN(referralIndex) || referralIndex < 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Valid referral index is required",
+      });
+    }
+
+    const user = await NewUserModel.findOne({ email: email.toLowerCase() }).select(
+      "name email referralStatus referrals notes"
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: "User not found",
+      });
+    }
+
+    const referralsArray = Array.isArray(user.referrals) ? user.referrals : [];
+
+    if (referralIndex >= referralsArray.length) {
+      return res.status(400).json({
+        success: false,
+        error: "Referral index out of range",
+      });
+    }
+
+    referralsArray.splice(referralIndex, 1);
+
+    let latestNotes = user.notes || "";
+    if (referralsArray.length > 0) {
+      const lastReferralWithNotes = [...referralsArray].reverse().find((r) => r?.notes);
+      latestNotes = lastReferralWithNotes?.notes || latestNotes || "";
+    } else {
+      latestNotes = latestNotes || "";
+    }
+
+    user.referrals = referralsArray;
+    user.notes = latestNotes;
+
+    await user.save();
+
+    let referralApplicationsAdded = 0;
+    referralsArray.forEach((ref) => {
+      if (ref?.plan === "Professional") {
+        referralApplicationsAdded += 200;
+      } else if (ref?.plan === "Executive") {
+        referralApplicationsAdded += 300;
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Referral removed successfully",
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        referrals: referralsArray,
+        referralStatus: user.referralStatus,
+        notes: user.notes || "",
+        referralApplicationsAdded,
+      },
+    });
+  } catch (error) {
+    console.error("Error removing referral for user:", error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || "Failed to remove referral",
+    });
+  }
+};
+
 // Middleware to check admin role
 const verifyAdmin = (req, res, next) => {
   if (req.user.role !== 'admin') {
@@ -3841,6 +3927,7 @@ app.post('/api/clients/sync-managers', syncManagerAssignments);
 app.get('/api/referral-management/users', getAllUsersForReferralManagement);
 app.put('/api/referral-management/users/:email', updateUserReferralStatus);
 app.post('/api/referral-management/users/:email/referrals', addReferralForUser);
+app.delete('/api/referral-management/users/:email/referrals/:index', removeReferralForUser);
 
 
 const getCurrentISTTime = () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
