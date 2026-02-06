@@ -153,6 +153,97 @@ const verifyToken = (req, res, next) => {
   }
 };
 
+// Add a referral entry for a user
+const addReferralForUser = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { referredName, plan, notes } = req.body || {};
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: "Email is required",
+      });
+    }
+
+    if (!referredName || typeof referredName !== "string") {
+      return res.status(400).json({
+        success: false,
+        error: "Referred client name is required",
+      });
+    }
+
+    if (plan !== "Professional" && plan !== "Executive") {
+      return res.status(400).json({
+        success: false,
+        error: 'Plan must be either "Professional" or "Executive"',
+      });
+    }
+
+    const newReferral = {
+      name: referredName.trim(),
+      plan,
+      notes: typeof notes === "string" ? notes.trim() : "",
+      createdAt: new Date(),
+    };
+
+    const updateQuery = { $push: { referrals: newReferral } };
+
+    if (newReferral.notes) {
+      // Keep top-level notes in sync with the latest referral note
+      updateQuery.$set = {
+        notes: newReferral.notes,
+      };
+    }
+
+    const updatedUser = await NewUserModel.findOneAndUpdate(
+      { email: email.toLowerCase() },
+      updateQuery,
+      { new: true, select: "name email referralStatus referrals notes" }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        success: false,
+        error: "User not found",
+      });
+    }
+
+    const referralsArray = Array.isArray(updatedUser.referrals)
+      ? updatedUser.referrals
+      : [];
+
+    let referralApplicationsAdded = 0;
+    referralsArray.forEach((ref) => {
+      if (ref?.plan === "Professional") {
+        referralApplicationsAdded += 200;
+      } else if (ref?.plan === "Executive") {
+        referralApplicationsAdded += 300;
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Referral added successfully",
+      user: {
+        _id: updatedUser._id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        referrals: referralsArray,
+        referralStatus: updatedUser.referralStatus,
+        notes: updatedUser.notes || "",
+        referralApplicationsAdded,
+      },
+    });
+  } catch (error) {
+    console.error("Error adding referral for user:", error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || "Failed to add referral",
+    });
+  }
+};
+
 // Middleware to check admin role
 const verifyAdmin = (req, res, next) => {
   if (req.user.role !== 'admin') {
@@ -2526,7 +2617,52 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const clientInfo = await ClientModel.find({
       email: { $in: allUserIDs }
     }).select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused').lean();
-    const clientMap = new Map(clientInfo.map(c => [c.email, { name: c.name, planType: c.planType, planPrice: c.planPrice, status: c.status, jobStatus: c.jobStatus, operationsName: c.operationsName || '', dashboardTeamLeadName: c.dashboardTeamLeadName || '', isPaused: !!c.isPaused }]));
+    const clientMap = new Map(
+      clientInfo.map((c) => [
+        c.email,
+        {
+          name: c.name,
+          planType: c.planType,
+          planPrice: c.planPrice,
+          status: c.status,
+          jobStatus: c.jobStatus,
+          operationsName: c.operationsName || "",
+          dashboardTeamLeadName: c.dashboardTeamLeadName || "",
+          isPaused: !!c.isPaused,
+        },
+      ])
+    );
+
+    // Fetch referral data from users collection to align with referral-management dashboard
+    const referralUsers = await NewUserModel.find(
+      { email: { $in: allUserIDs } },
+      "email referrals"
+    ).lean();
+
+    const referralMap = new Map();
+
+    referralUsers.forEach((user) => {
+      const email = (user.email || "").toLowerCase();
+      const referralsArray = Array.isArray(user.referrals) ? user.referrals : [];
+
+      let referralApplicationsAdded = 0;
+      referralsArray.forEach((ref) => {
+        if (ref?.plan === "Professional") {
+          referralApplicationsAdded += 200;
+        } else if (ref?.plan === "Executive") {
+          referralApplicationsAdded += 300;
+        }
+      });
+
+      const latestReferral =
+        referralsArray.length > 0 ? referralsArray[referralsArray.length - 1] : null;
+
+      referralMap.set(email, {
+        referrals: referralsArray,
+        referralApplicationsAdded,
+        latestReferralName: latestReferral?.name || null,
+      });
+    });
 
     const allJobs = await JobModel.find({}).select('userID operatorName appliedDate').lean();
     const parseDateString = (dateStr) => {
@@ -2558,6 +2694,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     let rows = allUserIDs.map(email => {
       const counts = overallMap.get(email) || {};
       const client = clientMap.get(email) || {};
+      const referralMeta = referralMap.get(email.toLowerCase()) || {};
       const removedCount = multiFormatDateRegex
         ? (removedMap.get(email) || 0)
         : (counts.deleted || 0);
@@ -2572,6 +2709,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         isPaused: client.isPaused ?? false,
         dashboardTeamLeadName: client.dashboardTeamLeadName || '',
         lastAppliedOperatorName: lastAppliedOperatorMap.get(email.toLowerCase()) || '',
+        referrals: referralMeta.referrals || [],
+        referralApplicationsAdded: referralMeta.referralApplicationsAdded || 0,
+        latestReferralName: referralMeta.latestReferralName || null,
         saved: counts.saved || 0,
         applied: counts.applied || 0,
         interviewing: counts.interviewing || 0,
@@ -3391,16 +3531,48 @@ const getClientDetails = async (req, res) => {
 // Get all users with referral status for referral management
 const getAllUsersForReferralManagement = async (req, res) => {
   try {
-    const users = await NewUserModel.find({}, 'name email referralStatus notes').lean();
-    res.status(200).json({
-      success: true,
-      users: users.map(user => ({
+    const users = await NewUserModel.find(
+      {},
+      'name email referralStatus referrals notes'
+    ).lean();
+
+    const mapReferralMeta = (user) => {
+      const referralsArray = Array.isArray(user.referrals) ? user.referrals : [];
+      const referralCount = referralsArray.length;
+
+      let referralApplicationsAdded = 0;
+      referralsArray.forEach((ref) => {
+        if (ref?.plan === "Professional") {
+          referralApplicationsAdded += 200;
+        } else if (ref?.plan === "Executive") {
+          referralApplicationsAdded += 300;
+        }
+      });
+
+      // Backward compatibility: if no referrals recorded yet, fall back to single referralStatus
+      if (referralCount === 0 && user.referralStatus) {
+        if (user.referralStatus === "Professional") {
+          referralApplicationsAdded = 200;
+        } else if (user.referralStatus === "Executive") {
+          referralApplicationsAdded = 300;
+        }
+      }
+
+      return {
         _id: user._id,
-        name: user.name || 'Unknown',
+        name: user.name || "Unknown",
         email: user.email,
         referralStatus: user.referralStatus || null,
-        notes: user.notes || ""
-      }))
+        referrals: referralsArray,
+        referralCount,
+        referralApplicationsAdded,
+        notes: user.notes || "",
+      };
+    };
+
+    res.status(200).json({
+      success: true,
+      users: users.map(mapReferralMeta),
     });
   } catch (error) {
     console.error('Error fetching users for referral management:', error);
@@ -3444,7 +3616,7 @@ const updateUserReferralStatus = async (req, res) => {
     const updatedUser = await NewUserModel.findOneAndUpdate(
       { email: email.toLowerCase() },
       { $set: updateData },
-      { new: true, select: 'name email referralStatus notes' }
+      { new: true, select: 'name email referralStatus referrals notes' }
     );
 
     if (!updatedUser) {
@@ -3462,8 +3634,11 @@ const updateUserReferralStatus = async (req, res) => {
         name: updatedUser.name,
         email: updatedUser.email,
         referralStatus: updatedUser.referralStatus,
-        notes: updatedUser.notes || ""
-      }
+        referrals: Array.isArray(updatedUser.referrals)
+          ? updatedUser.referrals
+          : [],
+        notes: updatedUser.notes || "",
+      },
     });
   } catch (error) {
     console.error('Error updating user data:', error);
@@ -3665,6 +3840,7 @@ app.get('/api/operations/:email/available-clients', getAvailableClients);
 app.post('/api/clients/sync-managers', syncManagerAssignments);
 app.get('/api/referral-management/users', getAllUsersForReferralManagement);
 app.put('/api/referral-management/users/:email', updateUserReferralStatus);
+app.post('/api/referral-management/users/:email/referrals', addReferralForUser);
 
 
 const getCurrentISTTime = () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -4595,7 +4771,7 @@ async function runJobCardReminder() {
       const operatorName = lastApplied ? lastApplied.operatorName : 'Team';
       const clientName = clientNameMap.get(email) || email;
       const capitalizedOperator = capitalizeOperatorName(operatorName);
-      const message = `Hi ${capitalizedOperator}, there are ${saved} job card(s) in saved for in ${clientName}'s dashboard, please apply them.`;
+      const message = `Hi ${capitalizedOperator}, there are ${saved} job card(s) in saved column for ${clientName}'s dashboard, please apply.`;
       await fetch(DISCORD_JOBCARD_REMINDER_WEBHOOK, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
