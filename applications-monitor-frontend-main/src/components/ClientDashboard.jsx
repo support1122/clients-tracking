@@ -39,6 +39,7 @@ export default function ClientDashboard() {
   const [newReferralPlan, setNewReferralPlan] = useState('Professional');
   const [newReferralNotes, setNewReferralNotes] = useState('');
   const [savingReferral, setSavingReferral] = useState(false);
+  const [removingReferral, setRemovingReferral] = useState({});
 
   const planOptions = [
     { value: 'Ignite', label: 'Ignite', price: 199, applications: 250, icon: Rocket, color: 'orange' },
@@ -315,6 +316,58 @@ export default function ClientDashboard() {
       toast.error(error.message || 'Failed to add referral');
     } finally {
       setSavingReferral(false);
+    }
+  };
+
+  const handleRemoveReferral = async (email, index) => {
+    setRemovingReferral(prev => ({ ...prev, [`${email}-${index}`]: true }));
+    try {
+      const response = await fetch(`${API_BASE}/api/referral-management/users/${email}/referrals/${index}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setReferralUsers(prevUsers =>
+          prevUsers.map(user =>
+            user.email === email
+              ? {
+                  ...user,
+                  referrals: Array.isArray(data.user.referrals) ? data.user.referrals : [],
+                  referralCount: Array.isArray(data.user.referrals) ? data.user.referrals.length : 0,
+                  referralApplicationsAdded: data.user.referralApplicationsAdded || 0,
+                  notes: data.user.notes || user.notes || "",
+                }
+              : user
+          )
+        );
+
+        setActiveReferralUser(prev =>
+          prev && prev.email === email
+            ? {
+                ...prev,
+                referrals: Array.isArray(data.user.referrals) ? data.user.referrals : [],
+              }
+            : prev
+        );
+
+        toast.success('Referral removed successfully');
+      } else {
+        throw new Error(data.error || 'Failed to remove referral');
+      }
+    } catch (error) {
+      console.error('Error removing referral:', error);
+      toast.error(error.message || 'Failed to remove referral');
+    } finally {
+      setRemovingReferral(prev => {
+        const next = { ...prev };
+        delete next[`${email}-${index}`];
+        return next;
+      });
     }
   };
 
@@ -1470,15 +1523,25 @@ export default function ClientDashboard() {
                             </p>
                           )}
                         </div>
-                        <span
-                          className={`ml-1 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                            referral.plan === 'Executive'
-                              ? 'bg-purple-100 text-purple-700'
-                              : 'bg-blue-100 text-blue-700'
-                          }`}
-                        >
-                          {referral.plan === 'Executive' ? 'Executive · +300' : 'Professional · +200'}
-                        </span>
+                        <div className="flex flex-col items-end gap-1">
+                          <span
+                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                              referral.plan === 'Executive'
+                                ? 'bg-purple-100 text-purple-700'
+                                : 'bg-blue-100 text-blue-700'
+                            }`}
+                          >
+                            {referral.plan === 'Executive' ? 'Executive · +300' : 'Professional · +200'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveReferral(activeReferralUser.email, index)}
+                            disabled={removingReferral[`${activeReferralUser.email}-${index}`]}
+                            className="text-[10px] text-red-500 hover:text-red-600 disabled:opacity-50"
+                          >
+                            {removingReferral[`${activeReferralUser.email}-${index}`] ? 'Removing…' : 'Remove'}
+                          </button>
+                        </div>
                       </div>
                     ))
                   ) : (
