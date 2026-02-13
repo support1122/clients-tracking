@@ -2061,141 +2061,136 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
       {/* Top Bar Menu */}
       <div className="mb-4 rounded-xl border border-slate-200 bg-blue-50 shadow-sm px-3 py-2">
         <div className="flex flex-wrap gap-2 justify-center">
-          <button
-            onClick={() => {
-              setShowClients(true);
-              setShowOperations(false);
-              setShowRegisterClient(false);
-              setSelectedClient(null);
-              setSelectedOperation(null);
-              setSelectedStatus(null);
-              setFilterDate("");
-              setOperationFilterDate("");
-              setSelectedClientFilter("");
-              setClientStatusFilter("all");
-              setRightSidebarOpen(false);
-              navigate('/');
-            }}
-            className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium ${
-              showClients ? 'bg-blue-700 text-white' : 'bg-blue-600 text-white hover:bg-blue-700'
-            } ${JSON.parse(localStorage.getItem('user') || '{}')?.role === 'operations_intern' ? 'hidden' : ''}`}
-          >
-            Clients
-          </button>
-          
-          <button
-            onClick={() => {
-              setShowOperations(true);
-              setShowClients(false);
-              setShowRegisterClient(false);
-              setSelectedClient(null);
-              setSelectedOperation(null);
-              setSelectedStatus(null);
-              setFilterDate("");
-              setOperationFilterDate("");
-              setSelectedClientFilter("");
-              setClientStatusFilter("all");
-              setRightSidebarOpen(false);
-              navigate('/');
-            }}
-            className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium ${
-              showOperations ? 'bg-green-700 text-white' : 'bg-green-600 text-white hover:bg-green-700'
-            }`}
-          >
-            Operations Team
-          </button>
-          <button
-            onClick={() => {
-              navigate('/client-dashboard');
-            }}
-            className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium bg-purple-600 text-white hover:bg-purple-700 ${
-              ['team_lead', 'operations_intern'].includes(JSON.parse(localStorage.getItem('user') || '{}')?.role) ? 'hidden' : ''
-            }`}
-          >
-            Plan
-          </button>
-          <button
-            onClick={() => {
-              setShowRegisterClient(true);
-              setShowClients(false);
-              setShowOperations(false);
-              setSelectedClient(null);
-              setSelectedOperation(null);
-              setSelectedStatus(null);
-              setFilterDate("");
-              setOperationFilterDate("");
-              setSelectedClientFilter("");
-              setClientStatusFilter("all");
-              setRightSidebarOpen(false);
-              navigate('/clients/new');
-            }}
-            className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium ${
-              showRegisterClient ? 'bg-orange-700 text-white' : 'bg-orange-600 text-white hover:bg-orange-700'
-            } ${['team_lead', 'operations_intern'].includes(JSON.parse(localStorage.getItem('user') || '{}')?.role) ? 'hidden' : ''}`}
-          >
-            Register Client
-          </button>
-          <button
-            onClick={() => {
-              setShowRegisterClient(false);
-              setShowClients(false);
-              setShowOperations(false);
-              setSelectedClient(null);
-              setSelectedOperation(null);
-              setSelectedStatus(null);
-              setFilterDate("");
-              setOperationFilterDate("");
-              setSelectedClientFilter("");
-              setClientStatusFilter("all");
-              setRightSidebarOpen(false);
-              navigate('/manager-dashboard');
-            }}
-            className={`px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium ${
-              ['team_lead', 'operations_intern'].includes(JSON.parse(localStorage.getItem('user') || '{}')?.role) ? 'hidden' : ''
-            }`}
-          >
-            Manager Dashboard
-          </button>
-          <button
-            onClick={() => {
-              navigate('/job-analytics');
-            }}
-            className={`px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium ${
-              JSON.parse(localStorage.getItem('user') || '{}')?.role === 'operations_intern' ? 'hidden' : ''
-            }`}
-          >
-            Job Analytics
-          </button>
-          <button
-            onClick={() => {
-              navigate('/client-job-analysis');
-            }}
-            className={`px-3 py-2 text-sm bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium ${
-              JSON.parse(localStorage.getItem('user') || '{}')?.role === 'operations_intern' ? 'hidden' : ''
-            }`}
-          >
-            Client Job Analysis
-          </button>
-          <button
-            onClick={() => {
-              navigate('/call-scheduler');
-            }}
-            className={`px-3 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium ${
-              ['team_lead', 'operations_intern'].includes(JSON.parse(localStorage.getItem('user') || '{}')?.role) ? 'hidden' : ''
-            }`}
-          >
-            Call Scheduler
-          </button>
-          <button
-            onClick={() => {
-              navigate('/client-preferences');
-            }}
-            className={`px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium ${
-              JSON.parse(localStorage.getItem('user') || '{}')?.role === 'operations_intern' ? 'hidden' : ''
-            }`}
-          >
-            Client Preferences
-          </button>
+          {(() => {
+            const navUser = JSON.parse(localStorage.getItem('user') || '{}');
+            const onlyOnboarding = navUser?.role === 'onboarding_team' || navUser?.role === 'csm' || navUser?.role === 'team_lead';
+            if (onlyOnboarding) {
+              return (
+                <button
+                  onClick={() => navigate('/client-onboarding')}
+                  className="px-3 py-2 text-sm bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors font-medium"
+                >
+                  Client Onboarding
+                </button>
+              );
+            }
+            return (
+              <>
+                <button
+                  onClick={() => {
+                    setShowClients(true);
+                    setShowOperations(false);
+                    setShowRegisterClient(false);
+                    setSelectedClient(null);
+                    setSelectedOperation(null);
+                    setSelectedStatus(null);
+                    setFilterDate("");
+                    setOperationFilterDate("");
+                    setSelectedClientFilter("");
+                    setClientStatusFilter("all");
+                    setRightSidebarOpen(false);
+                    navigate('/');
+                  }}
+                  className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium ${showClients ? 'bg-blue-700 text-white' : 'bg-blue-600 text-white hover:bg-blue-700'} ${navUser?.role === 'operations_intern' ? 'hidden' : ''}`}
+                >
+                  Clients
+                </button>
+                <button
+                  onClick={() => {
+                    setShowOperations(true);
+                    setShowClients(false);
+                    setShowRegisterClient(false);
+                    setSelectedClient(null);
+                    setSelectedOperation(null);
+                    setSelectedStatus(null);
+                    setFilterDate("");
+                    setOperationFilterDate("");
+                    setSelectedClientFilter("");
+                    setClientStatusFilter("all");
+                    setRightSidebarOpen(false);
+                    navigate('/');
+                  }}
+                  className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium ${showOperations ? 'bg-green-700 text-white' : 'bg-green-600 text-white hover:bg-green-700'}`}
+                >
+                  Operations Team
+                </button>
+                <button
+                  onClick={() => navigate('/client-dashboard')}
+                  className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium bg-purple-600 text-white hover:bg-purple-700 ${['team_lead', 'operations_intern'].includes(navUser?.role) ? 'hidden' : ''}`}
+                >
+                  Plan
+                </button>
+                <button
+                  onClick={() => {
+                    setShowRegisterClient(true);
+                    setShowClients(false);
+                    setShowOperations(false);
+                    setSelectedClient(null);
+                    setSelectedOperation(null);
+                    setSelectedStatus(null);
+                    setFilterDate("");
+                    setOperationFilterDate("");
+                    setSelectedClientFilter("");
+                    setClientStatusFilter("all");
+                    setRightSidebarOpen(false);
+                    navigate('/clients/new');
+                  }}
+                  className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium ${showRegisterClient ? 'bg-orange-700 text-white' : 'bg-orange-600 text-white hover:bg-orange-700'} ${['team_lead', 'operations_intern'].includes(navUser?.role) ? 'hidden' : ''}`}
+                >
+                  Register Client
+                </button>
+                <button
+                  onClick={() => {
+                    setShowRegisterClient(false);
+                    setShowClients(false);
+                    setShowOperations(false);
+                    setSelectedClient(null);
+                    setSelectedOperation(null);
+                    setSelectedStatus(null);
+                    setFilterDate("");
+                    setOperationFilterDate("");
+                    setSelectedClientFilter("");
+                    setClientStatusFilter("all");
+                    setRightSidebarOpen(false);
+                    navigate('/manager-dashboard');
+                  }}
+                  className={`px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium ${['team_lead', 'operations_intern'].includes(navUser?.role) ? 'hidden' : ''}`}
+                >
+                  Manager Dashboard
+                </button>
+                <button
+                  onClick={() => navigate('/job-analytics')}
+                  className={`px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium ${navUser?.role === 'operations_intern' ? 'hidden' : ''}`}
+                >
+                  Job Analytics
+                </button>
+                <button
+                  onClick={() => navigate('/client-job-analysis')}
+                  className={`px-3 py-2 text-sm bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium ${navUser?.role === 'operations_intern' ? 'hidden' : ''}`}
+                >
+                  Client Job Analysis
+                </button>
+                <button
+                  onClick={() => navigate('/call-scheduler')}
+                  className={`px-3 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium ${['team_lead', 'operations_intern'].includes(navUser?.role) ? 'hidden' : ''}`}
+                >
+                  Call Scheduler
+                </button>
+                <button
+                  onClick={() => navigate('/client-preferences')}
+                  className={`px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium ${navUser?.role === 'operations_intern' ? 'hidden' : ''}`}
+                >
+                  Client Preferences
+                </button>
+                <button
+                  onClick={() => navigate('/client-onboarding')}
+                  className="px-3 py-2 text-sm bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors font-medium"
+                >
+                  Client Onboarding
+                </button>
+              </>
+            );
+          })()}
         </div>
       </div>
 

@@ -33,6 +33,8 @@ function App() {
             navigate('/admin-dashboard');
           } else if (userData.role === 'operations_intern') {
             navigate('/operations');
+          } else if (userData.role === 'onboarding_team' || userData.role === 'csm' || userData.role === 'team_lead') {
+            navigate('/client-onboarding');
           } else {
             navigate('/monitor-clients');
           }
@@ -87,6 +89,8 @@ function App() {
       navigate('/admin-dashboard');
     } else if (userData.role === 'operations_intern') {
       navigate('/operations');
+    } else if (userData.role === 'onboarding_team' || userData.role === 'csm' || userData.role === 'team_lead') {
+      navigate('/client-onboarding');
     } else {
       navigate('/monitor-clients');
     }
@@ -139,6 +143,11 @@ function App() {
                 </div>
               </div>
               <div className="flex gap-3">
+                <Link to="/client-onboarding">
+                  <button className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors text-sm">
+                    Client Onboarding
+                  </button>
+                </Link>
                 <Link to="/operators-performance-report">
                   <button className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm">
                     Performance Report

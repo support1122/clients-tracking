@@ -29,6 +29,18 @@ import { upload } from './utils/cloudinary.js';
 import { encrypt } from './utils/CryptoHelper.js';
 import { NewUserModel } from './schema_models/UserModel.js';
 import { ClientTodosModel } from './ClientTodosModel.js';
+import {
+  createOnboardingJobPayload,
+  listOnboardingJobs,
+  getOnboardingJobById,
+  patchOnboardingJob,
+  postOnboardingJob,
+  getOnboardingRoles,
+  getNextResumeMakerApi,
+  postOnboardingJobAttachment,
+  getOnboardingNotifications,
+  markOnboardingNotificationRead
+} from './controllers/onboardingController.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
 import multer from 'multer';
 import FormData from 'form-data';
@@ -114,7 +126,7 @@ app.use(
         return callback(new Error("Not allowed by CORS"), false);
       }
     },
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   })
@@ -654,6 +666,17 @@ export const createOrUpdateClient = async (req, res) => {
         };
 
         const newTracking = await ClientModel.create(fullClientData);
+        try {
+          await createOnboardingJobPayload({
+            clientEmail: emailLower,
+            clientName: name,
+            planType: capitalizedPlan || 'Professional',
+            dashboardManagerName: dashboardManager || '',
+            dashboardCredentials: dashboardCredentials || { username: '', password: '', loginUrl: '' }
+          });
+        } catch (onbErr) {
+          console.error('Onboarding job creation failed:', onbErr?.message || onbErr);
+        }
         return res.status(200).json({
           message: "✅ New client created successfully",
           newUser,
@@ -1256,10 +1279,10 @@ const login = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // If user is team_lead or operations_intern, verify session key
-    if (user.role === 'team_lead' || user.role === 'operations_intern') {
+    const rolesRequiringSessionKey = ['team_lead', 'operations_intern', 'onboarding_team', 'csm'];
+    if (rolesRequiringSessionKey.includes(user.role)) {
       if (!sessionKey) {
-        return res.status(400).json({ error: 'Session key required' });
+        return res.status(400).json({ error: 'Session key required', code: 'SESSION_KEY_REQUIRED' });
       }
 
       const sessionKeyDoc = await SessionKeyModel.findOne({
@@ -1273,18 +1296,19 @@ const login = async (req, res) => {
         return res.status(401).json({ error: 'Invalid or expired session key' });
       }
 
-      // Mark session key as used
       sessionKeyDoc.isUsed = true;
       sessionKeyDoc.usedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
       await sessionKeyDoc.save();
     }
 
-    // Generate JWT token
     const token = jwt.sign(
       {
         userId: user._id,
         email: user.email,
-        role: user.role
+        role: user.role,
+        name: user.name,
+        onboardingSubRole: user.onboardingSubRole,
+        roles: user.roles || []
       },
       JWT_SECRET,
       { expiresIn: '24h' }
@@ -1294,7 +1318,10 @@ const login = async (req, res) => {
       token,
       user: {
         email: user.email,
-        role: user.role
+        role: user.role,
+        name: user.name,
+        onboardingSubRole: user.onboardingSubRole,
+        roles: user.roles || []
       }
     });
   } catch (error) {
@@ -1305,30 +1332,39 @@ const login = async (req, res) => {
 // Create a new user (admin only)
 const createUser = async (req, res) => {
   try {
-    const { email, password, role = 'team_lead' } = req.body;
+    const { email, password, role = 'team_lead', name, onboardingSubRole, roles } = req.body;
 
-    // Check if user already exists
     const existingUser = await UserModel.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       return res.status(400).json({ error: 'User already exists' });
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const user = new UserModel({
+    const userData = {
       email: email.toLowerCase(),
       password: hashedPassword,
       role,
+      name: name || '',
       updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
-    });
+    };
+    if (role === 'onboarding_team' && onboardingSubRole) {
+      userData.onboardingSubRole = onboardingSubRole;
+    }
+    if (Array.isArray(roles)) {
+      userData.roles = roles;
+    }
 
+    const user = new UserModel(userData);
     await user.save();
     res.status(201).json({
       message: 'User created successfully',
       user: {
         email: user.email,
-        role: user.role
+        role: user.role,
+        name: user.name,
+        onboardingSubRole: user.onboardingSubRole,
+        roles: user.roles
       }
     });
   } catch (error) {
@@ -1336,15 +1372,16 @@ const createUser = async (req, res) => {
   }
 };
 
+const SESSION_KEY_VALID_DAYS = 90;
+
 // Generate session key (admin only)
 const generateSessionKey = async (req, res) => {
   try {
     const { userEmail } = req.body;
 
-    // Check if user exists and is team_lead or operations_intern
     const user = await UserModel.findOne({
       email: userEmail.toLowerCase(),
-      role: { $in: ['team_lead', 'operations_intern'] },
+      role: { $in: ['team_lead', 'operations_intern', 'onboarding_team', 'csm'] },
       isActive: true
     });
 
@@ -1352,19 +1389,16 @@ const generateSessionKey = async (req, res) => {
       return res.status(404).json({ error: 'User not found or invalid role' });
     }
 
-    // Generate unique session key with retry logic
     let sessionKey;
     let attempts = 0;
     const maxAttempts = 10;
 
     do {
-      // Generate a more robust session key with timestamp and random
       const timestamp = Date.now().toString(36);
       const random = Math.random().toString(36).substring(2, 10).toUpperCase();
       sessionKey = `FF${timestamp}${random}`;
       attempts++;
 
-      // Check if this key already exists
       const existingKey = await SessionKeyModel.findOne({ key: sessionKey });
       if (!existingKey) break;
 
@@ -1373,9 +1407,11 @@ const generateSessionKey = async (req, res) => {
       }
     } while (true);
 
+    const expiresAt = new Date(Date.now() + SESSION_KEY_VALID_DAYS * 24 * 60 * 60 * 1000);
     const sessionKeyDoc = new SessionKeyModel({
       key: sessionKey,
-      userEmail: userEmail.toLowerCase()
+      userEmail: userEmail.toLowerCase(),
+      expiresAt
     });
 
     await sessionKeyDoc.save();
@@ -1384,7 +1420,8 @@ const generateSessionKey = async (req, res) => {
       message: 'Session key generated successfully',
       sessionKey,
       userEmail: userEmail.toLowerCase(),
-      expiresAt: sessionKeyDoc.expiresAt
+      expiresAt: sessionKeyDoc.expiresAt,
+      validDays: SESSION_KEY_VALID_DAYS
     });
   } catch (error) {
     console.error('Session key generation error:', error);
@@ -3398,6 +3435,16 @@ app.post('/api/clients/update-dashboard-team-lead', updateClientDashboardTeamLea
 app.put('/api/clients/:email/upgrade-plan', verifyToken, upgradeClientPlan);
 app.post('/api/clients/:email/add-addon', verifyToken, addClientAddon);
 app.get('/api/managers/names', getDashboardManagerNames);
+
+app.get('/api/onboarding/jobs', verifyToken, listOnboardingJobs);
+app.get('/api/onboarding/jobs/roles', verifyToken, getOnboardingRoles);
+app.get('/api/onboarding/next-resume-maker', verifyToken, getNextResumeMakerApi);
+app.get('/api/onboarding/notifications', verifyToken, getOnboardingNotifications);
+app.patch('/api/onboarding/notifications/:id/read', verifyToken, markOnboardingNotificationRead);
+app.post('/api/onboarding/jobs', verifyToken, postOnboardingJob);
+app.get('/api/onboarding/jobs/:id', verifyToken, getOnboardingJobById);
+app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
+app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
 
 //get all the jobdatabase data..
 const getJobsByClient = async (req, res) => {
