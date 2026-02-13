@@ -15,7 +15,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showAddUser, setShowAddUser] = useState(false);
-  const [newUser, setNewUser] = useState({ email: '', password: '', role: 'team_lead' });
+  const [newUser, setNewUser] = useState({ email: '', password: '', role: 'team_lead', name: '', onboardingSubRole: '', roles: [] });
   const [sessionKeys, setSessionKeys] = useState({});
   const [loadingSessionKey, setLoadingSessionKey] = useState({});
   const [passwordChangeModal, setPasswordChangeModal] = useState(null);
@@ -64,7 +64,7 @@ export default function AdminDashboard() {
       });
 
       if (response.ok) {
-        setNewUser({ email: '', password: '', role: 'team_lead' });
+        setNewUser({ email: '', password: '', role: 'team_lead', name: '', onboardingSubRole: '', roles: [] });
         setShowAddUser(false);
         fetchUsers(); // Refresh users list
       } else {
@@ -96,6 +96,8 @@ export default function AdminDashboard() {
           ...prev,
           [userEmail]: data.sessionKey
         }));
+        const days = data.validDays ?? 90;
+        alert(`Session key generated. Valid for ${days} days. Share it with the user.`);
       } else {
         const data = await response.json();
         setError(data.error || 'Failed to generate session key');
@@ -293,17 +295,67 @@ export default function AdminDashboard() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newUser.name}
+                    onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="Display name"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
                     Role
                   </label>
                   <select
                     value={newUser.role}
-                    onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
+                    onChange={(e) => {
+                      const role = e.target.value;
+                      setNewUser({
+                        ...newUser,
+                        role,
+                        onboardingSubRole: role === 'onboarding_team' ? (newUser.onboardingSubRole || 'resume_maker') : ''
+                      });
+                    }}
                     required
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   >
                     <option value="team_lead">Team Lead</option>
                     <option value="operations_intern">Operations Intern</option>
+                    <option value="onboarding_team">Onboarding Team</option>
+                    <option value="csm">CSM</option>
                   </select>
+                </div>
+                {newUser.role === 'onboarding_team' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Sub-role
+                    </label>
+                    <select
+                      value={newUser.onboardingSubRole || 'resume_maker'}
+                      onChange={(e) => setNewUser({ ...newUser, onboardingSubRole: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="resume_maker">Resume Maker</option>
+                      <option value="linkedin_specialist">LinkedIn Specialist</option>
+                      <option value="cover_letter_writer">Cover Letter Writer</option>
+                    </select>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="also-csm"
+                    checked={Array.isArray(newUser.roles) && newUser.roles.includes('csm')}
+                    onChange={(e) => setNewUser({
+                      ...newUser,
+                      roles: e.target.checked ? ['csm'] : []
+                    })}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <label htmlFor="also-csm" className="text-sm text-gray-700">Also CSM</label>
                 </div>
               </div>
               <div className="mt-4">
@@ -357,15 +409,29 @@ export default function AdminDashboard() {
                         {user.email}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                          user.role === 'admin' 
-                            ? 'bg-purple-100 text-purple-800' 
-                            : user.role === 'operations_intern'
-                            ? 'bg-orange-100 text-orange-800'
-                            : 'bg-blue-100 text-blue-800'
-                        }`}>
-                          {user.role === 'operations_intern' ? 'Operations Intern' : user.role}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                            user.role === 'admin'
+                              ? 'bg-purple-100 text-purple-800'
+                              : user.role === 'operations_intern'
+                              ? 'bg-orange-100 text-orange-800'
+                              : user.role === 'onboarding_team'
+                              ? 'bg-sky-100 text-sky-800'
+                              : user.role === 'csm'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-blue-100 text-blue-800'
+                          }`}>
+                            {user.role === 'operations_intern' ? 'Operations Intern' : user.role === 'team_lead' ? 'Team Lead' : user.role === 'onboarding_team' ? 'Onboarding' : user.role === 'csm' ? 'CSM' : user.role}
+                          </span>
+                          {user.role === 'onboarding_team' && user.onboardingSubRole && (
+                            <span className="inline-flex px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700">
+                              {user.onboardingSubRole === 'resume_maker' ? 'Resume' : user.onboardingSubRole === 'linkedin_specialist' ? 'LinkedIn' : 'Cover Letter'}
+                            </span>
+                          )}
+                          {(user.roles || []).includes('csm') && (
+                            <span className="inline-flex px-2 py-0.5 text-xs rounded bg-emerald-100 text-emerald-700">CSM</span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
@@ -377,7 +443,7 @@ export default function AdminDashboard() {
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {(user.role === 'team_lead' || user.role === 'operations_intern') ? (
+                        {['team_lead', 'operations_intern', 'onboarding_team', 'csm'].includes(user.role) ? (
                           <div className="flex items-center gap-2">
                             {sessionKeys[user.email] ? (
                               <div className="flex items-center gap-2">
@@ -416,7 +482,7 @@ export default function AdminDashboard() {
                               Change Password
                             </button>
                           )}
-                          {(user.role === 'team_lead' || user.role === 'operations_intern') && (
+                          {['team_lead', 'operations_intern', 'onboarding_team', 'csm'].includes(user.role) && (
                             <button
                               onClick={() => generateSessionKey(user.email)}
                               disabled={loadingSessionKey[user.email]}
@@ -425,7 +491,7 @@ export default function AdminDashboard() {
                               {loadingSessionKey[user.email] ? 'Generating...' : 'New Key'}
                             </button>
                           )}
-                          {(user.role === 'team_lead' || user.role === 'operations_intern') && (
+                          {['team_lead', 'operations_intern', 'onboarding_team', 'csm'].includes(user.role) && (
                             <button
                               onClick={() => deleteUser(user._id, user.email)}
                               className="text-red-600 hover:text-red-800 text-xs ml-2"

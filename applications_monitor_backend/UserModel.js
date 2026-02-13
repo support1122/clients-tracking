@@ -14,10 +14,19 @@ export const UserSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ["admin", "team_lead", "operations_intern"],
+    enum: ["admin", "team_lead", "operations_intern", "onboarding_team", "csm"],
     required: true,
     default: "team_lead"
   },
+  name: { type: String, trim: true, default: "" },
+  onboardingSubRole: {
+    type: String,
+    enum: ["resume_maker", "linkedin_specialist", "cover_letter_writer"],
+    default: null
+  },
+  roles: [{ type: String }],
+  lastResumeAssignedAt: { type: Date, default: null },
+  lastLinkedInAssignedAt: { type: Date, default: null },
   isActive: {
     type: Boolean,
     required: true,

@@ -78,7 +78,6 @@ export default function Login({ onLogin }) {
             setError(loginData.error || 'Login failed');
           }
         } else {
-          // Team lead or operations intern - proceed to session key step
           setStep(2);
         }
       } else {

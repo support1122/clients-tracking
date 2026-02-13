@@ -62,4 +62,18 @@ export const deleteFromCloudinary = async (publicId) => {
   }
 };
 
+export async function uploadOnboardingAttachment(buffer, filename, mimetype) {
+  const isImage = mimetype && mimetype.startsWith('image/');
+  return new Promise((resolve, reject) => {
+    const opts = {
+      folder: 'onboarding-attachments',
+      resource_type: isImage ? 'image' : 'raw'
+    };
+    cloudinary.uploader.upload_stream(opts, (error, result) => {
+      if (error) reject(error);
+      else resolve(result);
+    }).end(buffer);
+  });
+}
+
 export default cloudinary;
