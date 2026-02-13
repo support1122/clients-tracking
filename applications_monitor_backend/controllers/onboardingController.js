@@ -47,10 +47,7 @@ export async function getNextResumeMaker() {
 export async function getNextLinkedInMember() {
   const users = await UserModel.find({
     role: 'onboarding_team',
-    $or: [
-      { onboardingSubRole: 'linkedin_specialist' },
-      { onboardingSubRole: 'cover_letter_writer' }
-    ],
+    onboardingSubRole: 'linkedin_and_cover_letter_optimization',
     isActive: true
   })
     .sort({ lastLinkedInAssignedAt: 1 })
@@ -200,10 +197,7 @@ export async function patchOnboardingJob(req, res) {
         try {
           const linkedInTeam = await UserModel.find({
             role: 'onboarding_team',
-            $or: [
-              { onboardingSubRole: 'linkedin_specialist' },
-              { onboardingSubRole: 'cover_letter_writer' }
-            ],
+            onboardingSubRole: 'linkedin_and_cover_letter_optimization',
             isActive: true
           }).select('email name').lean();
           
@@ -362,13 +356,14 @@ export async function getOnboardingRoles(req, res) {
     const resumeMakers = users.filter(u => u.role === 'onboarding_team' && u.onboardingSubRole === 'resume_maker');
     const linkedInMembers = users.filter(u => 
       u.role === 'onboarding_team' && 
-      (u.onboardingSubRole === 'linkedin_specialist' || u.onboardingSubRole === 'cover_letter_writer')
+      u.onboardingSubRole === 'linkedin_and_cover_letter_optimization'
     );
     const teamLeads = users.filter(u => u.role === 'team_lead');
+    const admins = users.filter(u => u.role === 'admin');
     const onboardingTeam = users.filter(u => u.role === 'onboarding_team');
     const mentionableMap = new Map();
-    // Include CSMs, onboarding team, and team leads in mentionable users
-    [...csms, ...onboardingTeam, ...teamLeads].forEach(u => {
+    // Include Admins, CSMs, onboarding team, and team leads in mentionable users
+    [...admins, ...csms, ...onboardingTeam, ...teamLeads].forEach(u => {
       if (u.email) mentionableMap.set(u.email.toLowerCase(), { email: u.email, name: u.name || u.email });
     });
     const mentionableUsers = Array.from(mentionableMap.values());
@@ -377,6 +372,7 @@ export async function getOnboardingRoles(req, res) {
       resumeMakers: resumeMakers.map(u => ({ email: u.email, name: u.name || u.email })),
       linkedInMembers: linkedInMembers.map(u => ({ email: u.email, name: u.name || u.email })),
       teamLeads: teamLeads.map(u => ({ email: u.email, name: u.name || u.email })),
+      admins: admins.map(u => ({ email: u.email, name: u.name || u.email })),
       mentionableUsers
     });
   } catch (e) {

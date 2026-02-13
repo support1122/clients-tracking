@@ -339,8 +339,7 @@ export default function AdminDashboard() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     >
                       <option value="resume_maker">Resume Maker</option>
-                      <option value="linkedin_specialist">LinkedIn Specialist</option>
-                      <option value="cover_letter_writer">Cover Letter Writer</option>
+                      <option value="linkedin_and_cover_letter_optimization">LinkedIn and Cover Letter Optimization</option>
                     </select>
                   </div>
                 )}
@@ -425,7 +424,7 @@ export default function AdminDashboard() {
                           </span>
                           {user.role === 'onboarding_team' && user.onboardingSubRole && (
                             <span className="inline-flex px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700">
-                              {user.onboardingSubRole === 'resume_maker' ? 'Resume' : user.onboardingSubRole === 'linkedin_specialist' ? 'LinkedIn' : 'Cover Letter'}
+                              {user.onboardingSubRole === 'resume_maker' ? 'Resume Maker' : user.onboardingSubRole === 'linkedin_and_cover_letter_optimization' ? 'LinkedIn & Cover Letter' : ''}
                             </span>
                           )}
                           {(user.roles || []).includes('csm') && (

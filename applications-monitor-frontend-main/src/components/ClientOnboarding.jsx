@@ -38,8 +38,8 @@ function getVisibleColumns(user) {
   if (role === 'admin' || roles.includes('csm')) return ONBOARDING_STATUSES;
   if (role === 'onboarding_team') {
     if (subRole === 'resume_maker') return ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved'];
-    // LinkedIn & Cover Letter team sees all 4 statuses
-    if (subRole === 'linkedin_specialist' || subRole === 'cover_letter_writer') {
+    // LinkedIn & Cover Letter Optimization team sees all 4 statuses
+    if (subRole === 'linkedin_and_cover_letter_optimization') {
       return ['linkedin_in_progress', 'linkedin_done', 'cover_letter_in_progress', 'cover_letter_done'];
     }
   }
@@ -108,7 +108,7 @@ export default function ClientOnboarding() {
     if (userSubRole === 'resume_maker') {
       return ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved'];
     }
-    if (userSubRole === 'linkedin_specialist' || userSubRole === 'cover_letter_writer') {
+    if (userSubRole === 'linkedin_and_cover_letter_optimization') {
       return ['linkedin_in_progress', 'linkedin_done', 'cover_letter_in_progress', 'cover_letter_done'];
     }
     return [];
