@@ -91,6 +91,10 @@ export default function ClientOnboarding() {
   const [addingComment, setAddingComment] = useState(false);
   const [showAttachments, setShowAttachments] = useState(false);
   const [showMoveOptions, setShowMoveOptions] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showImportConfirmModal, setShowImportConfirmModal] = useState(false);
+  const [importingClients, setImportingClients] = useState(false);
+  const [importProgress, setImportProgress] = useState({ total: 0, imported: 0, failed: 0 });
   const notificationsPerPage = 10;
   const commentInputRef = useRef(null);
   const mentionStartRef = useRef(0);
@@ -691,6 +695,88 @@ export default function ClientOnboarding() {
       .finally(() => setClientsLoading(false));
   }, []);
 
+  const handleImportAllClients = useCallback(async () => {
+    // Check if roles exist
+    const resumeMakers = roles?.resumeMakers || [];
+    const linkedInMembers = roles?.linkedInMembers || [];
+    
+    const hasResumeMakers = resumeMakers.length > 0;
+    const hasLinkedInMembers = linkedInMembers.length > 0;
+    
+    // If no roles exist, show second confirmation
+    if (!hasResumeMakers && !hasLinkedInMembers) {
+      setShowImportModal(false);
+      setShowImportConfirmModal(true);
+      return;
+    }
+    
+    // Proceed with import
+    setShowImportModal(false);
+    setImportingClients(true);
+    setImportProgress({ total: 0, imported: 0, failed: 0 });
+    
+    try {
+      // Fetch all clients
+      const clientsRes = await fetch(`${API_BASE}/api/clients`, { headers: AUTH_HEADERS() });
+      if (!clientsRes.ok) throw new Error('Failed to fetch clients');
+      const clientsData = await clientsRes.json();
+      const allClients = clientsData.clients || [];
+      
+      // Get existing job client emails
+      const existingClientEmails = new Set((jobs || []).map((j) => (j.clientEmail || '').toLowerCase()));
+      
+      // Filter clients that don't have onboarding jobs
+      const clientsToImport = allClients.filter(
+        (c) => c.email && !existingClientEmails.has((c.email || '').toLowerCase())
+      );
+      
+      setImportProgress({ total: clientsToImport.length, imported: 0, failed: 0 });
+      
+      let imported = 0;
+      let failed = 0;
+      
+      // Import clients one by one
+      for (const client of clientsToImport) {
+        try {
+          const res = await fetch(`${API_BASE}/api/onboarding/jobs`, {
+            method: 'POST',
+            headers: AUTH_HEADERS(),
+            body: JSON.stringify({
+              clientEmail: client.email,
+              clientName: client.name || client.email,
+              planType: client.planType || 'Professional',
+              dashboardManagerName: client.dashboardTeamLeadName || ''
+            })
+          });
+          
+          if (res.ok) {
+            imported++;
+          } else {
+            failed++;
+          }
+          
+          setImportProgress({ total: clientsToImport.length, imported, failed });
+        } catch (err) {
+          failed++;
+          setImportProgress({ total: clientsToImport.length, imported, failed });
+        }
+      }
+      
+      toastUtils.success(`Import complete: ${imported} imported, ${failed} failed`);
+      await fetchJobs();
+    } catch (e) {
+      toastUtils.error(e.message || 'Failed to import clients');
+    } finally {
+      setImportingClients(false);
+      setShowImportConfirmModal(false);
+    }
+  }, [roles, jobs, fetchJobs]);
+
+  const handleImportConfirm = useCallback(() => {
+    setShowImportConfirmModal(false);
+    handleImportAllClients();
+  }, [handleImportAllClients]);
+
   const existingClientEmails = (jobs || []).map((j) => (j.clientEmail || '').toLowerCase());
   const availableClients = (clientsList || []).filter(
     (c) => c.email && !existingClientEmails.includes((c.email || '').toLowerCase())
@@ -872,15 +958,25 @@ export default function ClientOnboarding() {
             </div>
 
             {/* Add Client Button */}
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={openAddModal}
-                className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl hover:bg-primary-hover text-sm font-semibold shadow-lg shadow-orange-500/20 transition-all active:scale-95"
-              >
-                <Plus className="w-4 h-4 stroke-[3px]" />
-                <span className="tracking-wide">Add Client</span>
-              </button>
+            {(isAdmin || isTeamLead) && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowImportModal(true)}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-white text-gray-700 border-2 border-gray-200 rounded-xl hover:bg-gray-50 hover:border-gray-300 text-sm font-semibold shadow-sm transition-all active:scale-95"
+                >
+                  <Briefcase className="w-4 h-4" />
+                  <span className="tracking-wide">Import All Clients</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={openAddModal}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl hover:bg-primary-hover text-sm font-semibold shadow-lg shadow-orange-500/20 transition-all active:scale-95"
+                >
+                  <Plus className="w-4 h-4 stroke-[3px]" />
+                  <span className="tracking-wide">Add Client</span>
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -1383,6 +1479,364 @@ export default function ClientOnboarding() {
                       </button>
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Client Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setShowAddModal(false);
+          }
+        }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="px-6 py-5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-gray-900">Add Client Ticket</h2>
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                aria-label="Close modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {/* Mode Toggle */}
+              <div className="mb-6">
+                <div className="flex gap-2 bg-gray-100 p-1 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setAddMode('existing')}
+                    className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                      addMode === 'existing'
+                        ? 'bg-white text-primary shadow-sm'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    Existing Client
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAddMode('new')}
+                    className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                      addMode === 'new'
+                        ? 'bg-white text-primary shadow-sm'
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    New Client
+                  </button>
+                </div>
+              </div>
+
+              {addMode === 'existing' ? (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Select Client
+                    </label>
+                    {clientsLoading ? (
+                      <div className="flex items-center justify-center py-8">
+                        <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                      </div>
+                    ) : (
+                      <select
+                        value={selectedClientEmail}
+                        onChange={(e) => setSelectedClientEmail(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white"
+                      >
+                        <option value="">Choose a client...</option>
+                        {availableClients.map((client) => (
+                          <option key={client.email} value={client.email}>
+                            {client.name} ({client.email})
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {!clientsLoading && availableClients.length === 0 && (
+                      <p className="text-sm text-gray-500 mt-2">No available clients found. Try creating a new client instead.</p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Client Email <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={newClientEmail}
+                      onChange={(e) => setNewClientEmail(e.target.value)}
+                      placeholder="client@example.com"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Client Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={newClientName}
+                      onChange={(e) => setNewClientName(e.target.value)}
+                      placeholder="John Doe"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Plan Type
+                    </label>
+                    <select
+                      value={newPlanType}
+                      onChange={(e) => setNewPlanType(e.target.value)}
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white"
+                    >
+                      <option value="Professional">Professional</option>
+                      <option value="Executive">Executive</option>
+                      <option value="Ignite">Ignite</option>
+                      <option value="Starter">Starter</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                      Dashboard Manager Name
+                    </label>
+                    <input
+                      type="text"
+                      value={newDashboardManagerName}
+                      onChange={(e) => setNewDashboardManagerName(e.target.value)}
+                      placeholder="Manager name (optional)"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="px-5 py-2.5 text-sm font-semibold text-gray-700 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAddSubmit}
+                disabled={addSubmitting || (addMode === 'existing' && !selectedClientEmail) || (addMode === 'new' && (!newClientEmail.trim() || !newClientName.trim()))}
+                className="px-5 py-2.5 text-sm font-semibold text-white bg-primary rounded-xl hover:bg-[#c94a28] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {addSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  'Create Ticket'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import All Clients Warning Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setShowImportModal(false);
+          }
+        }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="px-6 py-5 border-b border-gray-200 bg-orange-50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center">
+                  <AlertCircle className="w-5 h-5 text-orange-600" />
+                </div>
+                <h2 className="text-xl font-bold text-gray-900">Import All Clients</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowImportModal(false)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-white transition-colors"
+                aria-label="Close modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6">
+              <div className="mb-4">
+                <p className="text-gray-700 mb-3">
+                  This will create onboarding tickets for all clients that don't already have one.
+                </p>
+                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-yellow-900 mb-1">Warning</p>
+                      <p className="text-sm text-yellow-800">
+                        {(() => {
+                          const resumeMakers = roles?.resumeMakers || [];
+                          const linkedInMembers = roles?.linkedInMembers || [];
+                          const hasResumeMakers = resumeMakers.length > 0;
+                          const hasLinkedInMembers = linkedInMembers.length > 0;
+                          
+                          if (!hasResumeMakers && !hasLinkedInMembers) {
+                            return "No Resume Maker or LinkedIn & Cover Letter Optimization users found. Jobs will be created but may not be assigned automatically.";
+                          }
+                          if (!hasResumeMakers) {
+                            return "No Resume Maker users found. Resume jobs may not be assigned automatically.";
+                          }
+                          if (!hasLinkedInMembers) {
+                            return "No LinkedIn & Cover Letter Optimization users found. LinkedIn/Cover Letter jobs may not be assigned automatically.";
+                          }
+                          return "Make sure you have users assigned to Resume Maker and LinkedIn & Cover Letter Optimization roles.";
+                        })()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowImportModal(false)}
+                className="px-5 py-2.5 text-sm font-semibold text-gray-700 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleImportAllClients}
+                className="px-5 py-2.5 text-sm font-semibold text-white bg-primary rounded-xl hover:bg-[#c94a28] transition-colors flex items-center gap-2"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Confirmation Modal (when no roles exist) */}
+      {showImportConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setShowImportConfirmModal(false);
+          }
+        }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="px-6 py-5 border-b border-gray-200 bg-red-50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                  <AlertCircle className="w-5 h-5 text-red-600" />
+                </div>
+                <h2 className="text-xl font-bold text-gray-900">Confirm Import</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowImportConfirmModal(false)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-white transition-colors"
+                aria-label="Close modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6">
+              <div className="mb-4">
+                <p className="text-gray-700 mb-3 font-semibold">
+                  Are you sure there are no users present?
+                </p>
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-red-900 mb-1">No Users Found</p>
+                      <p className="text-sm text-red-800">
+                        No Resume Maker or LinkedIn & Cover Letter Optimization users were found in the system.
+                      </p>
+                      <p className="text-sm text-red-800 mt-2">
+                        Jobs will be created but cannot be automatically assigned. Please add users with these roles before importing, or continue at your own risk.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowImportConfirmModal(false)}
+                className="px-5 py-2.5 text-sm font-semibold text-gray-700 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleImportConfirm}
+                className="px-5 py-2.5 text-sm font-semibold text-white bg-red-600 rounded-xl hover:bg-red-700 transition-colors flex items-center gap-2"
+              >
+                Yes, Continue Anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Progress Modal */}
+      {importingClients && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            {/* Modal Header */}
+            <div className="px-6 py-5 border-b border-gray-200 bg-primary/5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Loader2 className="w-5 h-5 text-primary animate-spin" />
+                <h2 className="text-xl font-bold text-gray-900">Importing Clients</h2>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6">
+              <div className="mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-gray-700">Progress</span>
+                  <span className="text-sm text-gray-500">
+                    {importProgress.imported + importProgress.failed} / {importProgress.total}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2.5 mb-4">
+                  <div
+                    className="bg-primary h-2.5 rounded-full transition-all duration-300"
+                    style={{ width: `${importProgress.total > 0 ? ((importProgress.imported + importProgress.failed) / importProgress.total) * 100 : 0}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-green-600 font-medium">✓ {importProgress.imported} imported</span>
+                  {importProgress.failed > 0 && (
+                    <span className="text-red-600 font-medium">✗ {importProgress.failed} failed</span>
+                  )}
                 </div>
               </div>
             </div>
