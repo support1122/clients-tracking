@@ -72,6 +72,8 @@ export async function createOnboardingJobPayload(payload) {
     planType: payload.planType || 'Professional',
     status: 'resume_in_progress',
     dashboardManagerName: payload.dashboardManagerName || '',
+    bachelorsStartDate: payload.bachelorsStartDate || '',
+    mastersEndDate: payload.mastersEndDate || '',
     dashboardCredentials: payload.dashboardCredentials || { username: '', password: '', loginUrl: '' },
     csmEmail: payload.csmEmail || '',
     csmName: payload.csmName || '',
@@ -131,7 +133,7 @@ function validateTransition(fromStatus, toStatus) {
 export async function patchOnboardingJob(req, res) {
   try {
     const { id } = req.params;
-    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment } = req.body || {};
+    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment, clientName } = req.body || {};
     
     // Validate ID format
     if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
@@ -248,6 +250,9 @@ export async function patchOnboardingJob(req, res) {
       job.linkedInMemberEmail = (linkedInMemberEmail || '').toLowerCase().trim();
       job.linkedInMemberName = linkedInMemberName || '';
     }
+    if (isAdmin && clientName !== undefined && typeof clientName === 'string') {
+      job.clientName = clientName.trim() || job.clientName;
+    }
 
     if (comment && typeof comment.body === 'string' && comment.body.trim()) {
       if (!job.comments) job.comments = [];
@@ -297,7 +302,7 @@ export async function patchOnboardingJob(req, res) {
 
 export async function postOnboardingJob(req, res) {
   try {
-    const { clientEmail, clientName, planType, dashboardManagerName, dashboardCredentials } = req.body || {};
+    const { clientEmail, clientName, planType, dashboardManagerName, dashboardCredentials, bachelorsStartDate, mastersEndDate } = req.body || {};
     if (!clientEmail || !clientName) {
       return res.status(400).json({ error: 'clientEmail and clientName are required' });
     }
@@ -310,6 +315,8 @@ export async function postOnboardingJob(req, res) {
       clientName,
       planType: planType || 'Professional',
       dashboardManagerName: dashboardManagerName || '',
+      bachelorsStartDate: bachelorsStartDate || '',
+      mastersEndDate: mastersEndDate || '',
       dashboardCredentials: dashboardCredentials || {}
     });
     

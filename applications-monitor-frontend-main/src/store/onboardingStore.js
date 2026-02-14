@@ -73,7 +73,14 @@ export const useOnboardingStore = create((set, get) => ({
   selectedJob: null,
   loading: false,
   roles: { csms: [], resumeMakers: [] },
-  setJobs: (jobs) => set({ jobs }),
+  setJobs: (jobsOrUpdater) =>
+    set((state) => {
+      const next =
+        typeof jobsOrUpdater === 'function'
+          ? jobsOrUpdater(state.jobs)
+          : jobsOrUpdater;
+      return { jobs: Array.isArray(next) ? next : [] };
+    }),
   setSelectedJob: (job) => set({ selectedJob: job }),
   setLoading: (loading) => set({ loading }),
   setRoles: (roles) => set({ roles }),

@@ -14,5 +14,6 @@ const onboardingNotificationSchema = new mongoose.Schema({
 
 onboardingNotificationSchema.index({ userEmail: 1, read: 1 });
 onboardingNotificationSchema.index({ userEmail: 1, createdAt: -1 });
+onboardingNotificationSchema.index({ userEmail: 1, read: 1, createdAt: -1 });
 
 export const OnboardingNotificationModel = mongoose.model('OnboardingNotification', onboardingNotificationSchema);

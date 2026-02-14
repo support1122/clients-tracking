@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   useOnboardingStore,
   ONBOARDING_STATUSES,
@@ -22,7 +22,9 @@ import {
   MoreHorizontal,
   Briefcase,
   AlertCircle,
-  ArrowUpDown
+  ArrowUpDown,
+  Search,
+  Pencil
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_BASE || '';
@@ -45,6 +47,17 @@ function getVisibleColumns(user) {
   }
   if (['team_lead', 'operations_intern'].includes(role)) return ONBOARDING_STATUSES;
   return [];
+}
+
+// Profile field display helper (read-only) - matches dashboard/profile styling
+function ProfileField({ label, value, className = '' }) {
+  const v = value != null && String(value).trim() ? String(value).trim() : null;
+  return (
+    <div className={`py-3 border-b border-slate-100 last:border-b-0 ${className}`}>
+      <span className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{label}</span>
+      <span className="text-sm font-medium text-slate-800">{v || '—'}</span>
+    </div>
+  );
 }
 
 // Get allowed statuses based on plan type
@@ -78,6 +91,8 @@ export default function ClientOnboarding() {
   const [newClientName, setNewClientName] = useState('');
   const [newPlanType, setNewPlanType] = useState('Professional');
   const [newDashboardManagerName, setNewDashboardManagerName] = useState('');
+  const [newBachelorsStartDate, setNewBachelorsStartDate] = useState('');
+  const [newMastersEndDate, setNewMastersEndDate] = useState('');
   const [addSubmitting, setAddSubmitting] = useState(false);
   const [clientsLoading, setClientsLoading] = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -95,6 +110,13 @@ export default function ClientOnboarding() {
   const [showImportConfirmModal, setShowImportConfirmModal] = useState(false);
   const [importingClients, setImportingClients] = useState(false);
   const [importProgress, setImportProgress] = useState({ total: 0, imported: 0, failed: 0 });
+  const [showClientProfile, setShowClientProfile] = useState(false);
+  const [clientProfileData, setClientProfileData] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [editingClientNameJobId, setEditingClientNameJobId] = useState(null);
+  const [editingClientNameValue, setEditingClientNameValue] = useState('');
+  const [savingClientName, setSavingClientName] = useState(false);
   const notificationsPerPage = 10;
   const commentInputRef = useRef(null);
   const mentionStartRef = useRef(0);
@@ -129,42 +151,50 @@ export default function ClientOnboarding() {
     return allowedStatuses.includes(targetStatus);
   };
 
-  const getJobsForColumn = (status) => {
-    // First, ensure all jobs are unique by _id (safety check)
+  const computeJobsForStatus = useCallback((status, deduplicatedJobs) => {
+    const baseJobs = deduplicatedJobs.filter((j) => {
+      if (j.status !== status) return false;
+      const allowedStatuses = getAllowedStatusesForPlan(j.planType);
+      return allowedStatuses.includes(status);
+    });
+
+    if (status === 'linkedin_in_progress') {
+      const linkedInJobs = deduplicatedJobs.filter((j) => {
+        if (j.status !== 'resume_approved' || !j.linkedInPhaseStarted) return false;
+        const allowedStatuses = getAllowedStatusesForPlan(j.planType);
+        return allowedStatuses.includes('linkedin_in_progress');
+      });
+      const allJobs = [...baseJobs, ...linkedInJobs];
+      return Array.from(new Map(allJobs.map((j) => [j._id, j])).values());
+    }
+
+    return baseJobs;
+  }, []);
+
+  const jobsByColumn = useMemo(() => {
     const uniqueJobsMap = new Map();
-    jobs.forEach((job) => {
+    const jobsList = Array.isArray(jobs) ? jobs : [];
+    jobsList.forEach((job) => {
       if (job._id && !uniqueJobsMap.has(job._id)) {
         uniqueJobsMap.set(job._id, job);
       }
     });
-    const deduplicatedJobs = Array.from(uniqueJobsMap.values());
-    
-    // Filter jobs by status and plan type
-    const baseJobs = deduplicatedJobs.filter((j) => {
-      if (j.status !== status) return false;
-      // Check if this status is allowed for the job's plan type
-      const allowedStatuses = getAllowedStatusesForPlan(j.planType);
-      return allowedStatuses.includes(status);
-    });
-    
-    // For LinkedIn In Progress column, also include jobs that are resume_approved but have linkedInPhaseStarted
-    if (status === 'linkedin_in_progress') {
-      const linkedInJobs = deduplicatedJobs.filter(
-        (j) => {
-          if (j.status !== 'resume_approved' || !j.linkedInPhaseStarted) return false;
-          // Check if LinkedIn is allowed for this plan
-          const allowedStatuses = getAllowedStatusesForPlan(j.planType);
-          return allowedStatuses.includes('linkedin_in_progress');
-        }
-      );
-      // Combine and deduplicate by _id (extra safety)
-      const allJobs = [...baseJobs, ...linkedInJobs];
-      const finalUnique = Array.from(new Map(allJobs.map((j) => [j._id, j])).values());
-      return finalUnique;
+    let deduplicatedJobs = Array.from(uniqueJobsMap.values());
+    const q = (searchQuery || '').trim().toLowerCase();
+    if (q) {
+      deduplicatedJobs = deduplicatedJobs.filter((job) => {
+        const name = (job.clientName || '').toLowerCase();
+        const email = (job.clientEmail || '').toLowerCase();
+        const num = String(job.jobNumber || '');
+        return name.includes(q) || email.includes(q) || num.includes(q);
+      });
     }
-    
-    return baseJobs;
-  };
+    const map = {};
+    visibleColumns.forEach((status) => {
+      map[status] = computeJobsForStatus(status, deduplicatedJobs);
+    });
+    return map;
+  }, [jobs, visibleColumns, computeJobsForStatus, searchQuery]);
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -294,6 +324,30 @@ export default function ClientOnboarding() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showMoveOptions]);
 
+  const saveClientName = useCallback(async (jobId, newName) => {
+    const trimmed = (newName || '').trim();
+    if (!trimmed || savingClientName) return;
+    setSavingClientName(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/onboarding/jobs/${jobId}`, {
+        method: 'PATCH',
+        headers: AUTH_HEADERS(),
+        body: JSON.stringify({ clientName: trimmed })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to update name');
+      setJobs((prev) => prev.map((j) => (j._id === jobId ? data.job : j)));
+      if (selectedJob?._id === jobId) setSelectedJob(data.job);
+      setEditingClientNameJobId(null);
+      setEditingClientNameValue('');
+      toastUtils.success('Name updated');
+    } catch (e) {
+      toastUtils.error(e.message || 'Failed to update name');
+    } finally {
+      setSavingClientName(false);
+    }
+  }, [savingClientName, selectedJob]);
+
   const handleCloseModal = useCallback((e) => {
     if (e) {
       e.preventDefault();
@@ -303,65 +357,102 @@ export default function ClientOnboarding() {
     setCommentText('');
     // Clear move options dropdown
     setShowMoveOptions(false);
+    // Clear client profile
+    setClientProfileData(null);
+    setShowClientProfile(false);
+    setEditingClientNameJobId(null);
+    setEditingClientNameValue('');
     // Clear the selected job using store method
     clearSelected();
     // Also set directly to ensure it's cleared immediately
     setSelectedJob(null);
   }, [setSelectedJob, clearSelected, setCommentText]);
 
+  // Fetch client profile when job is selected (for resume-making context)
+  useEffect(() => {
+    if (!selectedJob?.clientEmail) {
+      setClientProfileData(null);
+      return;
+    }
+    let cancelled = false;
+    setProfileLoading(true);
+    setClientProfileData(null);
+    fetch(`${API_BASE}/api/onboarding/client-profile/${encodeURIComponent(selectedJob.clientEmail)}`, {
+      headers: AUTH_HEADERS()
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.userProfile) {
+          setClientProfileData(data.userProfile);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setClientProfileData(null);
+      })
+      .finally(() => {
+        if (!cancelled) setProfileLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [selectedJob?.clientEmail]);
+
   const handleMove = async (jobId, newStatus, skipRoleCheck = false) => {
-    // Prevent duplicate moves
     if (movingStatus) {
       toastUtils.error('Please wait, move in progress...');
       return;
     }
-    
-    // Find the job to check plan type
+
     const job = jobs.find((j) => j._id === jobId);
     if (!job) {
       toastUtils.error('Job not found');
       return;
     }
-    
-    // Check role-based movement restrictions (unless skipped for admin/CSM/TeamLead)
+
     if (!skipRoleCheck && !canUserMoveToStatus(newStatus)) {
       const allowedStatuses = getAllowedStatusesForUser();
       toastUtils.error(`You don't have permission to move to "${STATUS_LABELS[newStatus] || newStatus}". Your role only allows: ${allowedStatuses.map(s => STATUS_LABELS[s] || s).join(', ')}`);
       return;
     }
-    
-    // Check if the status is allowed for this plan type
+
     const allowedStatuses = getAllowedStatusesForPlan(job.planType);
     if (!allowedStatuses.includes(newStatus)) {
       const planName = job.planType || 'this plan';
       toastUtils.error(`This plan doesn't support moving to "${STATUS_LABELS[newStatus] || newStatus}". ${planName === 'executive' ? 'Executive plan' : planName === 'professional' ? 'Professional plan' : 'This plan'} only supports: ${allowedStatuses.map(s => STATUS_LABELS[s] || s).join(', ')}`);
       return;
     }
-    
+
+    const originalJob = { ...job };
     setMovingStatus(jobId);
-    
+
+    // Optimistic update: move card in UI immediately (no loading screen)
+    setJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, status: newStatus } : j)));
+    if (selectedJob?._id === jobId) {
+      setSelectedJob((prev) => (prev ? { ...prev, status: newStatus } : null));
+    }
+
     try {
       const res = await fetch(`${API_BASE}/api/onboarding/jobs/${jobId}`, {
         method: 'PATCH',
         headers: AUTH_HEADERS(),
         body: JSON.stringify({ status: newStatus })
       });
-      
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.error || 'Move failed');
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Move failed');
+
+      // Server success: replace job with server response (moveHistory, etc.)
+      setJobs((prev) => prev.map((j) => (j._id === jobId ? data.job : j)));
+      if (selectedJob?._id === jobId) {
+        setSelectedJob(data.job);
       }
-      
-      // Refetch all jobs to ensure consistency (prevents duplicates and ensures accurate state)
-      // fetchJobs will automatically update selectedJob if it matches the moved job
-      await fetchJobs();
-      
       toastUtils.success(`Moved to ${STATUS_LABELS[newStatus] || newStatus}`);
     } catch (e) {
       console.error('Move error:', e);
       toastUtils.error(e.message || 'Failed to move card');
-      // Refetch on error to ensure we have correct state
-      await fetchJobs();
+      // Revert on failure
+      setJobs((prev) => prev.map((j) => (j._id === jobId ? originalJob : j)));
+      if (selectedJob?._id === jobId) {
+        setSelectedJob(originalJob);
+      }
     } finally {
       setMovingStatus(null);
     }
@@ -617,11 +708,18 @@ export default function ClientOnboarding() {
     const file = e?.target?.files?.[0];
     if (!file || !selectedJob) return;
     setUploadingAttachment(true);
-    const microserviceUrl = import.meta.env.VITE_MICROSERVICE_URL || '';
+    // Onboarding attachments are uploaded to the flashfire dashboard backend (R2/Cloudinary)
+    const uploadBase = import.meta.env.VITE_MICROSERVICE_URL || import.meta.env.VITE_FLASHFIRE_API_BASE_URL || '';
+    if (!uploadBase) {
+      toastUtils.error('Upload API not configured (set VITE_MICROSERVICE_URL or VITE_FLASHFIRE_API_BASE_URL)');
+      setUploadingAttachment(false);
+      e.target.value = '';
+      return;
+    }
     try {
       const form = new FormData();
       form.append('file', file);
-      const uploadRes = await fetch(`${microserviceUrl}/api/upload/onboarding-attachment`, {
+      const uploadRes = await fetch(`${uploadBase.replace(/\/$/, '')}/api/upload/onboarding-attachment`, {
         method: 'POST',
         body: form
       });
@@ -685,6 +783,8 @@ export default function ClientOnboarding() {
     setNewClientName('');
     setNewPlanType('Professional');
     setNewDashboardManagerName('');
+    setNewBachelorsStartDate('');
+    setNewMastersEndDate('');
     setAddMode('existing');
     setClientsLoading(true);
     setClientsList([]);
@@ -809,15 +909,20 @@ export default function ClientOnboarding() {
     }
     setAddSubmitting(true);
     try {
+      const payload = {
+        clientEmail,
+        clientName,
+        planType,
+        dashboardManagerName
+      };
+      if (addMode === 'new') {
+        payload.bachelorsStartDate = (newBachelorsStartDate || '').trim();
+        payload.mastersEndDate = (newMastersEndDate || '').trim();
+      }
       const res = await fetch(`${API_BASE}/api/onboarding/jobs`, {
         method: 'POST',
         headers: AUTH_HEADERS(),
-        body: JSON.stringify({
-          clientEmail,
-          clientName,
-          planType,
-          dashboardManagerName
-        })
+        body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -887,6 +992,18 @@ export default function ClientOnboarding() {
           </div>
 
           <div className="flex items-center gap-4">
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search by client name, email, or job #..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10 pr-4 py-2 w-72 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white shadow-sm text-sm"
+              />
+            </div>
+
             {/* Notification Bell */}
             <div className="relative">
               <button
@@ -991,7 +1108,7 @@ export default function ClientOnboarding() {
         ) : (
           <div className="flex gap-6 p-6 min-w-max h-full">
             {visibleColumns.map((status) => {
-              const columnJobs = getJobsForColumn(status);
+              const columnJobs = jobsByColumn[status] || [];
               return (
                 <div key={status} className="w-80 flex-shrink-0 flex flex-col h-full max-h-full">
                   {/* Column Header */}
@@ -1026,7 +1143,29 @@ export default function ClientOnboarding() {
                             <button className="text-gray-400 hover:text-primary"><MoreHorizontal className="w-4 h-4" /></button>
                           </div>
                         </div>
-                        <h4 className="font-bold text-gray-900 text-sm leading-snug mb-1">{job.clientName}</h4>
+                        {editingClientNameJobId === job._id && isAdmin ? (
+                          <input
+                            value={editingClientNameValue}
+                            onChange={(e) => setEditingClientNameValue(e.target.value)}
+                            onBlur={() => saveClientName(job._id, editingClientNameValue)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') saveClientName(job._id, editingClientNameValue);
+                              if (e.key === 'Escape') { setEditingClientNameJobId(null); setEditingClientNameValue(''); }
+                              e.stopPropagation();
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full text-sm font-bold text-gray-900 bg-white border border-primary rounded px-2 py-0.5 mb-1"
+                            autoFocus
+                          />
+                        ) : (
+                          <h4
+                            className="font-bold text-gray-900 text-sm leading-snug mb-1 cursor-default"
+                            onClick={(e) => { if (isAdmin) { e.stopPropagation(); setEditingClientNameJobId(job._id); setEditingClientNameValue(job.clientName || ''); } }}
+                            title={isAdmin ? 'Click to edit name' : undefined}
+                          >
+                            {job.clientName}
+                          </h4>
+                        )}
                         <p className="text-xs text-gray-500 mb-3 font-medium">{job.planType || 'Professional'}</p>
 
                         <div className="flex items-center gap-2 mt-auto pt-3 border-t border-gray-50 flex-wrap">
@@ -1080,7 +1219,27 @@ export default function ClientOnboarding() {
             <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-start justify-between sticky top-0 z-10">
               <div>
                 <div className="flex items-center gap-3 mb-1">
-                  <h2 className="text-2xl font-bold text-gray-900">{selectedJob.clientName}</h2>
+                  {editingClientNameJobId === selectedJob._id && isAdmin ? (
+                    <input
+                      value={editingClientNameValue}
+                      onChange={(e) => setEditingClientNameValue(e.target.value)}
+                      onBlur={() => saveClientName(selectedJob._id, editingClientNameValue)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveClientName(selectedJob._id, editingClientNameValue);
+                        if (e.key === 'Escape') { setEditingClientNameJobId(null); setEditingClientNameValue(''); }
+                      }}
+                      className="text-2xl font-bold text-gray-900 bg-white border border-primary rounded px-2 py-1 min-w-[120px]"
+                      autoFocus
+                    />
+                  ) : (
+                    <h2
+                      className="text-2xl font-bold text-gray-900 cursor-default"
+                      onClick={() => isAdmin && (setEditingClientNameJobId(selectedJob._id), setEditingClientNameValue(selectedJob.clientName || ''))}
+                      title={isAdmin ? 'Click to edit name' : undefined}
+                    >
+                      {selectedJob.clientName}
+                    </h2>
+                  )}
                   <span className="text-sm font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-md border border-gray-200">#{selectedJob.jobNumber}</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1200,21 +1359,121 @@ export default function ClientOnboarding() {
                   </div>
                 </div>
 
+                {/* Client Profile (from /profile - for resume-making) */}
+                <div className="mb-6">
+                  <button
+                    onClick={() => setShowClientProfile(!showClientProfile)}
+                    className="w-full flex items-center justify-between py-3 px-4 text-left rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 hover:border-slate-300 transition-colors shadow-sm"
+                  >
+                    <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 flex-1 min-w-0">
+                      <User className="w-4 h-4 text-primary flex-shrink-0" />
+                      <span className="flex-1 min-w-0">Client Profile</span>
+                      {clientProfileData && (
+                        <span className="text-[10px] font-medium text-slate-500 bg-slate-200 px-2 py-0.5 rounded-md flex-shrink-0">
+                          {clientProfileData.firstName || clientProfileData.lastName ? 'Available' : 'Loaded'}
+                        </span>
+                      )}
+                      {profileLoading && (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-primary flex-shrink-0" />
+                      )}
+                    </h3>
+                    <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform duration-200 flex-shrink-0 ml-2 ${showClientProfile ? 'rotate-90' : ''}`} />
+                  </button>
+                  {showClientProfile && (
+                    <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden mt-2">
+                      {profileLoading ? (
+                        <div className="p-12 flex flex-col items-center justify-center gap-3">
+                          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                          <p className="text-sm text-slate-500">Loading profile...</p>
+                        </div>
+                      ) : !clientProfileData ? (
+                        <div className="p-8 text-center">
+                          <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
+                            <User className="w-6 h-6 text-slate-400" />
+                          </div>
+                          <p className="text-sm text-slate-600 font-medium">Profile not found</p>
+                          <p className="text-xs text-slate-400 mt-1">Client may not have completed their profile yet.</p>
+                        </div>
+                      ) : (
+                        <div className="max-h-[420px] overflow-y-auto">
+                          {/* Personal */}
+                          <div className="p-5">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Personal</h4>
+                            <div className="grid grid-cols-2 gap-x-8 gap-y-0">
+                              <ProfileField label="First Name" value={clientProfileData.firstName} />
+                              <ProfileField label="Last Name" value={clientProfileData.lastName} />
+                              <ProfileField label="Contact" value={clientProfileData.contactNumber} />
+                              <ProfileField label="DOB" value={clientProfileData.dob} />
+                              <ProfileField label="Visa Status" value={clientProfileData.visaStatus} className="col-span-2" />
+                              <ProfileField label="Address" value={clientProfileData.address} className="col-span-2" />
+                            </div>
+                          </div>
+                          {/* Education */}
+                          <div className="p-5 border-t border-slate-100">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Education</h4>
+                            <div className="grid grid-cols-2 gap-x-8 gap-y-0">
+                              <ProfileField label="Bachelor's" value={clientProfileData.bachelorsUniDegree} className="col-span-2" />
+                              <ProfileField label="Bachelor's GPA" value={clientProfileData.bachelorsGPA} />
+                              <ProfileField label="Bachelor's End" value={clientProfileData.bachelorsEndDate || clientProfileData.bachelorsGradMonthYear} />
+                              <ProfileField label="Master's" value={clientProfileData.mastersUniDegree} className="col-span-2" />
+                              <ProfileField label="Master's GPA" value={clientProfileData.mastersGPA} />
+                            </div>
+                          </div>
+                          {/* Professional */}
+                          <div className="p-5 border-t border-slate-100">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Professional</h4>
+                            <div className="grid grid-cols-2 gap-x-8 gap-y-0">
+                              <ProfileField label="Preferred Roles" value={Array.isArray(clientProfileData.preferredRoles) ? clientProfileData.preferredRoles.join(', ') : clientProfileData.preferredRoles} className="col-span-2" />
+                              <ProfileField label="Experience Level" value={clientProfileData.experienceLevel} />
+                              <ProfileField label="Expected Salary" value={clientProfileData.expectedSalaryRange} />
+                              <ProfileField label="Preferred Locations" value={Array.isArray(clientProfileData.preferredLocations) ? clientProfileData.preferredLocations.join(', ') : clientProfileData.preferredLocations} className="col-span-2" />
+                              <ProfileField label="Target Companies" value={Array.isArray(clientProfileData.targetCompanies) ? clientProfileData.targetCompanies.join(', ') : clientProfileData.targetCompanies} className="col-span-2" />
+                              <ProfileField label="Reason for Leaving" value={clientProfileData.reasonForLeaving} className="col-span-2" />
+                            </div>
+                          </div>
+                          {/* Links */}
+                          <div className="p-5 border-t border-slate-100">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Links & Documents</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {clientProfileData.linkedinUrl && (
+                                <a href={clientProfileData.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">LinkedIn</a>
+                              )}
+                              {clientProfileData.githubUrl && (
+                                <a href={clientProfileData.githubUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">GitHub</a>
+                              )}
+                              {clientProfileData.resumeUrl && (
+                                <a href={clientProfileData.resumeUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">Resume</a>
+                              )}
+                              {clientProfileData.coverLetterUrl && (
+                                <a href={clientProfileData.coverLetterUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">Cover Letter</a>
+                              )}
+                              {!clientProfileData.linkedinUrl && !clientProfileData.githubUrl && !clientProfileData.resumeUrl && !clientProfileData.coverLetterUrl && (
+                                <span className="text-sm text-slate-400">No links</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* Attachments */}
                 <div className="mb-6">
                   <button
                     onClick={() => setShowAttachments(!showAttachments)}
-                    className="w-full flex items-center justify-between mb-3 text-left"
+                    className="w-full flex items-center justify-between py-3 px-4 text-left rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 hover:border-slate-300 transition-colors shadow-sm"
                   >
-                    <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                      <Paperclip className="w-4 h-4 text-gray-400" /> Attachments
+                    <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 flex-1 min-w-0">
+                      <Paperclip className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                      <span className="flex-1 min-w-0">Attachments</span>
                       {(selectedJob.attachments || []).length > 0 && (
-                        <span className="text-xs text-gray-500 bg-gray-200 px-2 py-0.5 rounded-full">
+                        <span className="text-xs text-gray-500 bg-slate-200 px-2 py-0.5 rounded-full flex-shrink-0">
                           {(selectedJob.attachments || []).length}
                         </span>
                       )}
                     </h3>
-                    <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform ${showAttachments ? 'rotate-90' : ''}`} />
+                    <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform duration-200 flex-shrink-0 ml-2 ${showAttachments ? 'rotate-90' : ''}`} />
                   </button>
                   {showAttachments && (
                     <>
@@ -1268,24 +1527,24 @@ export default function ClientOnboarding() {
                 </div>
 
                 {/* Move History Section */}
-                <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
+                <div className="rounded-xl border border-slate-200 overflow-hidden">
                   <button
                     onClick={() => setShowMoveHistory(!showMoveHistory)}
-                    className="w-full flex items-center justify-between mb-4 text-left"
+                    className="w-full flex items-center justify-between py-3 px-4 text-left bg-slate-50/80 hover:bg-slate-100/80 hover:border-slate-300 border-b border-transparent transition-colors"
                   >
-                    <div className="flex items-center gap-2">
-                      <History className="w-4 h-4 text-gray-500" />
-                      <h3 className="text-sm font-bold text-gray-900">Move History</h3>
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <History className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                      <h3 className="text-sm font-bold text-slate-800 flex-1 min-w-0">Move History</h3>
                       {(selectedJob.moveHistory || []).length > 0 && (
-                        <span className="text-xs text-gray-500 bg-gray-200 px-2 py-0.5 rounded-full">
+                        <span className="text-xs text-gray-500 bg-slate-200 px-2 py-0.5 rounded-full flex-shrink-0">
                           {(selectedJob.moveHistory || []).length}
                         </span>
                       )}
                     </div>
-                    <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform ${showMoveHistory ? 'rotate-90' : ''}`} />
+                    <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform duration-200 flex-shrink-0 ml-2 ${showMoveHistory ? 'rotate-90' : ''}`} />
                   </button>
                   {showMoveHistory && (
-                    <div className="space-y-3 max-h-[300px] overflow-y-auto">
+                    <div className="space-y-3 max-h-[300px] overflow-y-auto px-4 py-3 bg-white border-t border-slate-100">
                       {(selectedJob.moveHistory || []).length === 0 ? (
                         <p className="text-xs text-gray-400 italic py-2 text-center">No move history</p>
                       ) : (
@@ -1616,8 +1875,34 @@ export default function ClientOnboarding() {
                       value={newDashboardManagerName}
                       onChange={(e) => setNewDashboardManagerName(e.target.value)}
                       placeholder="Manager name (optional)"
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white"
                     />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        Bachelor&apos;s Start Date
+                      </label>
+                      <input
+                        type="date"
+                        value={newBachelorsStartDate}
+                        onChange={(e) => setNewBachelorsStartDate(e.target.value)}
+                        placeholder="YYYY-MM-DD"
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white text-gray-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">
+                        Master&apos;s End Date
+                      </label>
+                      <input
+                        type="date"
+                        value={newMastersEndDate}
+                        onChange={(e) => setNewMastersEndDate(e.target.value)}
+                        placeholder="YYYY-MM-DD"
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white text-gray-900"
+                      />
+                    </div>
                   </div>
                 </div>
               )}

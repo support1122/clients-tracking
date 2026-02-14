@@ -3446,6 +3446,24 @@ app.get('/api/onboarding/jobs/:id', verifyToken, getOnboardingJobById);
 app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
 app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
 
+// Proxy to fetch client profile from flashfire (for resume-making context in tickets)
+app.get('/api/onboarding/client-profile/:email', verifyToken, async (req, res) => {
+  try {
+    const { email } = req.params;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+    const url = `${FLASHFIRE_API_BASE_URL}/get-profile?email=${encodeURIComponent(email)}`;
+    const response = await fetch(url);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+    res.status(200).json(data);
+  } catch (e) {
+    console.error('getClientProfile proxy:', e);
+    res.status(500).json({ error: e.message || 'Failed to fetch client profile' });
+  }
+});
+
 //get all the jobdatabase data..
 const getJobsByClient = async (req, res) => {
   try {

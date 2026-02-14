@@ -50,6 +50,8 @@ const onboardingJobSchema = new mongoose.Schema({
   linkedInMemberEmail: { type: String, default: '', trim: true, lowercase: true },
   linkedInMemberName: { type: String, default: '', trim: true },
   dashboardManagerName: { type: String, default: '', trim: true },
+  bachelorsStartDate: { type: String, default: '', trim: true },
+  mastersEndDate: { type: String, default: '', trim: true },
   dashboardCredentials: {
     username: { type: String, default: '' },
     password: { type: String, default: '' },
