@@ -33,6 +33,7 @@ const moveHistorySchema = new mongoose.Schema({
 const attachmentSchema = new mongoose.Schema({
   url: { type: String, required: true },
   filename: { type: String, required: true },
+  name: { type: String, default: '' }, // Display name (like Notion)
   uploadedAt: { type: Date, default: Date.now },
   uploadedBy: { type: String, default: '' }
 }, { _id: false });

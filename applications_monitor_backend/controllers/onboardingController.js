@@ -432,7 +432,7 @@ export async function markOnboardingNotificationRead(req, res) {
 export async function postOnboardingJobAttachment(req, res) {
   try {
     const { id } = req.params;
-    const { url, filename } = req.body || {};
+    const { url, filename, name } = req.body || {};
     if (!url || !filename) return res.status(400).json({ error: 'url and filename are required' });
     const job = await OnboardingJobModel.findById(id);
     if (!job) return res.status(404).json({ error: 'Onboarding job not found' });
@@ -440,6 +440,7 @@ export async function postOnboardingJobAttachment(req, res) {
     job.attachments.push({
       url,
       filename,
+      name: (name && String(name).trim()) || filename,
       uploadedAt: new Date(),
       uploadedBy: req.user?.email || ''
     });
