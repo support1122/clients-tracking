@@ -42,7 +42,7 @@ export const VALID_NEXT_STATUSES = {
   completed: []
 };
 
-// Plan-based status visibility
+// Plan-based status visibility (Applications + Completed available for all plans)
 export const PLAN_STATUSES = {
   executive: ONBOARDING_STATUSES, // All statuses
   professional: [
@@ -51,14 +51,20 @@ export const PLAN_STATUSES = {
     'resume_in_review',
     'resume_approved',
     'linkedin_in_progress',
-    'linkedin_done'
-  ], // Resume + LinkedIn only
+    'linkedin_done',
+    'applications_ready',
+    'applications_in_progress',
+    'completed'
+  ],
   default: [
     'resume_in_progress',
     'resume_draft_done',
     'resume_in_review',
-    'resume_approved'
-  ] // Resume only
+    'resume_approved',
+    'applications_ready',
+    'applications_in_progress',
+    'completed'
+  ]
 };
 
 export const PHASE_GROUPS = [
