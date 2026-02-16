@@ -179,7 +179,7 @@ const JobCard = React.memo(({
             </button>
             {moveDropdownOpen && (
               <div
-                className="absolute right-0 bottom-full mb-1 z-50 min-w-[180px] py-1 bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden"
+                className="absolute right-0 bottom-full mb-1 z-50 min-w-[200px] max-h-[280px] overflow-y-auto py-1 bg-white rounded-xl border border-gray-200 shadow-lg"
                 onClick={(e) => e.stopPropagation()}
               >
                 {moveToOptions.map((status) => (
@@ -473,6 +473,15 @@ export default function ClientOnboarding() {
       .forEach((n) => { if (n._id) markNotificationRead(n._id); });
   }, [selectedJob?._id, notifications, markNotificationRead]);
 
+  // Collapse modal sections when opening a (possibly different) ticket so UI is fast and not showing stale data
+  useEffect(() => {
+    if (!selectedJob?._id) return;
+    setShowClientProfile(false);
+    setShowAttachments(false);
+    setShowMoveHistory(false);
+    setClientProfileData(null);
+  }, [selectedJob?._id]);
+
   // Close move options dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -528,10 +537,10 @@ export default function ClientOnboarding() {
     setSelectedJob(null);
   }, [setSelectedJob, clearSelected, setCommentText]);
 
-  // Fetch client profile when job is selected (for resume-making context)
+  // Fetch client profile only when user expands the Client Profile section (avoids lag on modal open)
   useEffect(() => {
-    if (!selectedJob?.clientEmail) {
-      setClientProfileData(null);
+    if (!selectedJob?.clientEmail || !showClientProfile) {
+      if (!selectedJob?.clientEmail) setClientProfileData(null);
       return;
     }
     let cancelled = false;
@@ -542,8 +551,9 @@ export default function ClientOnboarding() {
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (!cancelled && data?.userProfile) {
-          setClientProfileData(data.userProfile);
+        if (!cancelled) {
+          const profile = data?.userProfile ?? data;
+          setClientProfileData(profile && typeof profile === 'object' ? profile : null);
         }
       })
       .catch(() => {
@@ -553,7 +563,7 @@ export default function ClientOnboarding() {
         if (!cancelled) setProfileLoading(false);
       });
     return () => { cancelled = true; };
-  }, [selectedJob?.clientEmail]);
+  }, [selectedJob?.clientEmail, showClientProfile]);
 
   const handleMove = useCallback(async (jobId, newStatus, skipRoleCheck = false) => {
     if (movingStatus) {
@@ -943,12 +953,16 @@ export default function ClientOnboarding() {
     }
   };
 
-  const openAddAttachmentModal = () => {
+  const openAddAttachmentModal = useCallback((e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     setAttachmentNameInput('');
     setAttachmentFilePending(null);
     setShowAddAttachmentModal(true);
     setTimeout(() => attachmentNameInputRef.current?.focus?.(), 100);
-  };
+  }, []);
 
   const handleAttachmentFileSelect = (e) => {
     const file = e?.target?.files?.[0];
@@ -966,35 +980,46 @@ export default function ClientOnboarding() {
       toastUtils.error('Please select a file');
       return;
     }
+    const base = (API_BASE || '').replace(/\/$/, '');
+    if (!base) {
+      toastUtils.error('API URL not configured. Set VITE_BASE for the backend.');
+      return;
+    }
     setUploadingAttachment(true);
     try {
       const form = new FormData();
       form.append('file', file);
-      const uploadRes = await fetch(`${API_BASE.replace(/\/$/, '')}/api/upload/onboarding-attachment`, {
+      const uploadRes = await fetch(`${base}/api/upload/onboarding-attachment`, {
         method: 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('authToken') || ''}` },
         body: form
       });
+      const uploadData = await uploadRes.json().catch(() => ({}));
       if (!uploadRes.ok) {
-        const errData = await uploadRes.json().catch(() => ({}));
-        throw new Error(errData.message || 'Upload failed');
+        throw new Error(uploadData.message || uploadData.error || 'Upload failed');
       }
-      const { url, filename: uploadedFilename } = await uploadRes.json();
-      const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}/attachments`, {
+      const url = uploadData.url;
+      const uploadedFilename = uploadData.filename || file.name;
+      if (!url) {
+        throw new Error('Server did not return file URL');
+      }
+      const res = await fetch(`${base}/api/onboarding/jobs/${selectedJob._id}/attachments`, {
         method: 'POST',
         headers: AUTH_HEADERS(),
-        body: JSON.stringify({ url, filename: uploadedFilename || file.name, name })
+        body: JSON.stringify({ url, filename: uploadedFilename, name })
       });
-      if (!res.ok) throw new Error('Failed to save attachment');
-      const data = await res.json();
-      const updated = { ...selectedJob, attachments: [...(selectedJob.attachments || []), data.attachment] };
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to save attachment');
+      const attachment = data.attachment || { url, filename: uploadedFilename, name };
+      const updated = { ...selectedJob, attachments: [...(selectedJob.attachments || []), attachment] };
       setSelectedJob(updated);
-      setJobs(jobs.map((j) => (j._id === selectedJob._id ? updated : j)));
+      setJobs((prev) => prev.map((j) => (j._id === selectedJob._id ? updated : j)));
       setShowAddAttachmentModal(false);
       setAttachmentNameInput('');
       setAttachmentFilePending(null);
       toastUtils.success('Attachment uploaded');
     } catch (err) {
-      toastUtils.error(err.message || 'Upload failed');
+      toastUtils.error(err?.message || 'Upload failed');
     } finally {
       setUploadingAttachment(false);
     }
@@ -1819,7 +1844,11 @@ export default function ClientOnboarding() {
                       </div>
                       <button
                         type="button"
-                        onClick={openAddAttachmentModal}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          openAddAttachmentModal(e);
+                        }}
                         disabled={uploadingAttachment}
                         className="inline-flex items-center gap-2 px-4 py-2 bg-gray-50 text-gray-700 rounded-lg border border-gray-200 hover:bg-white hover:border-gray-300 transition-all cursor-pointer text-sm font-medium shadow-sm disabled:opacity-60"
                       >
@@ -2049,9 +2078,9 @@ export default function ClientOnboarding() {
         </div>
       )}
 
-      {/* Add Attachment Modal (Notion-style: ask for name before upload) */}
+      {/* Add Attachment Modal - above Detail Modal (z-[100]) so it appears on top */}
       {showAddAttachmentModal && selectedJob && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
           if (e.target === e.currentTarget && !uploadingAttachment) {
             setShowAddAttachmentModal(false);
             setAttachmentNameInput('');

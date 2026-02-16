@@ -157,8 +157,8 @@ export async function patchOnboardingJob(req, res) {
       // Plan-based validation
       const planType = (job.planType || 'default').toLowerCase();
       const executiveStatuses = ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved', 'linkedin_in_progress', 'linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress', 'completed'];
-      const professionalStatuses = ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved', 'linkedin_in_progress', 'linkedin_done'];
-      const defaultStatuses = ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved'];
+      const professionalStatuses = ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved', 'linkedin_in_progress', 'linkedin_done', 'applications_ready', 'applications_in_progress', 'completed'];
+      const defaultStatuses = ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved', 'applications_ready', 'applications_in_progress', 'completed'];
       
       const allowedStatusesForPlan = planType === 'executive' ? executiveStatuses : (planType === 'professional' ? professionalStatuses : defaultStatuses);
       
