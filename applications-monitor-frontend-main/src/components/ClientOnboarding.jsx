@@ -104,6 +104,17 @@ const JobCard = React.memo(({
   const allowed = getAllowedStatusesForPlan(job.planType);
   const moveToOptions = (visibleColumns || []).filter((s) => allowed.includes(s) && s !== job.status);
 
+  // Determine background color based on client status and pause state
+  const getCardBackgroundColor = () => {
+    if (job.clientStatus === 'inactive') {
+      return 'bg-red-50 border-red-200';
+    }
+    if (job.clientIsPaused) {
+      return 'bg-yellow-50 border-yellow-200';
+    }
+    return 'bg-white border-transparent';
+  };
+
   return (
     <div
       draggable
@@ -116,7 +127,7 @@ const JobCard = React.memo(({
       onTouchEnd={onLongPressEnd}
       onTouchCancel={onLongPressEnd}
       onClick={() => onCardClick(job)}
-      className={`group bg-white rounded-xl p-4 border border-transparent shadow-sm hover:shadow-md hover:border-orange-100 transition-[transform,opacity,box-shadow,border-color] duration-200 ease-out cursor-grab active:cursor-grabbing relative ${isDragging ? 'opacity-50 scale-[0.98] shadow-lg ring-2 ring-primary/20 rotate-1' : 'hover:scale-[1.01]'}`}
+      className={`group ${getCardBackgroundColor()} rounded-xl p-4 border shadow-sm hover:shadow-md hover:border-orange-100 transition-[transform,opacity,box-shadow,border-color] duration-200 ease-out cursor-grab active:cursor-grabbing relative ${isDragging ? 'opacity-50 scale-[0.98] shadow-lg ring-2 ring-primary/20 rotate-1' : 'hover:scale-[1.01]'}`}
     >
       <div className="flex items-start justify-between mb-2">
         <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
@@ -209,6 +220,8 @@ const JobCard = React.memo(({
     prevProps.job.linkedInMemberName === nextProps.job.linkedInMemberName &&
     prevProps.job.planType === nextProps.job.planType &&
     prevProps.job.jobNumber === nextProps.job.jobNumber &&
+    prevProps.job.clientStatus === nextProps.job.clientStatus &&
+    prevProps.job.clientIsPaused === nextProps.job.clientIsPaused &&
     prevProps.draggedJobId === nextProps.draggedJobId &&
     prevProps.editingClientNameJobId === nextProps.editingClientNameJobId &&
     prevProps.editingClientNameValue === nextProps.editingClientNameValue &&

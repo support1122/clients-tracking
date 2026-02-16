@@ -2,6 +2,7 @@ import { OnboardingJobModel, ONBOARDING_STATUSES_LIST } from '../OnboardingJobMo
 import { OnboardingJobCounterModel } from '../OnboardingJobCounterModel.js';
 import { OnboardingNotificationModel } from '../OnboardingNotificationModel.js';
 import { UserModel } from '../UserModel.js';
+import { ClientModel } from '../ClientModel.js';
 
 const VALID_TRANSITIONS = {
   resume_in_progress: ['resume_draft_done'],
@@ -95,13 +96,40 @@ export async function listOnboardingJobs(req, res) {
     const jobs = await OnboardingJobModel.find(filter)
       .sort({ jobNumber: 1 })
       .lean();
+    
+    // Fetch client status and isPaused for all unique client emails
+    const clientEmails = [...new Set(jobs.map(job => (job.clientEmail || '').toLowerCase()).filter(Boolean))];
+    const clients = await ClientModel.find({ email: { $in: clientEmails } })
+      .select('email status isPaused')
+      .lean();
+    
+    const clientStatusMap = new Map();
+    clients.forEach(client => {
+      clientStatusMap.set(client.email.toLowerCase(), {
+        status: client.status || 'active',
+        isPaused: client.isPaused || false
+      });
+    });
+    
     const maskCredentials = (job) => {
       if (!job.dashboardCredentials) return job;
       const creds = { ...job.dashboardCredentials };
       if (creds.password) creds.password = '********';
       return { ...job, dashboardCredentials: creds };
     };
-    res.status(200).json({ jobs: jobs.map(maskCredentials) });
+    
+    // Enrich jobs with client status and isPaused
+    const enrichedJobs = jobs.map(job => {
+      const clientEmail = (job.clientEmail || '').toLowerCase();
+      const clientInfo = clientStatusMap.get(clientEmail) || { status: 'active', isPaused: false };
+      return {
+        ...maskCredentials(job),
+        clientStatus: clientInfo.status,
+        clientIsPaused: clientInfo.isPaused
+      };
+    });
+    
+    res.status(200).json({ jobs: enrichedJobs });
   } catch (e) {
     console.error('listOnboardingJobs:', e);
     res.status(500).json({ error: e.message || 'Failed to list onboarding jobs' });
@@ -117,6 +145,25 @@ export async function getOnboardingJobById(req, res) {
     if (!canSeeCredentials && job.dashboardCredentials?.password) {
       job.dashboardCredentials = { ...job.dashboardCredentials, password: '********' };
     }
+    
+    // Fetch client status and isPaused
+    const clientEmail = (job.clientEmail || '').toLowerCase();
+    if (clientEmail) {
+      const client = await ClientModel.findOne({ email: clientEmail })
+        .select('status isPaused')
+        .lean();
+      if (client) {
+        job.clientStatus = client.status || 'active';
+        job.clientIsPaused = client.isPaused || false;
+      } else {
+        job.clientStatus = 'active';
+        job.clientIsPaused = false;
+      }
+    } else {
+      job.clientStatus = 'active';
+      job.clientIsPaused = false;
+    }
+    
     res.status(200).json({ job });
   } catch (e) {
     console.error('getOnboardingJobById:', e);
@@ -293,6 +340,25 @@ export async function patchOnboardingJob(req, res) {
     }
 
     const updated = await OnboardingJobModel.findById(id).lean();
+    
+    // Fetch client status and isPaused
+    const clientEmail = (updated?.clientEmail || '').toLowerCase();
+    if (clientEmail && updated) {
+      const client = await ClientModel.findOne({ email: clientEmail })
+        .select('status isPaused')
+        .lean();
+      if (client) {
+        updated.clientStatus = client.status || 'active';
+        updated.clientIsPaused = client.isPaused || false;
+      } else {
+        updated.clientStatus = 'active';
+        updated.clientIsPaused = false;
+      }
+    } else if (updated) {
+      updated.clientStatus = 'active';
+      updated.clientIsPaused = false;
+    }
+    
     res.status(200).json({ job: updated });
   } catch (e) {
     console.error('patchOnboardingJob:', e);
