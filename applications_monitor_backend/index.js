@@ -4881,6 +4881,9 @@ function startCallSweepJob() {
 // --- Job card reminder cron (11:30 PM IST daily) ---
 const DISCORD_JOBCARD_REMINDER_WEBHOOK = process.env.DISCORD_JOBCARD_REMINDER || '';
 
+
+const DISCORD_ZERO_SAVED_WEBHOOK = process.env.DISCORD_ZERO_SAVED || '';
+
 function capitalizeOperatorName(name) {
   if (!name || typeof name !== 'string') return '';
   const t = name.trim();
@@ -4956,6 +4959,63 @@ async function runJobCardReminder() {
   }
 }
 
+async function runZeroSavedJobReminder() {
+  if (!DISCORD_ZERO_SAVED_WEBHOOK) return;
+  try {
+    // Get all active and unpaused clients
+    const activeUnpausedClients = await ClientModel.find({ 
+      status: 'active',
+      isPaused: { $ne: true }
+    })
+      .select('email name')
+      .lean();
+    
+    if (activeUnpausedClients.length === 0) {
+      console.log('📬 [Zero Saved Reminder] No active and unpaused clients found');
+      return;
+    }
+
+    const clientEmails = activeUnpausedClients.map((c) => (c.email || '').toLowerCase()).filter(Boolean);
+    
+    const savedByUser = await JobModel.aggregate([
+      { 
+        $match: { 
+          userID: { $in: clientEmails },
+          currentStatus: { $regex: /save/i } 
+        } 
+      },
+      { $group: { _id: '$userID', saved: { $sum: 1 } } }
+    ]);
+    
+    const savedMap = new Map((savedByUser || []).map((r) => [r._id.toLowerCase(), r.saved || 0]));
+    const clientNameMap = new Map((activeUnpausedClients || []).map((c) => [c.email.toLowerCase(), c.name || c.email]));
+
+    let sentCount = 0;
+    for (const client of activeUnpausedClients || []) {
+      const email = (client.email || '').toLowerCase();
+      if (!email) continue;
+      
+      const saved = savedMap.get(email) || 0;
+      // Only send message if saved count is 0
+      if (saved !== 0) continue;
+      
+      const clientName = clientNameMap.get(email) || email;
+      const message = `${clientName} have zero jobs in their dashboard please add jobs`;
+      
+      await fetch(DISCORD_ZERO_SAVED_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: message })
+      });
+      sentCount += 1;
+    }
+    
+    console.log(`📬 [Zero Saved Reminder] Sent Discord reminders for ${sentCount} client(s) with zero saved jobs`);
+  } catch (err) {
+    console.error('❌ [Zero Saved Reminder] Error:', err);
+  }
+}
+
 // Start the server
 app.listen(process.env.PORT, () => {
   console.log(`✅ Server is live at port: ${process.env.PORT}`);
@@ -4968,6 +5028,12 @@ app.listen(process.env.PORT, () => {
   if (DISCORD_JOBCARD_REMINDER_WEBHOOK) {
     cron.schedule('0 18 * * *', runJobCardReminder);
     console.log('📬 [JobCard Reminder] Cron scheduled for 11:30 PM IST daily');
+  }
+
+  // Zero saved jobs reminder: 1 PM IST daily (07:30 UTC)
+  if (DISCORD_ZERO_SAVED_WEBHOOK) {
+    cron.schedule('30 7 * * *', runZeroSavedJobReminder);
+    console.log('📬 [Zero Saved Reminder] Cron scheduled for 1 PM IST daily');
   }
 });
 
