@@ -26,6 +26,7 @@ import {
   uploadProfilePhoto
 } from './controllers/ManagerController.js';
 import { upload } from './utils/cloudinary.js';
+import { uploadFile } from './utils/storageService.js';
 import { encrypt } from './utils/CryptoHelper.js';
 import { NewUserModel } from './schema_models/UserModel.js';
 import { ClientTodosModel } from './ClientTodosModel.js';
@@ -3445,6 +3446,24 @@ app.post('/api/onboarding/jobs', verifyToken, postOnboardingJob);
 app.get('/api/onboarding/jobs/:id', verifyToken, getOnboardingJobById);
 app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
 app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
+
+// Onboarding attachment upload (R2 or Cloudinary) - R2: onboarding-assets/images|pdf|others
+app.post('/api/upload/onboarding-attachment', fileUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+    const result = await uploadFile(req.file.buffer, {
+      folder: 'onboarding-assets',
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+      fileType: null,
+    });
+    if (!result.success) return res.status(500).json({ success: false, message: result.error || 'Upload failed' });
+    res.status(200).json({ success: true, url: result.url, filename: req.file.originalname });
+  } catch (e) {
+    console.error('Onboarding attachment upload error:', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to upload' });
+  }
+});
 
 // Proxy to fetch client profile from flashfire (for resume-making context in tickets)
 app.get('/api/onboarding/client-profile/:email', verifyToken, async (req, res) => {

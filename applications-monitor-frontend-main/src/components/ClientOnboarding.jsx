@@ -9,6 +9,7 @@ import {
 import { toastUtils } from '../utils/toastUtils';
 import {
   ChevronRight,
+  ChevronDown,
   User,
   FileText,
   MessageSquare,
@@ -60,13 +61,160 @@ function ProfileField({ label, value, className = '' }) {
   );
 }
 
-// Get allowed statuses based on plan type
+// Get allowed statuses based on plan type (used by JobCard)
 function getAllowedStatusesForPlan(planType) {
   const normalizedPlan = (planType || 'default').toLowerCase();
   if (normalizedPlan === 'executive') return PLAN_STATUSES.executive;
   if (normalizedPlan === 'professional') return PLAN_STATUSES.professional;
   return PLAN_STATUSES.default;
 }
+
+// Memoized JobCard component to prevent unnecessary re-renders
+const JobCard = React.memo(({
+  job,
+  draggedJobId,
+  editingClientNameJobId,
+  editingClientNameValue,
+  isAdmin,
+  visibleColumns,
+  onMoveTo,
+  onDragStart,
+  onDragEnd,
+  onCardClick,
+  onLongPressStart,
+  onLongPressEnd,
+  onEditChange,
+  onEditSave,
+  onEditStart
+}) => {
+  const isDragging = draggedJobId === job._id;
+  const isEditing = editingClientNameJobId === job._id && isAdmin;
+  const [moveDropdownOpen, setMoveDropdownOpen] = useState(false);
+  const moveDropdownRef = useRef(null);
+
+  useEffect(() => {
+    if (!moveDropdownOpen) return;
+    const close = (e) => {
+      if (moveDropdownRef.current && !moveDropdownRef.current.contains(e.target)) setMoveDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [moveDropdownOpen]);
+
+  const allowed = getAllowedStatusesForPlan(job.planType);
+  const moveToOptions = (visibleColumns || []).filter((s) => allowed.includes(s) && s !== job.status);
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => onDragStart(e, job)}
+      onDragEnd={onDragEnd}
+      onMouseDown={(e) => { e.button === 0 && onLongPressStart(e, job); }}
+      onMouseUp={onLongPressEnd}
+      onMouseLeave={onLongPressEnd}
+      onTouchStart={(e) => onLongPressStart(e, job)}
+      onTouchEnd={onLongPressEnd}
+      onTouchCancel={onLongPressEnd}
+      onClick={() => onCardClick(job)}
+      className={`group bg-white rounded-xl p-4 border border-transparent shadow-sm hover:shadow-md hover:border-orange-100 transition-[transform,opacity,box-shadow,border-color] duration-200 ease-out cursor-grab active:cursor-grabbing relative ${isDragging ? 'opacity-50 scale-[0.98] shadow-lg ring-2 ring-primary/20 rotate-1' : 'hover:scale-[1.01]'}`}
+    >
+      <div className="flex items-start justify-between mb-2">
+        <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
+          {job.jobNumber}
+        </span>
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+          <button type="button" className="text-gray-400 hover:text-primary"><MoreHorizontal className="w-4 h-4" /></button>
+        </div>
+      </div>
+      {isEditing ? (
+        <input
+          value={editingClientNameValue}
+          onChange={onEditChange}
+          onBlur={() => onEditSave(job._id, editingClientNameValue)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onEditSave(job._id, editingClientNameValue);
+            if (e.key === 'Escape') onEditStart(null, '');
+            e.stopPropagation();
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="w-full text-sm font-bold text-gray-900 bg-white border border-primary rounded px-2 py-0.5 mb-1"
+          autoFocus
+        />
+      ) : (
+        <h4
+          className="font-bold text-gray-900 text-sm leading-snug mb-1 cursor-default"
+          onClick={(e) => { if (isAdmin) { e.stopPropagation(); onEditStart(job._id, job.clientName || ''); } }}
+          title={isAdmin ? 'Click to edit name' : undefined}
+        >
+          {job.clientName}
+        </h4>
+      )}
+      <p className="text-xs text-gray-500 mb-3 font-medium">{job.planType || 'Professional'}</p>
+
+      <div className="flex items-center gap-2 mt-auto pt-3 border-t border-gray-50 flex-wrap">
+        {job.resumeMakerName ? (
+          <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 px-2 py-1 rounded-full border border-gray-100" title="Resume Maker">
+            <User className="w-3 h-3 text-primary" />
+            <span className="font-medium truncate max-w-[100px]">{job.resumeMakerName}</span>
+          </div>
+        ) : (
+          <span className="text-[10px] text-gray-400 italic">Unassigned RM</span>
+        )}
+        {job.linkedInMemberName && (
+          <div className="flex items-center gap-1.5 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded-full border border-purple-100" title="LinkedIn Member">
+            <User className="w-3 h-3 text-purple-500" />
+            <span className="font-medium truncate max-w-[100px]">{job.linkedInMemberName}</span>
+          </div>
+        )}
+        {isAdmin && onMoveTo && moveToOptions.length > 0 && (
+          <div className="relative ml-auto" ref={moveDropdownRef}>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); setMoveDropdownOpen((v) => !v); }}
+              className="flex items-center gap-1 text-xs font-medium text-primary bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-full px-2.5 py-1 transition-colors"
+            >
+              <ArrowUpDown className="w-3 h-3" />
+              <span>Move to</span>
+              <ChevronDown className={`w-3 h-3 transition-transform ${moveDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {moveDropdownOpen && (
+              <div
+                className="absolute right-0 bottom-full mb-1 z-50 min-w-[180px] py-1 bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {moveToOptions.map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onMoveTo(job, status); setMoveDropdownOpen(false); }}
+                    className="w-full text-left px-3 py-2 text-sm font-medium text-gray-800 hover:bg-orange-50 hover:text-primary transition-colors flex items-center justify-between gap-2"
+                  >
+                    {STATUS_LABELS[status] || status}
+                    <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.job._id === nextProps.job._id &&
+    prevProps.job.clientName === nextProps.job.clientName &&
+    prevProps.job.status === nextProps.job.status &&
+    prevProps.job.resumeMakerName === nextProps.job.resumeMakerName &&
+    prevProps.job.linkedInMemberName === nextProps.job.linkedInMemberName &&
+    prevProps.job.planType === nextProps.job.planType &&
+    prevProps.job.jobNumber === nextProps.job.jobNumber &&
+    prevProps.draggedJobId === nextProps.draggedJobId &&
+    prevProps.editingClientNameJobId === nextProps.editingClientNameJobId &&
+    prevProps.editingClientNameValue === nextProps.editingClientNameValue &&
+    prevProps.visibleColumns === nextProps.visibleColumns
+  );
+});
 
 export default function ClientOnboarding() {
   const { jobs, setJobs, selectedJob, setSelectedJob, loading, setLoading, roles, setRoles, getJobsByStatus, clearSelected } = useOnboardingStore();
@@ -117,17 +265,29 @@ export default function ClientOnboarding() {
   const [editingClientNameJobId, setEditingClientNameJobId] = useState(null);
   const [editingClientNameValue, setEditingClientNameValue] = useState('');
   const [savingClientName, setSavingClientName] = useState(false);
+  const [showAddAttachmentModal, setShowAddAttachmentModal] = useState(false);
+  const [attachmentNameInput, setAttachmentNameInput] = useState('');
+  const [attachmentFilePending, setAttachmentFilePending] = useState(null);
+  const [expandedAttachmentIndices, setExpandedAttachmentIndices] = useState(new Set());
+  const [moveToJob, setMoveToJob] = useState(null);
+  const attachmentNameInputRef = useRef(null);
+  const longPressTimerRef = useRef(null);
+  const longPressActivatedRef = useRef(false);
   const notificationsPerPage = 10;
   const commentInputRef = useRef(null);
   const mentionStartRef = useRef(0);
   const mentionEndRef = useRef(0);
+  const boardRef = useRef(null);
+  const scrollLoopRef = useRef(null);
+  const dragCursorXRef = useRef(0);
   const visibleColumns = getVisibleColumns(user);
+  const LONG_PRESS_MS = 3500;
   const isAdmin = user?.role === 'admin';
   const isCsm = user?.role === 'csm' || user?.roles?.includes?.('csm');
   const isTeamLead = user?.role === 'team_lead';
   const userSubRole = user?.onboardingSubRole || '';
   const canMoveAny = isAdmin || isCsm || isTeamLead;
-  
+
   // Get allowed statuses based on user role
   const getAllowedStatusesForUser = () => {
     if (canMoveAny) return ONBOARDING_STATUSES; // Admin, CSM, Team Lead can move anywhere
@@ -139,12 +299,12 @@ export default function ClientOnboarding() {
     }
     return [];
   };
-  
+
   const canMoveTo = (currentStatus, nextStatus) => {
     const allowed = VALID_NEXT_STATUSES[currentStatus] || [];
     return allowed.includes(nextStatus);
   };
-  
+
   const canUserMoveToStatus = (targetStatus) => {
     if (canMoveAny) return true;
     const allowedStatuses = getAllowedStatusesForUser();
@@ -203,7 +363,7 @@ export default function ClientOnboarding() {
       if (!res.ok) throw new Error('Failed to load jobs');
       const data = await res.json();
       const fetchedJobs = data.jobs || [];
-      
+
       // Ensure no duplicates by using Map with _id as key (primary deduplication)
       const uniqueJobsMap = new Map();
       fetchedJobs.forEach((job) => {
@@ -225,7 +385,7 @@ export default function ClientOnboarding() {
         }
       });
       const uniqueJobs = Array.from(uniqueJobsMap.values());
-      
+
       // Additional safety: Check for duplicate clientEmail + status combinations
       // This helps catch any backend issues creating duplicates
       const clientStatusMap = new Map();
@@ -236,16 +396,16 @@ export default function ClientOnboarding() {
         }
         clientStatusMap.get(key).push(job);
       });
-      
+
       // Log warnings if duplicates found (for debugging)
       clientStatusMap.forEach((jobsList, key) => {
         if (jobsList.length > 1 && key.includes('resume_approved')) {
           console.warn(`Potential duplicate jobs found for key: ${key}`, jobsList.map(j => ({ id: j._id, jobNumber: j.jobNumber })));
         }
       });
-      
+
       setJobs(uniqueJobs);
-      
+
       // Update selected job if it exists in the fresh data
       // Use the store's current state to avoid stale closure issues
       const store = useOnboardingStore.getState();
@@ -395,7 +555,7 @@ export default function ClientOnboarding() {
     return () => { cancelled = true; };
   }, [selectedJob?.clientEmail]);
 
-  const handleMove = async (jobId, newStatus, skipRoleCheck = false) => {
+  const handleMove = useCallback(async (jobId, newStatus, skipRoleCheck = false) => {
     if (movingStatus) {
       toastUtils.error('Please wait, move in progress...');
       return;
@@ -456,52 +616,132 @@ export default function ClientOnboarding() {
     } finally {
       setMovingStatus(null);
     }
-  };
+  }, [jobs, movingStatus, selectedJob, canUserMoveToStatus, setJobs, setSelectedJob]);
 
-  const handleDragStart = (e, job) => {
+  const handleDragStart = useCallback((e, job) => {
     setDraggedJobId(job._id);
     e.dataTransfer.setData('application/json', JSON.stringify({ jobId: job._id, fromStatus: job.status }));
     e.dataTransfer.effectAllowed = 'move';
-  };
+    dragCursorXRef.current = e.clientX ?? 0;
+    startEdgeScrollLoop();
+  }, []);
 
-  const handleDragEnd = () => {
+  const handleDragEnd = useCallback(() => {
+    cancelEdgeScrollLoop();
     setDraggedJobId(null);
     setDragOverStatus(null);
-  };
+  }, []);
 
-  const handleDragOver = (e, status) => {
+  const handleDragOver = useCallback((e, status) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     setDragOverStatus(status);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDragOverStatus(null);
+  }, []);
+
+  // Smooth edge-scroll: single rAF loop while dragging, small scroll steps per frame
+  function startEdgeScrollLoop() {
+    if (scrollLoopRef.current) return;
+    const EDGE = 100;
+    const MIN_STEP = 14;
+    const MAX_STEP = 32;
+    const loop = () => {
+      const container = boardRef.current;
+      const x = dragCursorXRef.current;
+      if (!container) {
+        scrollLoopRef.current = requestAnimationFrame(loop);
+        return;
+      }
+      const { left, right } = container.getBoundingClientRect();
+      const inLeft = x - left < EDGE;
+      const inRight = right - x < EDGE;
+      if (inLeft) {
+        const t = 1 - (x - left) / EDGE;
+        const step = MIN_STEP + t * t * (MAX_STEP - MIN_STEP);
+        container.scrollBy({ left: -step, behavior: 'auto' });
+      } else if (inRight) {
+        const t = 1 - (right - x) / EDGE;
+        const step = MIN_STEP + t * t * (MAX_STEP - MIN_STEP);
+        container.scrollBy({ left: step, behavior: 'auto' });
+      }
+      scrollLoopRef.current = requestAnimationFrame(loop);
+    };
+    scrollLoopRef.current = requestAnimationFrame(loop);
+  }
+
+  function cancelEdgeScrollLoop() {
+    if (scrollLoopRef.current) {
+      cancelAnimationFrame(scrollLoopRef.current);
+      scrollLoopRef.current = null;
+    }
+  }
+
+  const handleDragOverBoard = (e) => {
+    e.preventDefault();
+    dragCursorXRef.current = e.clientX ?? 0;
   };
 
-  const handleDragLeave = () => {
-    setDragOverStatus(null);
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
   };
+
+  const handleCardLongPressStart = (e, job) => {
+    clearLongPressTimer();
+    longPressActivatedRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      longPressActivatedRef.current = true;
+      setMoveToJob(job);
+    }, LONG_PRESS_MS);
+  };
+
+  const handleCardLongPressEnd = () => {
+    clearLongPressTimer();
+  };
+
+  const handleCardClick = useCallback((job) => {
+    if (longPressActivatedRef.current) {
+      longPressActivatedRef.current = false;
+      return;
+    }
+    setSelectedJob(job);
+  }, [setSelectedJob]);
+
+  const handleMoveToChoice = useCallback((job, newStatus) => {
+    if (job.status === newStatus) return;
+    handleMove(job._id, newStatus, canMoveAny);
+    setMoveToJob(null);
+  }, [handleMove, canMoveAny]);
 
   const handleDrop = (e, toStatus) => {
     e.preventDefault();
     setDragOverStatus(null);
     if (!draggedJobId) return;
-    
+
     // Prevent multiple simultaneous moves
     if (movingStatus) {
       setDraggedJobId(null);
       toastUtils.error('Please wait, move in progress...');
       return;
     }
-    
+
     try {
       const raw = e.dataTransfer.getData('application/json');
       const { jobId, fromStatus } = raw ? JSON.parse(raw) : { jobId: draggedJobId, fromStatus: '' };
-      
+
       // Validate jobId exists and is valid
       if (!jobId || typeof jobId !== 'string') {
         setDraggedJobId(null);
         toastUtils.error('Invalid job ID');
         return;
       }
-      
+
       // Find the job - ensure it exists and is unique
       const matchingJobs = jobs.filter((j) => j._id === jobId);
       if (matchingJobs.length === 0) {
@@ -509,25 +749,24 @@ export default function ClientOnboarding() {
         toastUtils.error('Job not found');
         return;
       }
-      
+
       // If somehow multiple jobs with same ID exist, use the first one and log warning
       if (matchingJobs.length > 1) {
         console.error(`Duplicate job IDs found: ${jobId}`, matchingJobs);
-        toastUtils.error('Duplicate job detected. Refreshing...');
-        fetchJobs();
-        setDraggedJobId(null);
-        return;
+        console.warn('Using first matching job and continuing operation...');
+        // Don't refresh - just use the first job and continue
+        // The next periodic refresh will sync any discrepancies
       }
-      
+
       const job = matchingJobs[0];
       const from = job.status;
-      
+
       // Don't move if already in the same status
       if (toStatus === from) {
         setDraggedJobId(null);
         return;
       }
-      
+
       // Check if the status is allowed for this plan type
       const allowedStatuses = getAllowedStatusesForPlan(job.planType);
       if (!allowedStatuses.includes(toStatus)) {
@@ -535,7 +774,7 @@ export default function ClientOnboarding() {
         toastUtils.error(`This plan doesn't support moving to "${STATUS_LABELS[toStatus] || toStatus}". ${planName === 'executive' ? 'Executive plan' : planName === 'professional' ? 'Professional plan' : 'This plan'} only supports: ${allowedStatuses.map(s => STATUS_LABELS[s] || s).join(', ')}`);
         return;
       }
-      
+
       // Special handling for LinkedIn dual visibility:
       // If moving FROM linkedin_in_progress column but job status is resume_approved,
       // we're actually moving the resume_approved job, not creating a new one
@@ -545,14 +784,14 @@ export default function ClientOnboarding() {
         handleMove(jobId, 'linkedin_in_progress');
         return;
       }
-      
+
       // Check role-based movement restrictions
       if (!canUserMoveToStatus(toStatus) && !canMoveAny) {
         const allowedStatuses = getAllowedStatusesForUser();
         toastUtils.error(`You don't have permission to move to "${STATUS_LABELS[toStatus] || toStatus}". Your role only allows: ${allowedStatuses.map(s => STATUS_LABELS[s] || s).join(', ')}`);
         return;
       }
-      
+
       // Check if move is allowed
       const allowed = canMoveAny || canMoveTo(from, toStatus);
       if (allowed && jobId) {
@@ -704,22 +943,34 @@ export default function ClientOnboarding() {
     }
   };
 
-  const handleUploadAttachment = async (e) => {
+  const openAddAttachmentModal = () => {
+    setAttachmentNameInput('');
+    setAttachmentFilePending(null);
+    setShowAddAttachmentModal(true);
+    setTimeout(() => attachmentNameInputRef.current?.focus?.(), 100);
+  };
+
+  const handleAttachmentFileSelect = (e) => {
     const file = e?.target?.files?.[0];
-    if (!file || !selectedJob) return;
-    setUploadingAttachment(true);
-    // Onboarding attachments are uploaded to the flashfire dashboard backend (R2/Cloudinary)
-    const uploadBase = import.meta.env.VITE_MICROSERVICE_URL || import.meta.env.VITE_FLASHFIRE_API_BASE_URL || '';
-    if (!uploadBase) {
-      toastUtils.error('Upload API not configured (set VITE_MICROSERVICE_URL or VITE_FLASHFIRE_API_BASE_URL)');
-      setUploadingAttachment(false);
-      e.target.value = '';
+    if (file) {
+      setAttachmentFilePending(file);
+      if (!attachmentNameInput.trim()) setAttachmentNameInput(file.name.replace(/\.[^/.]+$/, ''));
+    }
+    e.target.value = '';
+  };
+
+  const handleUploadAttachment = async () => {
+    const name = attachmentNameInput.trim() || attachmentFilePending?.name || 'Attachment';
+    const file = attachmentFilePending;
+    if (!file || !selectedJob) {
+      toastUtils.error('Please select a file');
       return;
     }
+    setUploadingAttachment(true);
     try {
       const form = new FormData();
       form.append('file', file);
-      const uploadRes = await fetch(`${uploadBase.replace(/\/$/, '')}/api/upload/onboarding-attachment`, {
+      const uploadRes = await fetch(`${API_BASE.replace(/\/$/, '')}/api/upload/onboarding-attachment`, {
         method: 'POST',
         body: form
       });
@@ -731,20 +982,31 @@ export default function ClientOnboarding() {
       const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}/attachments`, {
         method: 'POST',
         headers: AUTH_HEADERS(),
-        body: JSON.stringify({ url, filename: uploadedFilename || file.name })
+        body: JSON.stringify({ url, filename: uploadedFilename || file.name, name })
       });
       if (!res.ok) throw new Error('Failed to save attachment');
       const data = await res.json();
       const updated = { ...selectedJob, attachments: [...(selectedJob.attachments || []), data.attachment] };
       setSelectedJob(updated);
       setJobs(jobs.map((j) => (j._id === selectedJob._id ? updated : j)));
+      setShowAddAttachmentModal(false);
+      setAttachmentNameInput('');
+      setAttachmentFilePending(null);
       toastUtils.success('Attachment uploaded');
     } catch (err) {
       toastUtils.error(err.message || 'Upload failed');
     } finally {
       setUploadingAttachment(false);
-      e.target.value = '';
     }
+  };
+
+  const toggleAttachmentExpand = (i) => {
+    setExpandedAttachmentIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
   };
 
   const jobTitle = (job) => `${job.jobNumber} - ${job.clientName}-${job.planType || 'Plan'}`;
@@ -799,42 +1061,42 @@ export default function ClientOnboarding() {
     // Check if roles exist
     const resumeMakers = roles?.resumeMakers || [];
     const linkedInMembers = roles?.linkedInMembers || [];
-    
+
     const hasResumeMakers = resumeMakers.length > 0;
     const hasLinkedInMembers = linkedInMembers.length > 0;
-    
+
     // If no roles exist, show second confirmation
     if (!hasResumeMakers && !hasLinkedInMembers) {
       setShowImportModal(false);
       setShowImportConfirmModal(true);
       return;
     }
-    
+
     // Proceed with import
     setShowImportModal(false);
     setImportingClients(true);
     setImportProgress({ total: 0, imported: 0, failed: 0 });
-    
+
     try {
       // Fetch all clients
       const clientsRes = await fetch(`${API_BASE}/api/clients`, { headers: AUTH_HEADERS() });
       if (!clientsRes.ok) throw new Error('Failed to fetch clients');
       const clientsData = await clientsRes.json();
       const allClients = clientsData.clients || [];
-      
+
       // Get existing job client emails
       const existingClientEmails = new Set((jobs || []).map((j) => (j.clientEmail || '').toLowerCase()));
-      
+
       // Filter clients that don't have onboarding jobs
       const clientsToImport = allClients.filter(
         (c) => c.email && !existingClientEmails.has((c.email || '').toLowerCase())
       );
-      
+
       setImportProgress({ total: clientsToImport.length, imported: 0, failed: 0 });
-      
+
       let imported = 0;
       let failed = 0;
-      
+
       // Import clients one by one
       for (const client of clientsToImport) {
         try {
@@ -848,20 +1110,20 @@ export default function ClientOnboarding() {
               dashboardManagerName: client.dashboardTeamLeadName || ''
             })
           });
-          
+
           if (res.ok) {
             imported++;
           } else {
             failed++;
           }
-          
+
           setImportProgress({ total: clientsToImport.length, imported, failed });
         } catch (err) {
           failed++;
           setImportProgress({ total: clientsToImport.length, imported, failed });
         }
       }
-      
+
       toastUtils.success(`Import complete: ${imported} imported, ${failed} failed`);
       await fetchJobs();
     } catch (e) {
@@ -1099,8 +1361,13 @@ export default function ClientOnboarding() {
         </div>
       </div>
 
-      {/* Main Content / Kanban */}
-      <div className="overflow-x-auto h-[calc(100vh-80px)]">
+      {/* Main Content / Kanban - scrollable; drag card near edge for smooth auto-scroll */}
+      <div
+        ref={boardRef}
+        className="overflow-x-auto overflow-y-hidden h-[calc(100vh-80px)] pb-6 scroll-smooth"
+        onDragOver={handleDragOverBoard}
+        style={{ WebkitOverflowScrolling: 'touch' }}
+      >
         {loading ? (
           <div className="flex h-full w-full items-center justify-center">
             <Loader2 className="w-10 h-10 animate-spin text-primary" />
@@ -1121,70 +1388,33 @@ export default function ClientOnboarding() {
 
                   {/* Column Body */}
                   <div
-                    className={`flex-1 bg-gray-100/50 border-x border-b border-gray-200 rounded-b-2xl p-3 overflow-y-auto space-y-3 scrollbar-hide transition-colors ${dragOverStatus === status ? 'bg-orange-50 border-primary border-dashed' : ''}`}
+                    className={`flex-1 bg-gray-100/50 border-x border-b border-gray-200 rounded-b-2xl p-3 overflow-y-auto space-y-3 scrollbar-hide transition-[background-color,border-color,box-shadow] duration-200 ease-out ${dragOverStatus === status ? 'bg-orange-50 border-primary border-dashed shadow-inner' : ''}`}
                     onDragOver={(e) => handleDragOver(e, status)}
                     onDragLeave={handleDragLeave}
                     onDrop={(e) => handleDrop(e, status)}
                   >
                     {columnJobs.map((job) => (
-                      <div
+                      <JobCard
                         key={job._id}
-                        draggable
-                        onDragStart={(e) => handleDragStart(e, job)}
+                        job={job}
+                        draggedJobId={draggedJobId}
+                        editingClientNameJobId={editingClientNameJobId}
+                        editingClientNameValue={editingClientNameValue}
+                        isAdmin={isAdmin}
+                        visibleColumns={visibleColumns}
+                        onMoveTo={handleMoveToChoice}
+                        onDragStart={handleDragStart}
                         onDragEnd={handleDragEnd}
-                        onClick={() => setSelectedJob(job)}
-                        className={`group bg-white rounded-xl p-4 border border-transparent shadow-sm hover:shadow-md hover:border-orange-100 transition-all cursor-pointer relative ${draggedJobId === job._id ? 'opacity-40 shadow-none ring-2 ring-gray-200 rotate-2' : ''}`}
-                      >
-                        <div className="flex items-start justify-between mb-2">
-                          <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
-                            {job.jobNumber}
-                          </span>
-                          <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button className="text-gray-400 hover:text-primary"><MoreHorizontal className="w-4 h-4" /></button>
-                          </div>
-                        </div>
-                        {editingClientNameJobId === job._id && isAdmin ? (
-                          <input
-                            value={editingClientNameValue}
-                            onChange={(e) => setEditingClientNameValue(e.target.value)}
-                            onBlur={() => saveClientName(job._id, editingClientNameValue)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') saveClientName(job._id, editingClientNameValue);
-                              if (e.key === 'Escape') { setEditingClientNameJobId(null); setEditingClientNameValue(''); }
-                              e.stopPropagation();
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-full text-sm font-bold text-gray-900 bg-white border border-primary rounded px-2 py-0.5 mb-1"
-                            autoFocus
-                          />
-                        ) : (
-                          <h4
-                            className="font-bold text-gray-900 text-sm leading-snug mb-1 cursor-default"
-                            onClick={(e) => { if (isAdmin) { e.stopPropagation(); setEditingClientNameJobId(job._id); setEditingClientNameValue(job.clientName || ''); } }}
-                            title={isAdmin ? 'Click to edit name' : undefined}
-                          >
-                            {job.clientName}
-                          </h4>
-                        )}
-                        <p className="text-xs text-gray-500 mb-3 font-medium">{job.planType || 'Professional'}</p>
-
-                        <div className="flex items-center gap-2 mt-auto pt-3 border-t border-gray-50 flex-wrap">
-                          {job.resumeMakerName ? (
-                            <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 px-2 py-1 rounded-full border border-gray-100" title="Resume Maker">
-                              <User className="w-3 h-3 text-primary" />
-                              <span className="font-medium truncate max-w-[100px]">{job.resumeMakerName}</span>
-                            </div>
-                          ) : (
-                            <span className="text-[10px] text-gray-400 italic">Unassigned RM</span>
-                          )}
-                          {job.linkedInMemberName && (
-                            <div className="flex items-center gap-1.5 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded-full border border-purple-100" title="LinkedIn Member">
-                              <User className="w-3 h-3 text-purple-500" />
-                              <span className="font-medium truncate max-w-[100px]">{job.linkedInMemberName}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                        onCardClick={handleCardClick}
+                        onLongPressStart={handleCardLongPressStart}
+                        onLongPressEnd={handleCardLongPressEnd}
+                        onEditChange={(e) => setEditingClientNameValue(e.target.value)}
+                        onEditSave={saveClientName}
+                        onEditStart={(jobId, name) => {
+                          setEditingClientNameJobId(jobId);
+                          setEditingClientNameValue(name);
+                        }}
+                      />
                     ))}
                   </div>
                 </div>
@@ -1194,11 +1424,66 @@ export default function ClientOnboarding() {
         )}
       </div>
 
+      {/* Move to sheet (long-press 3.5s on a card) - mobile-style */}
+      {moveToJob && (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col justify-end sm:justify-center sm:items-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-200"
+          onClick={() => setMoveToJob(null)}
+        >
+          <div
+            className="bg-white rounded-t-3xl sm:rounded-2xl w-full sm:max-w-md shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10 duration-300 sm:slide-in-from-bottom-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 pb-4 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                  <ArrowUpDown className="w-5 h-5 text-primary" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-bold text-gray-900 text-lg">Move to</h3>
+                  <p className="text-sm text-gray-500 truncate">{moveToJob.clientName} · #{moveToJob.jobNumber}</p>
+                </div>
+              </div>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto p-3 space-y-1">
+              {(() => {
+                const allowed = getAllowedStatusesForPlan(moveToJob.planType);
+                const options = visibleColumns.filter((s) => allowed.includes(s) && s !== moveToJob.status);
+                return options.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-4 text-center">No other stages for this plan</p>
+                ) : (
+                  options.map((status) => (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => handleMoveToChoice(moveToJob, status)}
+                      className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-left font-medium text-gray-900 hover:bg-orange-50 hover:text-primary transition-colors duration-150"
+                    >
+                      <span className="flex-1">{STATUS_LABELS[status] || status}</span>
+                      <ChevronRight className="w-4 h-4 text-gray-400" />
+                    </button>
+                  ))
+                );
+              })()}
+            </div>
+            <div className="p-3 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => setMoveToJob(null)}
+                className="w-full py-3 rounded-xl font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors duration-150"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Detail Modal */}
       {selectedJob && (
-        <div 
+        <div
           key={selectedJob._id}
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200" 
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               handleCloseModal(e);
@@ -1250,8 +1535,8 @@ export default function ClientOnboarding() {
                   <span className="text-sm text-gray-500">{selectedJob.planType || 'Professional'} Plan</span>
                 </div>
               </div>
-              <button 
-                onClick={handleCloseModal} 
+              <button
+                onClick={handleCloseModal}
                 className="p-2 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer z-20 relative"
                 type="button"
                 aria-label="Close modal"
@@ -1477,51 +1762,70 @@ export default function ClientOnboarding() {
                   </button>
                   {showAttachments && (
                     <>
-                      <div className="grid grid-cols-2 gap-3 mb-3">
+                      <div className="space-y-1 mb-3">
+                        {(selectedJob.attachments || []).length === 0 && (
+                          <p className="text-sm text-gray-500 py-4">No attachments yet</p>
+                        )}
                         {(selectedJob.attachments || []).map((a, i) => {
+                          const isExpanded = expandedAttachmentIndices.has(i);
                           const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(a.filename || a.url);
                           const isPdf = /\.pdf$/i.test(a.filename || a.url);
                           const isDoc = /\.(doc|docx)$/i.test(a.filename || a.url);
-                          
+                          const displayName = (a.name && a.name.trim()) || a.filename || 'Attachment';
                           return (
-                            <div key={i} className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:border-primary hover:shadow-md transition-all group">
-                              {isImage ? (
-                                <a href={a.url} target="_blank" rel="noopener noreferrer" className="block">
-                                  <img src={a.url} alt={a.filename} className="w-full h-32 object-cover" />
-                                  <div className="p-3">
-                                    <p className="text-sm font-medium text-gray-900 truncate">{a.filename}</p>
-                                    <p className="text-xs text-gray-500">Click to view full size</p>
-                                  </div>
-                                </a>
-                              ) : (
-                                <a href={a.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3">
-                                  <div className="w-10 h-10 bg-gray-50 rounded-lg flex items-center justify-center group-hover:bg-orange-50 transition-colors flex-shrink-0">
-                                    {isPdf ? (
-                                      <FileText className="w-5 h-5 text-red-500" />
-                                    ) : isDoc ? (
-                                      <FileText className="w-5 h-5 text-blue-500" />
-                                    ) : (
-                                      <FileText className="w-5 h-5 text-gray-400 group-hover:text-primary" />
-                                    )}
-                                  </div>
-                                  <div className="min-w-0 flex-1">
-                                    <p className="text-sm font-medium text-gray-900 truncate">{a.filename}</p>
-                                    <p className="text-xs text-gray-500">{isPdf ? 'PDF Document' : isDoc ? 'Word Document' : 'Click to view'}</p>
-                                  </div>
-                                </a>
+                            <div key={i} className="border border-gray-200 rounded-lg overflow-hidden bg-white">
+                              <button
+                                type="button"
+                                onClick={() => toggleAttachmentExpand(i)}
+                                className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50/80 transition-colors"
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                                ) : (
+                                  <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                                )}
+                                <Paperclip className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                                <span className="text-sm font-medium text-gray-900 truncate flex-1">{displayName}</span>
+                              </button>
+                              {isExpanded && (
+                                <div className="border-t border-gray-100 p-3 bg-gray-50/50">
+                                  {isImage ? (
+                                    <a href={a.url} target="_blank" rel="noopener noreferrer" className="block">
+                                      <img src={a.url} alt={displayName} className="max-h-48 rounded-lg object-contain" />
+                                      <p className="text-xs text-gray-500 mt-1">Click to view full size</p>
+                                    </a>
+                                  ) : (
+                                    <a href={a.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-2 rounded-lg hover:bg-white transition-colors">
+                                      <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center border border-gray-100 flex-shrink-0">
+                                        {isPdf ? (
+                                          <FileText className="w-5 h-5 text-red-500" />
+                                        ) : isDoc ? (
+                                          <FileText className="w-5 h-5 text-blue-500" />
+                                        ) : (
+                                          <FileText className="w-5 h-5 text-gray-400" />
+                                        )}
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-sm font-medium text-gray-900 truncate">{a.filename}</p>
+                                        <p className="text-xs text-gray-500">{isPdf ? 'PDF' : isDoc ? 'Word' : 'Click to view'}</p>
+                                      </div>
+                                    </a>
+                                  )}
+                                </div>
                               )}
                             </div>
                           );
                         })}
                       </div>
-                      {(selectedJob.attachments || []).length === 0 && (
-                        <p className="text-sm text-gray-500 text-center py-4">No attachments yet</p>
-                      )}
-                      <label className="inline-flex items-center gap-2 px-4 py-2 bg-gray-50 text-gray-700 rounded-lg border border-gray-200 hover:bg-white hover:border-gray-300 transition-all cursor-pointer text-sm font-medium shadow-sm">
+                      <button
+                        type="button"
+                        onClick={openAddAttachmentModal}
+                        disabled={uploadingAttachment}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-gray-50 text-gray-700 rounded-lg border border-gray-200 hover:bg-white hover:border-gray-300 transition-all cursor-pointer text-sm font-medium shadow-sm disabled:opacity-60"
+                      >
                         {uploadingAttachment ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
                         {uploadingAttachment ? 'Uploading...' : 'Add Attachment'}
-                        <input type="file" className="hidden" onChange={handleUploadAttachment} disabled={uploadingAttachment} />
-                      </label>
+                      </button>
                     </>
                   )}
                 </div>
@@ -1644,7 +1948,7 @@ export default function ClientOnboarding() {
                         ))}
                       </div>
                     )}
-                    
+
                     <div className="relative">
                       <textarea
                         ref={commentInputRef}
@@ -1659,25 +1963,25 @@ export default function ClientOnboarding() {
                           }
                         }}
                       />
-                      
+
                       {/* Move icon button - only show when someone is tagged */}
                       {(() => {
                         const mentionableUsers = roles?.mentionableUsers || [];
                         const { taggedUserIds } = parseMentions(commentText, mentionableUsers);
                         const hasTags = taggedUserIds.length > 0;
-                        
+
                         if (!hasTags || !selectedJob) return null;
-                        
+
                         const allowedStatuses = getAllowedStatusesForPlan(selectedJob.planType);
                         const availableStatuses = allowedStatuses.filter(s => {
                           if (canMoveAny) return true;
                           return canUserMoveToStatus(s);
                         });
-                        
+
                         const moveableStatuses = availableStatuses.filter(s => s !== selectedJob.status);
-                        
+
                         if (moveableStatuses.length === 0) return null;
-                        
+
                         return (
                           <>
                             {/* Move icon button */}
@@ -1694,10 +1998,10 @@ export default function ClientOnboarding() {
                               <ArrowUpDown className="w-3.5 h-3.5" />
                               <span className="text-[9px] font-medium leading-tight">Move</span>
                             </button>
-                            
+
                             {/* Move options dropdown */}
                             {showMoveOptions && (
-                              <div 
+                              <div
                                 data-move-options
                                 className="absolute bottom-full right-14 mb-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-30 max-h-[300px] overflow-y-auto"
                               >
@@ -1726,7 +2030,7 @@ export default function ClientOnboarding() {
                           </>
                         );
                       })()}
-                      
+
                       {/* Send button */}
                       <button
                         onClick={handleAddComment}
@@ -1740,6 +2044,75 @@ export default function ClientOnboarding() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Attachment Modal (Notion-style: ask for name before upload) */}
+      {showAddAttachmentModal && selectedJob && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+          if (e.target === e.currentTarget && !uploadingAttachment) {
+            setShowAddAttachmentModal(false);
+            setAttachmentNameInput('');
+            setAttachmentFilePending(null);
+          }
+        }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">Add Attachment</h2>
+              <button
+                type="button"
+                onClick={() => { setShowAddAttachmentModal(false); setAttachmentNameInput(''); setAttachmentFilePending(null); }}
+                disabled={uploadingAttachment}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">Name</label>
+                <input
+                  ref={attachmentNameInputRef}
+                  type="text"
+                  value={attachmentNameInput}
+                  onChange={(e) => setAttachmentNameInput(e.target.value)}
+                  placeholder="e.g. Resume Draft v1"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">File</label>
+                <label className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 rounded-lg hover:border-gray-300 cursor-pointer text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 transition-colors">
+                  <Paperclip className="w-4 h-4" />
+                  {attachmentFilePending ? attachmentFilePending.name : 'Choose file'}
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={handleAttachmentFileSelect}
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => { setShowAddAttachmentModal(false); setAttachmentNameInput(''); setAttachmentFilePending(null); }}
+                disabled={uploadingAttachment}
+                className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleUploadAttachment}
+                disabled={!attachmentFilePending || uploadingAttachment}
+                className="px-4 py-2 text-sm font-semibold text-white bg-primary rounded-lg hover:bg-[#c94a28] disabled:opacity-50 flex items-center gap-2"
+              >
+                {uploadingAttachment ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                Upload
+              </button>
             </div>
           </div>
         </div>
@@ -1774,22 +2147,20 @@ export default function ClientOnboarding() {
                   <button
                     type="button"
                     onClick={() => setAddMode('existing')}
-                    className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                      addMode === 'existing'
-                        ? 'bg-white text-primary shadow-sm'
-                        : 'text-gray-600 hover:text-gray-900'
-                    }`}
+                    className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${addMode === 'existing'
+                      ? 'bg-white text-primary shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                      }`}
                   >
                     Existing Client
                   </button>
                   <button
                     type="button"
                     onClick={() => setAddMode('new')}
-                    className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                      addMode === 'new'
-                        ? 'bg-white text-primary shadow-sm'
-                        : 'text-gray-600 hover:text-gray-900'
-                    }`}
+                    className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${addMode === 'new'
+                      ? 'bg-white text-primary shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                      }`}
                   >
                     New Client
                   </button>
@@ -1980,7 +2351,7 @@ export default function ClientOnboarding() {
                           const linkedInMembers = roles?.linkedInMembers || [];
                           const hasResumeMakers = resumeMakers.length > 0;
                           const hasLinkedInMembers = linkedInMembers.length > 0;
-                          
+
                           if (!hasResumeMakers && !hasLinkedInMembers) {
                             return "No Resume Maker or LinkedIn & Cover Letter Optimization users found. Jobs will be created but may not be assigned automatically.";
                           }
