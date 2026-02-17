@@ -32,6 +32,9 @@ import { NewUserModel } from './schema_models/UserModel.js';
 import { ClientTodosModel } from './ClientTodosModel.js';
 import {
   createOnboardingJobPayload,
+  getNextClientNumber,
+  previewNextClientNumber,
+  getCurrentClientNumber,
   listOnboardingJobs,
   getOnboardingJobById,
   patchOnboardingJob,
@@ -42,7 +45,10 @@ import {
   getOnboardingNotifications,
   markOnboardingNotificationRead
 } from './controllers/onboardingController.js';
+import { ClientCounterModel } from './ClientCounterModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
+import { setOtp, getOtp, deleteOtp, decrementAttempts, otpHash } from './utils/otpCache.js';
+import { sendOtpEmail } from './utils/sendOtpEmail.js';
 import multer from 'multer';
 import FormData from 'form-data';
 import cron from 'node-cron';
@@ -564,6 +570,7 @@ export const createOrUpdateClient = async (req, res) => {
       email,
       password,
       name,
+      clientNumber,
       jobDeadline,
       applicationStartDate,
       dashboardInternName,
@@ -616,76 +623,93 @@ export const createOrUpdateClient = async (req, res) => {
       dashboardManager,
     };
 
-    // ✅ if it's a "new client" path
-    if (currentPath?.includes("/clients/new")) {
-      const existingUser = await NewUserModel.findOne({ email: emailLower });
+    const existingUser = await NewUserModel.findOne({ email: emailLower });
 
-      // CREATE new user + client tracking if not exists
-      if (!existingUser) {
-        const newUserData = {
-          ...userData,
-          planType: capitalizedPlan || "Free Trial",
-        };
-        const newUser = await NewUserModel.create(newUserData);
+    if (!existingUser) {
+      const newUserData = {
+        ...userData,
+        planType: capitalizedPlan || "Free Trial",
+      };
+      const newUser = await NewUserModel.create(newUserData);
 
-        const fullClientData = {
-          email: emailLower,
-          name,
-          jobDeadline: jobDeadline || " ",
-          applicationStartDate: applicationStartDate || " ",
-          dashboardInternName: dashboardInternName || " ",
-          dashboardTeamLeadName,
-          planType: planType?.toLowerCase() || "ignite",
-          planPrice: planPrices[planType?.toLowerCase()] || 199,
-          onboardingDate: onboardingDate || new Date().toISOString(),
-          whatsappGroupMade: whatsappGroupMade ?? false,
-          whatsappGroupMadeDate: whatsappGroupMadeDate || " ",
-          dashboardCredentialsShared: dashboardCredentialsShared ?? false,
-          dashboardCredentialsSharedDate: dashboardCredentialsSharedDate || " ",
-          resumeSent: resumeSent ?? false,
-          resumeSentDate: resumeSentDate || " ",
-          coverLetterSent: coverLetterSent ?? false,
-          coverLetterSentDate: coverLetterSentDate || " ",
-          portfolioMade: portfolioMade ?? false,
-          portfolioMadeDate: portfolioMadeDate || " ",
-          linkedinOptimization: linkedinOptimization ?? false,
-          linkedinOptimizationDate: linkedinOptimizationDate || " ",
-          gmailCredentials: gmailCredentials || { email: "", password: "" },
-          dashboardCredentials: dashboardCredentials || {
-            username: "",
-            password: "",
-          },
-          linkedinCredentials: linkedinCredentials || {
-            username: "",
-            password: "",
-          },
-          amountPaid: amountPaid || 0,
-          amountPaidDate: amountPaidDate || " ",
-          modeOfPayment: modeOfPayment || "paypal",
-          status: status !== undefined && status !== null && status !== '' ? status : "active",
-          updatedAt: new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
-        };
-
-        const newTracking = await ClientModel.create(fullClientData);
-        try {
-          await createOnboardingJobPayload({
-            clientEmail: emailLower,
-            clientName: name,
-            planType: capitalizedPlan || 'Professional',
-            dashboardManagerName: dashboardManager || '',
-            dashboardCredentials: dashboardCredentials || { username: '', password: '', loginUrl: '' }
-          });
-        } catch (onbErr) {
-          console.error('Onboarding job creation failed:', onbErr?.message || onbErr);
+      let finalClientNumber;
+      const CLIENT_NUMBER_FLOOR = 5809;
+      if (clientNumber !== undefined && clientNumber !== null && clientNumber !== '') {
+        const num = parseInt(String(clientNumber).trim(), 10);
+        if (!isNaN(num) && num >= CLIENT_NUMBER_FLOOR) {
+          finalClientNumber = num;
+          await ClientCounterModel.findOneAndUpdate(
+            { _id: 'client_number' },
+            { $max: { lastNumber: num } },
+            { upsert: true }
+          );
+        } else {
+          finalClientNumber = await getNextClientNumber();
         }
-        return res.status(200).json({
-          message: "✅ New client created successfully",
-          newUser,
-          newTracking,
-        });
+      } else {
+        finalClientNumber = await getNextClientNumber();
       }
 
-      // 🔄 if exists → partial update only
+      const fullClientData = {
+        email: emailLower,
+        name,
+        clientNumber: finalClientNumber,
+        jobDeadline: jobDeadline || " ",
+        applicationStartDate: applicationStartDate || " ",
+        dashboardInternName: dashboardInternName || " ",
+        dashboardTeamLeadName,
+        planType: planType?.toLowerCase() || "ignite",
+        planPrice: planPrices[planType?.toLowerCase()] || 199,
+        onboardingDate: onboardingDate || new Date().toISOString(),
+        whatsappGroupMade: whatsappGroupMade ?? false,
+        whatsappGroupMadeDate: whatsappGroupMadeDate || " ",
+        dashboardCredentialsShared: dashboardCredentialsShared ?? false,
+        dashboardCredentialsSharedDate: dashboardCredentialsSharedDate || " ",
+        resumeSent: resumeSent ?? false,
+        resumeSentDate: resumeSentDate || " ",
+        coverLetterSent: coverLetterSent ?? false,
+        coverLetterSentDate: coverLetterSentDate || " ",
+        portfolioMade: portfolioMade ?? false,
+        portfolioMadeDate: portfolioMadeDate || " ",
+        linkedinOptimization: linkedinOptimization ?? false,
+        linkedinOptimizationDate: linkedinOptimizationDate || " ",
+        gmailCredentials: gmailCredentials || { email: "", password: "" },
+        dashboardCredentials: dashboardCredentials || {
+          username: "",
+          password: "",
+        },
+        linkedinCredentials: linkedinCredentials || {
+          username: "",
+          password: "",
+        },
+        amountPaid: amountPaid || 0,
+        amountPaidDate: amountPaidDate || " ",
+        modeOfPayment: modeOfPayment || "paypal",
+        status: status !== undefined && status !== null && status !== '' ? status : "active",
+        updatedAt: new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
+      };
+
+      const newTracking = await ClientModel.create(fullClientData);
+      try {
+        await createOnboardingJobPayload({
+          clientEmail: emailLower,
+          clientName: name,
+          clientNumber: finalClientNumber,
+          planType: capitalizedPlan || 'Professional',
+          dashboardManagerName: dashboardManager || '',
+          dashboardCredentials: dashboardCredentials || { username: '', password: '', loginUrl: '' }
+        });
+      } catch (onbErr) {
+        console.error('Onboarding job creation failed:', onbErr?.message || onbErr);
+      }
+      return res.status(200).json({
+        message: "✅ New client created successfully",
+        newUser,
+        newTracking,
+      });
+    }
+
+    if (currentPath?.includes("/clients/new")) {
       await NewUserModel.updateOne({ email: emailLower }, { $set: userData });
       await ClientModel.updateOne(
         { email: emailLower },
@@ -697,7 +721,7 @@ export const createOrUpdateClient = async (req, res) => {
       });
     }
 
-    // ✅ if not /clients/new → partial update always
+    // ✅ partial update for existing client (any other path)
     await ClientModel.updateOne(
       { email: emailLower },
       { $set: req.body },
@@ -1266,40 +1290,47 @@ const addClientAddon = async (req, res) => {
 // Authentication endpoints
 const login = async (req, res) => {
   try {
-    const { email, password, sessionKey } = req.body;
+    const { email, password, sessionKey, trustToken } = req.body;
+    const emailLower = (email || '').toLowerCase();
 
-    // Find user
-    const user = await UserModel.findOne({ email: email.toLowerCase() });
+    const user = await UserModel.findOne({ email: emailLower });
     if (!user || !user.isActive) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const rolesRequiringSessionKey = ['team_lead', 'operations_intern', 'onboarding_team', 'csm'];
-    if (rolesRequiringSessionKey.includes(user.role)) {
-      if (!sessionKey) {
-        return res.status(400).json({ error: 'Session key required', code: 'SESSION_KEY_REQUIRED' });
+    const rolesRequiringSecondStep = ['team_lead', 'operations_intern', 'onboarding_team', 'csm'];
+    if (rolesRequiringSecondStep.includes(user.role)) {
+      let secondStepOk = false;
+      if (trustToken) {
+        try {
+          const decoded = jwt.verify(trustToken, JWT_SECRET);
+          if (decoded.purpose === 'otp-trust' && decoded.email === emailLower) {
+            secondStepOk = true;
+          }
+        } catch (_) {}
       }
-
-      const sessionKeyDoc = await SessionKeyModel.findOne({
-        key: sessionKey,
-        userEmail: email.toLowerCase(),
-        isUsed: false,
-        expiresAt: { $gt: new Date() }
-      });
-
-      if (!sessionKeyDoc) {
-        return res.status(401).json({ error: 'Invalid or expired session key' });
+      if (!secondStepOk && sessionKey) {
+        const sessionKeyDoc = await SessionKeyModel.findOne({
+          key: sessionKey,
+          userEmail: emailLower,
+          isUsed: false,
+          expiresAt: { $gt: new Date() }
+        });
+        if (sessionKeyDoc) {
+          sessionKeyDoc.isUsed = true;
+          sessionKeyDoc.usedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
+          await sessionKeyDoc.save();
+          secondStepOk = true;
+        }
       }
-
-      sessionKeyDoc.isUsed = true;
-      sessionKeyDoc.usedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
-      await sessionKeyDoc.save();
+      if (!secondStepOk) {
+        return res.status(400).json({ error: 'Session key or OTP required', code: 'SESSION_KEY_REQUIRED' });
+      }
     }
 
     const token = jwt.sign(
@@ -1333,7 +1364,7 @@ const login = async (req, res) => {
 // Create a new user (admin only)
 const createUser = async (req, res) => {
   try {
-    const { email, password, role = 'team_lead', name, onboardingSubRole, roles } = req.body;
+    const { email, password, role = 'team_lead', name, onboardingSubRole, roles, otpEmail } = req.body;
 
     const existingUser = await UserModel.findOne({ email: email.toLowerCase() });
     if (existingUser) {
@@ -1354,6 +1385,10 @@ const createUser = async (req, res) => {
     }
     if (Array.isArray(roles)) {
       userData.roles = roles;
+    }
+    if (otpEmail !== undefined && otpEmail !== null && String(otpEmail).trim()) {
+      const val = String(otpEmail).trim().toLowerCase();
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) userData.otpEmail = val;
     }
 
     const user = new UserModel(userData);
@@ -1509,13 +1544,137 @@ const verifyCredentials = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    const rolesRequiringSecondStep = ['team_lead', 'operations_intern', 'onboarding_team', 'csm'];
+    const needSecondStep = rolesRequiringSecondStep.includes(user.role);
+
     res.status(200).json({
       message: 'Credentials verified',
       role: user.role,
-      email: user.email
+      email: user.email,
+      needSecondStep
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+function resolveOtpDestinationEmail(loginEmail, user) {
+  const e = (loginEmail || '').trim().toLowerCase();
+  if (e.endsWith('@flashfirehq') && !e.endsWith('@flashfirehq.com')) {
+    return e + '.com';
+  }
+  if (user?.otpEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.otpEmail.trim())) {
+    return user.otpEmail.trim().toLowerCase();
+  }
+  return (user?.email || e).toLowerCase();
+}
+
+const requestOtp = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    if (!normalizedEmail || !password) {
+      return res.status(400).json({ error: 'Email and password required' });
+    }
+
+    const user = await UserModel.findOne({ email: normalizedEmail, isActive: true }).lean();
+    if (!user) {
+      return res.status(200).json({ message: 'If your email is authorized, you will receive an OTP.' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(200).json({ message: 'If your email is authorized, you will receive an OTP.' });
+    }
+
+    if (user.role === 'admin') {
+      return res.status(400).json({ error: 'OTP login is not available for admins. Sign in with password only.' });
+    }
+
+    const otpDestination = resolveOtpDestinationEmail(normalizedEmail, user);
+    if (!otpDestination || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(otpDestination)) {
+      return res.status(400).json({ error: 'OTP email not configured for this account. Contact your admin.' });
+    }
+
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+    const ttlSeconds = 300;
+    const expiresAtMs = Date.now() + ttlSeconds * 1000;
+    setOtp(normalizedEmail, {
+      otpHash: otpHash(normalizedEmail, otp),
+      expiresAtMs,
+      attemptsLeft: 5
+    });
+
+    await sendOtpEmail(otpDestination, otp, user.name);
+
+    res.status(200).json({ message: 'OTP sent' });
+  } catch (error) {
+    console.error('Request OTP error:', error?.message || error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const verifyOtp = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    if (!normalizedEmail || !otp) {
+      return res.status(400).json({ error: 'Email and OTP required' });
+    }
+
+    const entry = getOtp(normalizedEmail);
+    if (!entry) {
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
+
+    const inputHash = otpHash(normalizedEmail, String(otp).trim());
+    if (entry.otpHash !== inputHash) {
+      decrementAttempts(normalizedEmail);
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+
+    deleteOtp(normalizedEmail);
+
+    const trustToken = jwt.sign(
+      { email: normalizedEmail, purpose: 'otp-trust' },
+      JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    res.status(200).json({
+      message: 'OTP verified',
+      trustToken,
+      expiresIn: '30d'
+    });
+  } catch (error) {
+    console.error('Verify OTP error:', error?.message || error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const validateOtpTrust = async (req, res) => {
+  try {
+    const { email, trustToken } = req.body;
+    const normalizedEmail = (email || '').trim().toLowerCase();
+    if (!normalizedEmail || !trustToken) {
+      return res.status(400).json({ valid: false });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(trustToken, JWT_SECRET);
+    } catch {
+      return res.status(200).json({ valid: false });
+    }
+
+    if (decoded.purpose !== 'otp-trust' || decoded.email !== normalizedEmail) {
+      return res.status(200).json({ valid: false });
+    }
+
+    res.status(200).json({ valid: true });
+  } catch (error) {
+    console.error('Validate OTP trust error:', error?.message || error);
+    res.status(500).json({ valid: false });
   }
 };
 
@@ -1587,6 +1746,52 @@ const changePassword = async (req, res) => {
     res.status(200).json({
       message: 'Password changed successfully',
       email: user.email
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const updateUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { email, otpEmail, name } = req.body;
+
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (email !== undefined && email !== null) {
+      const newEmail = String(email).trim().toLowerCase();
+      if (!newEmail) return res.status(400).json({ error: 'Email cannot be empty' });
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) return res.status(400).json({ error: 'Invalid email format' });
+      const existing = await UserModel.findOne({ email: newEmail });
+      if (existing && existing._id.toString() !== userId) return res.status(400).json({ error: 'Email already in use' });
+      user.email = newEmail;
+    }
+    if (otpEmail !== undefined) {
+      const val = otpEmail === '' || otpEmail === null ? '' : String(otpEmail).trim().toLowerCase();
+      if (val && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) return res.status(400).json({ error: 'Invalid OTP email format' });
+      user.otpEmail = val;
+    }
+    if (name !== undefined && typeof name === 'string') {
+      user.name = name.trim();
+    }
+
+    user.updatedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
+    await user.save();
+
+    res.status(200).json({
+      message: 'User updated successfully',
+      user: {
+        email: user.email,
+        name: user.name,
+        otpEmail: user.otpEmail || '',
+        role: user.role,
+        onboardingSubRole: user.onboardingSubRole,
+        roles: user.roles
+      }
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1917,8 +2122,12 @@ const deleteClient = async (req, res) => {
 // Authentication routes
 app.post('/api/auth/verify-credentials', verifyCredentials);
 app.post('/api/auth/login', login);
+app.post('/api/auth/request-otp', requestOtp);
+app.post('/api/auth/verify-otp', verifyOtp);
+app.post('/api/auth/validate-otp-trust', validateOtpTrust);
 app.post('/api/auth/users', verifyToken, verifyAdmin, createUser);
 app.get('/api/auth/users', verifyToken, verifyAdmin, getAllUsers);
+app.put('/api/auth/users/:userId', verifyToken, verifyAdmin, updateUser);
 app.delete('/api/auth/users/:userId', verifyToken, verifyAdmin, deleteUser);
 app.put('/api/auth/users/:userId/change-password', verifyToken, verifyAdmin, changePassword);
 app.post('/api/auth/session-key', verifyToken, verifyAdmin, generateSessionKey);
@@ -3405,6 +3614,15 @@ app.get('/api/clients', getAllClients);
 app.get('/api/clients/stats', getClientStats);
 app.get('/api/clients/plan-stats', getPlanTypeStats);
 app.get('/api/clients/revenue-stats', getRevenueStats);
+app.get('/api/clients/latest-number', async (req, res) => {
+  try {
+    const current = await getCurrentClientNumber();
+    res.status(200).json({ latestClientNumber: current, nextClientNumber: current + 1 });
+  } catch (error) {
+    console.error('Get latest client number error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get latest client number' });
+  }
+});
 app.get('/api/clients/:email', getClientByEmail);
 app.get('/api/clients/all', async (req, res) => {
   try {

@@ -1,33 +1,36 @@
 import React, { useState } from 'react';
-import {Link, useNavigate} from 'react-router-dom';
 
 const API_BASE = import.meta.env.VITE_BASE || 'http://localhost:8001';
 
-// Validate required environment variables
 if (!API_BASE) {
   console.error('❌ VITE_BASE environment variable is required');
 }
-
 
 export default function Login({ onLogin }) {
   const [formData, setFormData] = useState({
     email: '',
     password: '',
-    sessionKey: ''
+    sessionKey: '',
+    otp: ''
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [step, setStep] = useState(1); // 1: email/password, 2: session key
+  const [step, setStep] = useState(1);
   const [userRole, setUserRole] = useState(null);
-  const navigate= useNavigate();
+  const [useOtp, setUseOtp] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [sendingOtp, setSendingOtp] = useState(false);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: value
-    }));
-    setError(''); // Clear error when user types
+    setFormData((prev) => ({ ...prev, [name]: value }));
+    setError('');
+  };
+
+  const completeLogin = (token, user) => {
+    localStorage.setItem('authToken', token);
+    localStorage.setItem('user', JSON.stringify(user));
+    setTimeout(() => onLogin(user), 200);
   };
 
   const handleStep1Submit = async (e) => {
@@ -36,55 +39,180 @@ export default function Login({ onLogin }) {
     setError('');
 
     try {
-      // First, verify email and password without session key
       const response = await fetch(`${API_BASE}/api/auth/verify-credentials`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          email: formData.email,
-          password: formData.password
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: formData.email, password: formData.password })
       });
 
       const data = await response.json();
 
-      if (response.ok) {
-        setUserRole(data.role);
-        if (data.role === 'admin') {
-          // Admin login - complete the login
-          const loginResponse = await fetch(`${API_BASE}/api/auth/login`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              email: formData.email,
-              password: formData.password
-            })
-          });
+      if (!response.ok) {
+        setError(data.error || 'Invalid credentials');
+        setLoading(false);
+        return;
+      }
 
-          const loginData = await loginResponse.json();
-          if (loginResponse.ok) {
-            localStorage.setItem('authToken', loginData.token);
-            localStorage.setItem('user', JSON.stringify(loginData.user));
-            setTimeout(()=>{
-              onLogin(loginData.user);
-              
-            },200)
-            
-          } else {
-            setError(loginData.error || 'Login failed');
-          }
+      setUserRole(data.role);
+
+      if (data.role === 'admin') {
+        const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: formData.email, password: formData.password })
+        });
+        const loginData = await loginRes.json();
+        if (loginRes.ok) {
+          completeLogin(loginData.token, loginData.user);
         } else {
-          setStep(2);
+          setError(loginData.error || 'Login failed');
+        }
+        setLoading(false);
+        return;
+      }
+
+      if (data.needSecondStep) {
+        const emailLower = formData.email.toLowerCase();
+        const storedTrust = localStorage.getItem('portalOtpTrust');
+        if (storedTrust) {
+          try {
+            const { trustToken, email } = JSON.parse(storedTrust);
+            if (email === emailLower) {
+              const validRes = await fetch(`${API_BASE}/api/auth/validate-otp-trust`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: emailLower, trustToken })
+              });
+              const validData = await validRes.json();
+              if (validData.valid) {
+                const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    email: formData.email,
+                    password: formData.password,
+                    trustToken
+                  })
+                });
+                const loginData = await loginRes.json();
+                if (loginRes.ok) {
+                  completeLogin(loginData.token, loginData.user);
+                  setLoading(false);
+                  return;
+                }
+              }
+            }
+          } catch (_) {}
+        }
+
+        const storedKey = localStorage.getItem('portalSessionKey');
+        if (storedKey) {
+          try {
+            const { sessionKey, email } = JSON.parse(storedKey);
+            if (email === emailLower && sessionKey) {
+              const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  email: formData.email,
+                  password: formData.password,
+                  sessionKey
+                })
+              });
+              const loginData = await loginRes.json();
+              if (loginRes.ok) {
+                completeLogin(loginData.token, loginData.user);
+                setLoading(false);
+                return;
+              }
+            }
+          } catch (_) {}
+        }
+
+        setStep(2);
+      } else {
+        const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: formData.email, password: formData.password })
+        });
+        const loginData = await loginRes.json();
+        if (loginRes.ok) {
+          completeLogin(loginData.token, loginData.user);
+        } else {
+          setError(loginData.error || 'Login failed');
+        }
+      }
+    } catch (err) {
+      setError('Network error. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRequestOtp = async (e) => {
+    e.preventDefault();
+    setSendingOtp(true);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/request-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: formData.email, password: formData.password })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setOtpSent(true);
+      } else {
+        setError(data.error || 'Failed to send OTP');
+      }
+    } catch (err) {
+      setError('Network error');
+    } finally {
+      setSendingOtp(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    if (!formData.otp || formData.otp.length !== 4) {
+      setError('Enter the 4-digit OTP');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/verify-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: formData.email.toLowerCase(), otp: formData.otp })
+      });
+      const data = await res.json();
+      if (res.ok && data.trustToken) {
+        localStorage.setItem(
+          'portalOtpTrust',
+          JSON.stringify({ email: formData.email.toLowerCase(), trustToken: data.trustToken })
+        );
+        const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: formData.email,
+            password: formData.password,
+            trustToken: data.trustToken
+          })
+        });
+        const loginData = await loginRes.json();
+        if (loginRes.ok) {
+          completeLogin(loginData.token, loginData.user);
+        } else {
+          setError(loginData.error || 'Login failed');
         }
       } else {
-        setError(data.error || 'Invalid credentials');
+        setError(data.error || 'Invalid or expired OTP');
       }
-    } catch (error) {
-      setError('Network error. Please try again.');
+    } catch (err) {
+      setError('Network error');
     } finally {
       setLoading(false);
     }
@@ -94,30 +222,32 @@ export default function Login({ onLogin }) {
     e.preventDefault();
     setLoading(true);
     setError('');
-
     try {
-      const response = await fetch(`${API_BASE}/api/auth/login`, {
+      const payload = {
+        email: formData.email,
+        password: formData.password,
+        sessionKey: formData.sessionKey
+      };
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(formData)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        localStorage.setItem('authToken', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
-        setTimeout(()=>{
-            onLogin(data.user)
-        },200)
-        
-        
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem(
+          'portalSessionKey',
+          JSON.stringify({
+            email: formData.email.toLowerCase(),
+            sessionKey: formData.sessionKey,
+            verifiedAt: Date.now()
+          })
+        );
+        completeLogin(data.token, data.user);
       } else {
         setError(data.error || 'Invalid session key');
       }
-    } catch (error) {
+    } catch (err) {
       setError('Network error. Please try again.');
     } finally {
       setLoading(false);
@@ -126,7 +256,9 @@ export default function Login({ onLogin }) {
 
   const handleBackToStep1 = () => {
     setStep(1);
-    setFormData(prev => ({ ...prev, sessionKey: '' }));
+    setFormData((prev) => ({ ...prev, sessionKey: '', otp: '' }));
+    setOtpSent(false);
+    setUseOtp(false);
     setError('');
   };
 
@@ -141,7 +273,9 @@ export default function Login({ onLogin }) {
           </div>
           <h1 className="text-2xl font-bold text-gray-900">FlashFire Portal</h1>
           <p className="text-gray-600 mt-2">
-            {step === 1 ? 'Sign in to access the Client tracking portal' : 'Enter your session key'}
+            {step === 1
+              ? 'Sign in to access the Client tracking portal'
+              : 'Verify with OTP or session key'}
           </p>
         </div>
 
@@ -162,7 +296,6 @@ export default function Login({ onLogin }) {
                 placeholder="Enter your email"
               />
             </div>
-
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
                 Password
@@ -178,13 +311,11 @@ export default function Login({ onLogin }) {
                 placeholder="Enter your password"
               />
             </div>
-
             {error && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3">
                 <p className="text-red-600 text-sm">{error}</p>
               </div>
             )}
-
             <button
               type="submit"
               disabled={loading}
@@ -194,39 +325,105 @@ export default function Login({ onLogin }) {
             </button>
           </form>
         ) : (
-          <form onSubmit={handleStep2Submit} className="space-y-6">
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
-              <div className="flex items-center">
-                <svg className="w-5 h-5 text-green-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                <p className="text-green-700 text-sm font-medium">
-                  Credentials verified! Please enter your session key.
-                </p>
-              </div>
+          <div className="space-y-6">
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <p className="text-green-700 text-sm font-medium">
+                Credentials verified. Choose how to continue:
+              </p>
             </div>
 
-            <div>
-              <label htmlFor="sessionKey" className="block text-sm font-medium text-gray-700 mb-2">
-                Session Key <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                id="sessionKey"
-                name="sessionKey"
-                value={formData.sessionKey}
-                onChange={handleInputChange}
-                required
-                className="w-full px-4 py-3 border border-orange-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-colors bg-orange-50"
-                placeholder="Enter session key provided by admin"
-                autoFocus
-              />
-              <div className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded-lg">
-                <p className="text-sm text-orange-700">
-                  <span className="font-medium">Access Key Required:</span> Session key is required and must be provided by an admin.
-                </p>
+            {!useOtp && !otpSent && (
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => { setUseOtp(true); setError(''); }}
+                  className="flex-1 py-3 px-4 rounded-lg font-medium border-2 border-orange-500 text-orange-600 hover:bg-orange-50 transition-colors"
+                >
+                  Login with OTP
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setUseOtp(false); setOtpSent(false); setError(''); }}
+                  className="flex-1 py-3 px-4 rounded-lg font-medium border-2 border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Session key
+                </button>
               </div>
-            </div>
+            )}
+
+            {useOtp && !otpSent && (
+              <div>
+                <button
+                  type="button"
+                  onClick={handleRequestOtp}
+                  disabled={sendingOtp}
+                  className="w-full py-3 px-4 rounded-lg font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50"
+                >
+                  {sendingOtp ? 'Sending...' : 'Send OTP to my email'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setUseOtp(false); setError(''); }}
+                  className="mt-2 text-sm text-gray-500 hover:text-gray-700"
+                >
+                  Use session key instead
+                </button>
+              </div>
+            )}
+
+            {useOtp && otpSent && (
+              <form onSubmit={handleVerifyOtp} className="space-y-4">
+                <div>
+                  <label htmlFor="otp" className="block text-sm font-medium text-gray-700 mb-2">
+                    4-digit OTP
+                  </label>
+                  <input
+                    type="text"
+                    id="otp"
+                    name="otp"
+                    value={formData.otp}
+                    onChange={handleInputChange}
+                    maxLength={4}
+                    placeholder="0000"
+                    className="w-full px-4 py-3 border border-orange-300 rounded-lg focus:ring-2 focus:ring-orange-500 bg-orange-50 text-center text-xl tracking-widest"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={loading || (formData.otp || '').length !== 4}
+                  className="w-full py-3 px-4 rounded-lg font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50"
+                >
+                  {loading ? 'Verifying...' : 'Verify OTP & sign in'}
+                </button>
+              </form>
+            )}
+
+            {!useOtp && (
+              <form onSubmit={handleStep2Submit} className="space-y-4">
+                <div>
+                  <label htmlFor="sessionKey" className="block text-sm font-medium text-gray-700 mb-2">
+                    Session key
+                  </label>
+                  <input
+                    type="text"
+                    id="sessionKey"
+                    name="sessionKey"
+                    value={formData.sessionKey}
+                    onChange={handleInputChange}
+                    required
+                    className="w-full px-4 py-3 border border-orange-300 rounded-lg focus:ring-2 focus:ring-orange-500 bg-orange-50"
+                    placeholder="Enter session key from admin"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-3 px-4 rounded-lg font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {loading ? 'Signing in...' : 'Complete login'}
+                </button>
+              </form>
+            )}
 
             {error && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3">
@@ -234,29 +431,20 @@ export default function Login({ onLogin }) {
               </div>
             )}
 
-            <div className="flex space-x-3">
+            <div className="flex gap-3">
               <button
                 type="button"
                 onClick={handleBackToStep1}
-                className="flex-1 bg-gray-300 text-gray-700 py-3 px-4 rounded-lg font-medium hover:bg-gray-400 focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors"
+                className="flex-1 py-2 px-4 rounded-lg font-medium bg-gray-200 text-gray-700 hover:bg-gray-300"
               >
                 Back
               </button>
-              <button
-                type="submit"
-                disabled={loading}
-                className="flex-1 bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? 'Signing in...' : 'Complete Login'}
-              </button>
             </div>
-          </form>
+          </div>
         )}
 
         <div className="mt-6 text-center">
-          <p className="text-sm text-gray-500">
-            Contact your administrator for access credentials
-          </p>
+          <p className="text-sm text-gray-500">Contact your administrator for access credentials</p>
         </div>
       </div>
     </div>

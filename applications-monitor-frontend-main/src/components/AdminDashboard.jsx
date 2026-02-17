@@ -15,13 +15,17 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showAddUser, setShowAddUser] = useState(false);
-  const [newUser, setNewUser] = useState({ email: '', password: '', role: 'team_lead', name: '', onboardingSubRole: '', roles: [] });
+  const [newUser, setNewUser] = useState({ email: '', password: '', role: 'team_lead', name: '', onboardingSubRole: '', roles: [], otpEmail: '' });
   const [sessionKeys, setSessionKeys] = useState({});
   const [loadingSessionKey, setLoadingSessionKey] = useState({});
   const [passwordChangeModal, setPasswordChangeModal] = useState(null);
   const [passwordForm, setPasswordForm] = useState({ newPassword: '', confirmPassword: '' });
   const [passwordError, setPasswordError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
+  const [editUserModal, setEditUserModal] = useState(null);
+  const [editUserForm, setEditUserForm] = useState({ email: '', otpEmail: '', name: '' });
+  const [editUserError, setEditUserError] = useState('');
+  const [savingUser, setSavingUser] = useState(false);
 
   // Get auth token
   const getAuthToken = () => localStorage.getItem('authToken');
@@ -60,11 +64,14 @@ export default function AdminDashboard() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${getAuthToken()}`
         },
-        body: JSON.stringify(newUser)
+        body: JSON.stringify({
+          ...newUser,
+          otpEmail: (newUser.otpEmail || '').trim() || undefined
+        })
       });
 
       if (response.ok) {
-        setNewUser({ email: '', password: '', role: 'team_lead', name: '', onboardingSubRole: '', roles: [] });
+        setNewUser({ email: '', password: '', role: 'team_lead', name: '', onboardingSubRole: '', roles: [], otpEmail: '' });
         setShowAddUser(false);
         fetchUsers(); // Refresh users list
       } else {
@@ -216,6 +223,54 @@ export default function AdminDashboard() {
     }
   };
 
+  const openEditUserModal = (u) => {
+    setEditUserModal(u);
+    setEditUserForm({
+      email: u.email || '',
+      otpEmail: u.otpEmail || '',
+      name: u.name || ''
+    });
+    setEditUserError('');
+  };
+
+  const closeEditUserModal = () => {
+    setEditUserModal(null);
+    setEditUserForm({ email: '', otpEmail: '', name: '' });
+    setEditUserError('');
+  };
+
+  const handleUpdateUser = async (e) => {
+    e.preventDefault();
+    if (!editUserModal) return;
+    setEditUserError('');
+    setSavingUser(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/users/${editUserModal._id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getAuthToken()}`
+        },
+        body: JSON.stringify({
+          email: editUserForm.email.trim() || undefined,
+          otpEmail: editUserForm.otpEmail.trim() || '',
+          name: editUserForm.name.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        closeEditUserModal();
+        fetchUsers();
+      } else {
+        setEditUserError(data.error || 'Failed to update user');
+      }
+    } catch (err) {
+      setEditUserError('Network error');
+    } finally {
+      setSavingUser(false);
+    }
+  };
+
   useEffect(() => {
     fetchUsers();
   }, []);
@@ -303,6 +358,18 @@ export default function AdminDashboard() {
                     onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     placeholder="Display name"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    OTP email (optional)
+                  </label>
+                  <input
+                    type="email"
+                    value={newUser.otpEmail || ''}
+                    onChange={(e) => setNewUser({ ...newUser, otpEmail: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="For OTP login; leave empty to use login email"
                   />
                 </div>
                 <div>
@@ -397,6 +464,9 @@ export default function AdminDashboard() {
                       Session Key
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      OTP email
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Actions
                     </th>
                   </tr>
@@ -471,7 +541,21 @@ export default function AdminDashboard() {
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        <div className="flex items-center gap-2">
+                        {user.otpEmail ? (
+                          <span className="text-gray-700">{user.otpEmail}</span>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            onClick={() => openEditUserModal(user)}
+                            className="text-gray-600 hover:text-gray-800 text-xs"
+                            title="Edit email / OTP email"
+                          >
+                            Edit
+                          </button>
                           {user.role === 'admin' && (
                             <button
                               onClick={() => openPasswordChangeModal(user._id, user.email)}
@@ -585,6 +669,89 @@ export default function AdminDashboard() {
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {changingPassword ? 'Changing...' : 'Change Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Modal (email / OTP email) */}
+      {editUserModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <div className="flex justify-between items-center">
+                <h3 className="text-lg font-semibold text-gray-900">Edit user</h3>
+                <button
+                  onClick={closeEditUserModal}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <p className="text-sm text-gray-600 mt-1">Role: {editUserModal.role}</p>
+            </div>
+
+            <form onSubmit={handleUpdateUser} className="px-6 py-4">
+              {editUserError && (
+                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3">
+                  <p className="text-sm text-red-600">{editUserError}</p>
+                </div>
+              )}
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+                <input
+                  type="email"
+                  value={editUserForm.email}
+                  onChange={(e) => setEditUserForm({ ...editUserForm, email: e.target.value })}
+                  required
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="user@example.com"
+                />
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">OTP email (optional)</label>
+                <input
+                  type="email"
+                  value={editUserForm.otpEmail}
+                  onChange={(e) => setEditUserForm({ ...editUserForm, otpEmail: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="Leave empty to use login email; e.g. user@flashfirehq.com"
+                />
+                <p className="text-xs text-gray-500 mt-1">OTP is sent here for login. For @flashfirehq logins we auto-add .com if not set.</p>
+              </div>
+
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Name</label>
+                <input
+                  type="text"
+                  value={editUserForm.name}
+                  onChange={(e) => setEditUserForm({ ...editUserForm, name: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  placeholder="Display name"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeEditUserModal}
+                  className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  disabled={savingUser}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingUser}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {savingUser ? 'Saving...' : 'Save'}
                 </button>
               </div>
             </form>
