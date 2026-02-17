@@ -13,6 +13,11 @@ export const ClientSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  clientNumber: {
+    type: Number,
+    required: false,
+    default: null
+  },
   jobDeadline: {
     type: String,
     required: true,

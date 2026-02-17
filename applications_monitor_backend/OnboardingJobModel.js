@@ -40,6 +40,7 @@ const attachmentSchema = new mongoose.Schema({
 
 const onboardingJobSchema = new mongoose.Schema({
   jobNumber: { type: Number, required: true, unique: true },
+  clientNumber: { type: Number, required: false, default: null },
   clientEmail: { type: String, required: true, lowercase: true, trim: true },
   clientName: { type: String, required: true, trim: true },
   planType: { type: String, default: 'Professional', trim: true },

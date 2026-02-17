@@ -14,7 +14,8 @@ const RegisterClient = () => {
     planType: 'Free Trial',
     dashboardManager: '',
     amountPaid: '',
-    currency: '$'
+    currency: '$',
+    clientNumber: ''
   });
 
   const [dashboardManagers, setDashboardManagers] = useState([]);
@@ -39,6 +40,21 @@ const RegisterClient = () => {
   const [passwordError, setPasswordError] = useState('');
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
+
+  const fetchLatestClientNumber = async () => {
+    try {
+      const API_BASE_URL = import.meta.env.VITE_BASE;
+      const response = await fetch(`${API_BASE_URL}/api/clients/latest-number`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.nextClientNumber) {
+          setFormData(prev => ({ ...prev, clientNumber: String(data.nextClientNumber) }));
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching latest client number:', error);
+    }
+  };
 
   // Fetch dashboard managers and clients on component mount
   useEffect(() => {
@@ -91,6 +107,12 @@ const RegisterClient = () => {
     fetchDashboardManagers();
     fetchClients();
   }, []);
+
+  useEffect(() => {
+    if (showForm) {
+      fetchLatestClientNumber();
+    }
+  }, [showForm]);
 
   const planOptions = [
     { value: 'Free Trial', label: 'Free Trial', description: 'Basic features to get started' },
@@ -187,7 +209,8 @@ const RegisterClient = () => {
       amountPaidDate: "",
       modeOfPayment: "paypal",
       status: "active",
-        currentPath: window.location.pathname, // 👈 this captures /monitor-clients or /clients/new
+      clientNumber: formData.clientNumber ? parseInt(formData.clientNumber.trim(), 10) : undefined,
+      currentPath: window.location.pathname, // 👈 this captures /monitor-clients or /clients/new
 
     };
 
@@ -248,6 +271,7 @@ const RegisterClient = () => {
         dashboardManager: "",
         amountPaid: "",
         currency: "$",
+        clientNumber: "",
       });
       setErrors({});
       setShowForm(false);
@@ -424,7 +448,7 @@ const RegisterClient = () => {
                   <button
                     onClick={() => {
                       setShowForm(false);
-                      setFormData({ firstName: '', lastName: '', email: '', oldEmail: '', password: '', confirmPassword: '', planType: 'Free Trial', dashboardManager: '', amountPaid: '', currency: '$' });
+                      setFormData({ firstName: '', lastName: '', email: '', oldEmail: '', password: '', confirmPassword: '', planType: 'Free Trial', dashboardManager: '', amountPaid: '', currency: '$', clientNumber: '' });
                       setErrors({});
                     }}
                     className="text-gray-400 hover:text-gray-600"
@@ -592,6 +616,26 @@ const RegisterClient = () => {
                       />
                       {errors.amountPaid && <p className="text-red-500 text-xs mt-1">{errors.amountPaid}</p>}
                     </div>
+                  </div>
+
+                  {/* Client ID */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Client ID <span className="text-gray-500 text-xs">(editable)</span>
+                    </label>
+                    <input
+                      type="number"
+                      name="clientNumber"
+                      value={formData.clientNumber}
+                      onChange={handleInputChange}
+                      placeholder="Client ID"
+                      min="5809"
+                      className={`w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                        errors.clientNumber ? 'border-red-400' : 'border-gray-300'
+                      }`}
+                    />
+                    <p className="text-xs text-gray-500 mt-1">This number will be used for the client and onboarding ticket. Leave empty to auto-generate.</p>
+                    {errors.clientNumber && <p className="text-red-500 text-xs mt-1">{errors.clientNumber}</p>}
                   </div>
 
                   {/* Submit Button */}

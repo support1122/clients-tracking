@@ -61,7 +61,12 @@ function ProfileField({ label, value, className = '' }) {
   );
 }
 
-// Get allowed statuses based on plan type (used by JobCard)
+function clientDisplayName(jobOrNotif) {
+  const n = jobOrNotif?.clientNumber;
+  const name = jobOrNotif?.clientName || '';
+  return n != null ? `${n} - ${name}` : name;
+}
+
 function getAllowedStatusesForPlan(planType) {
   const normalizedPlan = (planType || 'default').toLowerCase();
   if (normalizedPlan === 'executive') return PLAN_STATUSES.executive;
@@ -157,7 +162,7 @@ const JobCard = React.memo(({
           onClick={(e) => { if (isAdmin) { e.stopPropagation(); onEditStart(job._id, job.clientName || ''); } }}
           title={isAdmin ? 'Click to edit name' : undefined}
         >
-          {job.clientName}
+          {clientDisplayName(job)}
         </h4>
       )}
       <p className="text-xs text-gray-500 mb-3 font-medium">{job.planType || 'Professional'}</p>
@@ -215,6 +220,7 @@ const JobCard = React.memo(({
   return (
     prevProps.job._id === nextProps.job._id &&
     prevProps.job.clientName === nextProps.job.clientName &&
+    prevProps.job.clientNumber === nextProps.job.clientNumber &&
     prevProps.job.status === nextProps.job.status &&
     prevProps.job.resumeMakerName === nextProps.job.resumeMakerName &&
     prevProps.job.linkedInMemberName === nextProps.job.linkedInMemberName &&
@@ -830,7 +836,15 @@ export default function ClientOnboarding() {
     }
   };
 
-  const mentionableUsers = roles?.mentionableUsers || [];
+  const effectiveMentionableUsers = useMemo(() => {
+    const base = roles?.mentionableUsers || [];
+    const extra = [];
+    const inBase = (email) => base.some((u) => (u.email || '').toLowerCase() === (email || '').toLowerCase());
+    if (selectedJob?.csmEmail && !inBase(selectedJob.csmEmail)) extra.push({ email: selectedJob.csmEmail, name: 'CSM' });
+    if (selectedJob?.resumeMakerEmail && !inBase(selectedJob.resumeMakerEmail)) extra.push({ email: selectedJob.resumeMakerEmail, name: 'Resume Maker' });
+    if (selectedJob?.dashboardManagerEmail && !inBase(selectedJob.dashboardManagerEmail)) extra.push({ email: selectedJob.dashboardManagerEmail, name: 'Dashboard Manager' });
+    return [...base, ...extra];
+  }, [roles?.mentionableUsers, selectedJob?.csmEmail, selectedJob?.resumeMakerEmail, selectedJob?.dashboardManagerEmail]);
 
   const handleCommentChange = (e) => {
     const value = e.target.value;
@@ -845,7 +859,7 @@ export default function ClientOnboarding() {
     const filter = textBefore.slice(atIndex + 1).toLowerCase();
     mentionStartRef.current = atIndex;
     mentionEndRef.current = pos;
-    const list = mentionableUsers.filter(
+    const list = effectiveMentionableUsers.filter(
       (u) =>
         (u.name && String(u.name).toLowerCase().includes(filter)) ||
         (u.email && String(u.email).toLowerCase().includes(filter)) ||
@@ -871,8 +885,7 @@ export default function ClientOnboarding() {
 
   const handleAddComment = async () => {
     if (!selectedJob || !commentText.trim() || addingComment) return;
-    const mentionableUsers = roles?.mentionableUsers || [];
-    const { taggedUserIds, taggedNames } = parseMentions(commentText, mentionableUsers);
+    const { taggedUserIds, taggedNames } = parseMentions(commentText, effectiveMentionableUsers);
     setAddingComment(true);
     try {
       const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, {
@@ -1047,7 +1060,7 @@ export default function ClientOnboarding() {
     });
   };
 
-  const jobTitle = (job) => `${job.jobNumber} - ${job.clientName}-${job.planType || 'Plan'}`;
+  const jobTitle = (job) => `${job.jobNumber} - ${clientDisplayName(job)}-${job.planType || 'Plan'}`;
 
   // Parse @mentions from text and resolve to { taggedUserIds, taggedNames } using mentionableUsers
   const parseMentions = (text, mentionableUsers) => {
@@ -1348,7 +1361,7 @@ export default function ClientOnboarding() {
                               <div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${!n.read ? 'bg-primary' : 'bg-transparent'}`} />
                               <div className="flex-1">
                                 <p className="text-gray-900 font-medium leading-snug">
-                                  <span className="font-bold">{n.jobNumber}</span> – {n.clientName}
+                                  <span className="font-bold">{n.jobNumber}</span> – {clientDisplayName(n)}
                                 </p>
                                 <p className="text-xs text-gray-500 mt-1">
                                   {n.authorName && <span className="font-medium text-gray-700">{n.authorName}</span>}
@@ -1479,7 +1492,7 @@ export default function ClientOnboarding() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <h3 className="font-bold text-gray-900 text-lg">Move to</h3>
-                  <p className="text-sm text-gray-500 truncate">{moveToJob.clientName} · #{moveToJob.jobNumber}</p>
+                  <p className="text-sm text-gray-500 truncate">{clientDisplayName(moveToJob)} · #{moveToJob.jobNumber}</p>
                 </div>
               </div>
             </div>
@@ -1560,7 +1573,7 @@ export default function ClientOnboarding() {
                       onClick={() => isAdmin && (setEditingClientNameJobId(selectedJob._id), setEditingClientNameValue(selectedJob.clientName || ''))}
                       title={isAdmin ? 'Click to edit name' : undefined}
                     >
-                      {selectedJob.clientName}
+                      {clientDisplayName(selectedJob)}
                     </h2>
                   )}
                   <span className="text-sm font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-md border border-gray-200">#{selectedJob.jobNumber}</span>
@@ -1978,7 +1991,7 @@ export default function ClientOnboarding() {
                       <div className="absolute bottom-full left-0 w-full mb-2 bg-white rounded-xl shadow-xl border border-gray-200 overflow-hidden z-20 max-h-[200px] overflow-y-auto">
                         {mentionSuggestions.map((u) => (
                           <button
-                            key={u.id || u.email}
+                            key={u.email || u.name || String(Math.random())}
                             onClick={() => handleSelectMention(u)}
                             className="w-full text-left px-4 py-2.5 hover:bg-orange-50 text-sm flex items-center gap-2 text-gray-700 transition-colors"
                           >
@@ -2008,8 +2021,7 @@ export default function ClientOnboarding() {
 
                       {/* Move icon button - only show when someone is tagged */}
                       {(() => {
-                        const mentionableUsers = roles?.mentionableUsers || [];
-                        const { taggedUserIds } = parseMentions(commentText, mentionableUsers);
+                        const { taggedUserIds } = parseMentions(commentText, effectiveMentionableUsers);
                         const hasTags = taggedUserIds.length > 0;
 
                         if (!hasTags || !selectedJob) return null;

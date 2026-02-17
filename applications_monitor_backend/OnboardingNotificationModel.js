@@ -4,6 +4,7 @@ const onboardingNotificationSchema = new mongoose.Schema({
   userEmail: { type: String, required: true, lowercase: true, trim: true },
   jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'OnboardingJob', required: true },
   jobNumber: { type: Number, required: true },
+  clientNumber: { type: Number, required: false, default: null },
   clientName: { type: String, required: true },
   commentSnippet: { type: String, default: '' },
   authorEmail: { type: String, default: '' },

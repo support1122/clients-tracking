@@ -19,6 +19,7 @@ export const UserSchema = new mongoose.Schema({
     default: "team_lead"
   },
   name: { type: String, trim: true, default: "" },
+  otpEmail: { type: String, trim: true, lowercase: true, default: "" },
   onboardingSubRole: {
     type: String,
     enum: ["resume_maker", "linkedin_and_cover_letter_optimization"],

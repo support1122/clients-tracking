@@ -1,8 +1,10 @@
 import { OnboardingJobModel, ONBOARDING_STATUSES_LIST } from '../OnboardingJobModel.js';
 import { OnboardingJobCounterModel } from '../OnboardingJobCounterModel.js';
+import { ClientCounterModel } from '../ClientCounterModel.js';
 import { OnboardingNotificationModel } from '../OnboardingNotificationModel.js';
 import { UserModel } from '../UserModel.js';
 import { ClientModel } from '../ClientModel.js';
+import { ManagerModel } from '../ManagerModel.js';
 
 const VALID_TRANSITIONS = {
   resume_in_progress: ['resume_draft_done'],
@@ -25,6 +27,29 @@ export async function getNextJobNumber() {
     { new: true, upsert: true }
   );
   return counter.lastNumber;
+}
+
+const CLIENT_NUMBER_FLOOR = 5809;
+
+export async function getNextClientNumber() {
+  const counter = await ClientCounterModel.findOneAndUpdate(
+    { _id: 'client_number' },
+    { $max: { lastNumber: CLIENT_NUMBER_FLOOR - 1 }, $inc: { lastNumber: 1 } },
+    { new: true, upsert: true }
+  );
+  return counter.lastNumber;
+}
+
+export async function previewNextClientNumber() {
+  const counter = await ClientCounterModel.findOne({ _id: 'client_number' }).lean();
+  const current = counter?.lastNumber || (CLIENT_NUMBER_FLOOR - 1);
+  return Math.max(current + 1, CLIENT_NUMBER_FLOOR);
+}
+
+export async function getCurrentClientNumber() {
+  const counter = await ClientCounterModel.findOne({ _id: 'client_number' }).lean();
+  const current = counter?.lastNumber || (CLIENT_NUMBER_FLOOR - 1);
+  return Math.max(current, CLIENT_NUMBER_FLOOR - 1);
 }
 
 export async function getNextResumeMaker() {
@@ -65,9 +90,11 @@ export async function getNextLinkedInMember() {
 
 export async function createOnboardingJobPayload(payload) {
   const jobNumber = await getNextJobNumber();
+  const clientNumber = payload.clientNumber != null ? payload.clientNumber : await getNextClientNumber();
   const nextResume = await getNextResumeMaker();
   const doc = {
     jobNumber,
+    clientNumber,
     clientEmail: (payload.clientEmail || '').toLowerCase().trim(),
     clientName: payload.clientName || '',
     planType: payload.planType || 'Professional',
@@ -117,18 +144,23 @@ export async function listOnboardingJobs(req, res) {
       if (creds.password) creds.password = '********';
       return { ...job, dashboardCredentials: creds };
     };
-    
-    // Enrich jobs with client status and isPaused
+
+    const managerNames = [...new Set(jobs.map(j => (j.dashboardManagerName || '').trim()).filter(Boolean))];
+    const managers = managerNames.length ? await ManagerModel.find({ fullName: { $in: managerNames }, isActive: true }).select('fullName email').lean() : [];
+    const managerEmailByName = new Map(managers.map(m => [m.fullName, m.email]));
+
     const enrichedJobs = jobs.map(job => {
       const clientEmail = (job.clientEmail || '').toLowerCase();
       const clientInfo = clientStatusMap.get(clientEmail) || { status: 'active', isPaused: false };
+      const dashboardManagerEmail = (job.dashboardManagerName && managerEmailByName.get(job.dashboardManagerName)) || '';
       return {
         ...maskCredentials(job),
         clientStatus: clientInfo.status,
-        clientIsPaused: clientInfo.isPaused
+        clientIsPaused: clientInfo.isPaused,
+        dashboardManagerEmail
       };
     });
-    
+
     res.status(200).json({ jobs: enrichedJobs });
   } catch (e) {
     console.error('listOnboardingJobs:', e);
@@ -163,7 +195,14 @@ export async function getOnboardingJobById(req, res) {
       job.clientStatus = 'active';
       job.clientIsPaused = false;
     }
-    
+
+    if (job.dashboardManagerName) {
+      const manager = await ManagerModel.findOne({ fullName: job.dashboardManagerName, isActive: true }).select('email').lean();
+      job.dashboardManagerEmail = manager?.email || '';
+    } else {
+      job.dashboardManagerEmail = '';
+    }
+
     res.status(200).json({ job });
   } catch (e) {
     console.error('getOnboardingJobById:', e);
@@ -251,12 +290,14 @@ export async function patchOnboardingJob(req, res) {
           }).select('email name').lean();
           
           if (linkedInTeam.length > 0) {
+            const displayName = job.clientNumber != null ? `${job.clientNumber} - ${job.clientName || ''}` : (job.clientName || '');
             const notifications = linkedInTeam.map(user => ({
               userEmail: (user.email || '').toLowerCase().trim(),
               jobId: job._id,
               jobNumber: job.jobNumber,
+              clientNumber: job.clientNumber ?? null,
               clientName: job.clientName || '',
-              commentSnippet: `LinkedIn phase started: ${job.clientName}`,
+              commentSnippet: `LinkedIn phase started: ${displayName}`,
               authorEmail: req.user?.email || 'system',
               authorName: req.user?.name || 'System',
               read: false
@@ -324,6 +365,7 @@ export async function patchOnboardingJob(req, res) {
           userEmail: (email || '').toLowerCase().trim(),
           jobId: job._id,
           jobNumber: job.jobNumber,
+          clientNumber: job.clientNumber ?? null,
           clientName: job.clientName || '',
           commentSnippet,
           authorEmail,
@@ -358,7 +400,14 @@ export async function patchOnboardingJob(req, res) {
       updated.clientStatus = 'active';
       updated.clientIsPaused = false;
     }
-    
+
+    if (updated?.dashboardManagerName) {
+      const manager = await ManagerModel.findOne({ fullName: updated.dashboardManagerName, isActive: true }).select('email').lean();
+      updated.dashboardManagerEmail = manager?.email || '';
+    } else if (updated) {
+      updated.dashboardManagerEmail = '';
+    }
+
     res.status(200).json({ job: updated });
   } catch (e) {
     console.error('patchOnboardingJob:', e);
@@ -394,12 +443,14 @@ export async function postOnboardingJob(req, res) {
       }).select('email name').lean();
       
       if (csms.length > 0) {
+        const displayName = job.clientNumber != null ? `${job.clientNumber} - ${job.clientName || ''}` : (job.clientName || '');
         const notifications = csms.map(csm => ({
           userEmail: (csm.email || '').toLowerCase().trim(),
           jobId: job._id,
           jobNumber: job.jobNumber,
+          clientNumber: job.clientNumber ?? null,
           clientName: job.clientName || '',
-          commentSnippet: `New client ticket created: ${job.clientName}`,
+          commentSnippet: `New client ticket created: ${displayName}`,
           authorEmail: req.user?.email || 'system',
           authorName: req.user?.name || 'System',
           read: false
@@ -432,11 +483,10 @@ export async function getOnboardingRoles(req, res) {
       u.onboardingSubRole === 'linkedin_and_cover_letter_optimization'
     );
     const teamLeads = users.filter(u => u.role === 'team_lead');
+    const operationsInterns = users.filter(u => u.role === 'operations_intern');
     const admins = users.filter(u => u.role === 'admin');
-    const onboardingTeam = users.filter(u => u.role === 'onboarding_team');
     const mentionableMap = new Map();
-    // Include Admins, CSMs, onboarding team, and team leads in mentionable users
-    [...admins, ...csms, ...onboardingTeam, ...teamLeads].forEach(u => {
+    [...csms, ...teamLeads, ...operationsInterns].forEach(u => {
       if (u.email) mentionableMap.set(u.email.toLowerCase(), { email: u.email, name: u.name || u.email });
     });
     const mentionableUsers = Array.from(mentionableMap.values());
