@@ -90,7 +90,9 @@ const JobCard = React.memo(({
   onLongPressEnd,
   onEditChange,
   onEditSave,
-  onEditStart
+  onEditStart,
+  jobAnalysis, // { saved, applied, interviewing, offer, rejected, removed, lastAppliedOperatorName }
+  showJobAnalysis // boolean to show/hide the analysis section
 }) => {
   const isDragging = draggedJobId === job._id;
   const isEditing = editingClientNameJobId === job._id && isAdmin;
@@ -167,6 +169,48 @@ const JobCard = React.memo(({
       )}
       <p className="text-xs text-gray-500 mb-3 font-medium">{job.planType || 'Professional'}</p>
 
+      {/* Job Analysis Section - Show for applications_in_progress and completed */}
+      {showJobAnalysis && jobAnalysis && (
+        <div className="mb-3 pb-3 border-b border-gray-100 bg-gray-50/50 rounded-lg px-2 py-2">
+          {/* Status Counts */}
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            <div className="text-center">
+              <div className="text-[10px] text-gray-500 font-medium">Saved</div>
+              <div className="text-xs font-semibold text-gray-700">{jobAnalysis.saved || 0}</div>
+            </div>
+            <div className="text-center">
+              <div className="text-[10px] text-gray-500 font-medium">Applied</div>
+              <div className="text-xs font-semibold text-green-600">{jobAnalysis.applied || 0}</div>
+            </div>
+            <div className="text-center">
+              <div className="text-[10px] text-gray-500 font-medium">Interview</div>
+              <div className="text-xs font-semibold text-yellow-600">{jobAnalysis.interviewing || 0}</div>
+            </div>
+            <div className="text-center">
+              <div className="text-[10px] text-gray-500 font-medium">Offer</div>
+              <div className="text-xs font-semibold text-purple-600">{jobAnalysis.offer || 0}</div>
+            </div>
+            <div className="text-center">
+              <div className="text-[10px] text-gray-500 font-medium">Rejected</div>
+              <div className="text-xs font-semibold text-red-600">{jobAnalysis.rejected || 0}</div>
+            </div>
+            <div className="text-center">
+              <div className="text-[10px] text-gray-500 font-medium">Removed</div>
+              <div className="text-xs font-semibold text-gray-600">{jobAnalysis.removed || 0}</div>
+            </div>
+          </div>
+          {/* Last Applied By */}
+          {jobAnalysis.lastAppliedOperatorName && (
+            <div className="mt-2 pt-2 border-t border-gray-200">
+              <div className="text-[10px] text-gray-500 font-medium">Last applied by</div>
+              <div className="text-xs font-semibold text-gray-700 mt-0.5">
+                {jobAnalysis.lastAppliedOperatorName.charAt(0).toUpperCase() + jobAnalysis.lastAppliedOperatorName.slice(1).toLowerCase()}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center gap-2 mt-auto pt-3 border-t border-gray-50 flex-wrap">
         {job.resumeMakerName ? (
           <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 px-2 py-1 rounded-full border border-gray-100" title="Resume Maker">
@@ -231,7 +275,9 @@ const JobCard = React.memo(({
     prevProps.draggedJobId === nextProps.draggedJobId &&
     prevProps.editingClientNameJobId === nextProps.editingClientNameJobId &&
     prevProps.editingClientNameValue === nextProps.editingClientNameValue &&
-    prevProps.visibleColumns === nextProps.visibleColumns
+    prevProps.visibleColumns === nextProps.visibleColumns &&
+    prevProps.showJobAnalysis === nextProps.showJobAnalysis &&
+    JSON.stringify(prevProps.jobAnalysis) === JSON.stringify(nextProps.jobAnalysis)
   );
 });
 
@@ -289,6 +335,7 @@ export default function ClientOnboarding() {
   const [attachmentFilePending, setAttachmentFilePending] = useState(null);
   const [expandedAttachmentIndices, setExpandedAttachmentIndices] = useState(new Set());
   const [moveToJob, setMoveToJob] = useState(null);
+  const [clientJobAnalysis, setClientJobAnalysis] = useState({}); // Map of clientEmail -> { saved, applied, interviewing, offer, rejected, removed, lastAppliedOperatorName }
   const attachmentNameInputRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const longPressActivatedRef = useRef(false);
@@ -466,6 +513,35 @@ export default function ClientOnboarding() {
     } catch (_) { }
   }, []);
 
+  // Fetch client job analysis data for clients in applications_in_progress and completed columns
+  const fetchClientJobAnalysis = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
+        method: 'POST',
+        headers: AUTH_HEADERS(),
+        body: JSON.stringify({})
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const analysisMap = {};
+        (data.rows || []).forEach((row) => {
+          analysisMap[row.email.toLowerCase()] = {
+            saved: row.saved || 0,
+            applied: row.applied || 0,
+            interviewing: row.interviewing || 0,
+            offer: row.offer || 0,
+            rejected: row.rejected || 0,
+            removed: row.removed || 0,
+            lastAppliedOperatorName: row.lastAppliedOperatorName || ''
+          };
+        });
+        setClientJobAnalysis(analysisMap);
+      }
+    } catch (e) {
+      console.error('Failed to fetch client job analysis:', e);
+    }
+  }, []);
+
   const markNotificationRead = useCallback(async (id) => {
     try {
       const res = await fetch(`${API_BASE}/api/onboarding/notifications/${id}/read`, {
@@ -479,7 +555,8 @@ export default function ClientOnboarding() {
   useEffect(() => {
     fetchJobs();
     fetchRoles();
-  }, [fetchJobs, fetchRoles]);
+    fetchClientJobAnalysis();
+  }, [fetchJobs, fetchRoles, fetchClientJobAnalysis]);
 
   useEffect(() => {
     fetchNotifications();
@@ -555,6 +632,13 @@ export default function ClientOnboarding() {
     // Also set directly to ensure it's cleared immediately
     setSelectedJob(null);
   }, [setSelectedJob, clearSelected, setCommentText]);
+
+  // Sync contenteditable content with commentText when it's cleared externally
+  useEffect(() => {
+    if (!commentText && commentInputRef.current) {
+      commentInputRef.current.innerHTML = '';
+    }
+  }, [commentText]);
 
   // Fetch client profile only when user expands the Client Profile section (avoids lag on modal open)
   useEffect(() => {
@@ -847,18 +931,35 @@ export default function ClientOnboarding() {
   }, [roles?.mentionableUsers, selectedJob?.csmEmail, selectedJob?.resumeMakerEmail, selectedJob?.dashboardManagerEmail]);
 
   const handleCommentChange = (e) => {
-    const value = e.target.value;
-    const pos = e.target.selectionStart ?? value.length;
-    setCommentText(value);
-    const textBefore = value.slice(0, pos);
+    const element = e.target;
+    const text = extractTextFromContentEditable(element);
+    setCommentText(text);
+    
+    // Get cursor position
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      setShowMentionDropdown(false);
+      return;
+    }
+    
+    const range = selection.getRangeAt(0);
+    
+    // Get text before cursor
+    const textBeforeRange = range.cloneRange();
+    textBeforeRange.setStart(element, 0);
+    textBeforeRange.setEnd(range.startContainer, range.startOffset);
+    const textBefore = textBeforeRange.toString();
+    
     const atIndex = textBefore.lastIndexOf('@');
     if (atIndex === -1 || /\s/.test(textBefore.slice(atIndex + 1))) {
       setShowMentionDropdown(false);
       return;
     }
+    
     const filter = textBefore.slice(atIndex + 1).toLowerCase();
     mentionStartRef.current = atIndex;
-    mentionEndRef.current = pos;
+    mentionEndRef.current = textBefore.length;
+    
     const list = effectiveMentionableUsers.filter(
       (u) =>
         (u.name && String(u.name).toLowerCase().includes(filter)) ||
@@ -867,19 +968,127 @@ export default function ClientOnboarding() {
     );
     setMentionSuggestions(list);
     setShowMentionDropdown(list.length > 0);
+    
+    // Only update HTML if we have mentions to render
+    const hasMentions = /@[\w.-]+/.test(text);
+    if (hasMentions) {
+      // Save cursor position
+      const cursorOffset = textBefore.length;
+      
+      // Update HTML with mention chips
+      const htmlContent = renderTextWithMentions(text, effectiveMentionableUsers);
+      
+      // Only update if content actually changed
+      if (element.innerHTML !== htmlContent) {
+        element.innerHTML = htmlContent;
+        
+        // Restore cursor position
+        setTimeout(() => {
+          try {
+            const newSelection = window.getSelection();
+            const newRange = document.createRange();
+            
+            // Find text node at cursor position
+            const walker = document.createTreeWalker(
+              element,
+              NodeFilter.SHOW_TEXT,
+              null
+            );
+            
+            let charCount = 0;
+            let textNode = null;
+            let offset = 0;
+            
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              const nodeLength = node.textContent.length;
+              if (charCount + nodeLength >= cursorOffset) {
+                textNode = node;
+                offset = cursorOffset - charCount;
+                break;
+              }
+              charCount += nodeLength;
+            }
+            
+            if (textNode) {
+              offset = Math.min(offset, textNode.textContent.length);
+              newRange.setStart(textNode, offset);
+              newRange.setEnd(textNode, offset);
+              newSelection.removeAllRanges();
+              newSelection.addRange(newRange);
+            }
+          } catch (err) {
+            // Fallback: just focus
+            element.focus();
+          }
+        }, 0);
+      }
+    }
   };
 
   const handleSelectMention = (user) => {
+    const element = commentInputRef.current;
+    if (!element) return;
+    
+    const displayName = user.name || user.email || '';
+    const mentionText = '@' + displayName + ' ';
+    
+    // Get current text
+    const currentText = extractTextFromContentEditable(element);
     const start = mentionStartRef.current;
     const end = mentionEndRef.current;
-    const displayName = user.name || user.email || '';
-    const newText = commentText.slice(0, start) + '@' + displayName + ' ' + commentText.slice(end);
+    
+    // Insert mention
+    const newText = currentText.slice(0, start) + mentionText + currentText.slice(end);
     setCommentText(newText);
+    
+    // Render with mention chips
+    const htmlContent = renderTextWithMentions(newText, effectiveMentionableUsers);
+    element.innerHTML = htmlContent;
+    
     setShowMentionDropdown(false);
+    
+    // Set cursor after the mention
     setTimeout(() => {
-      commentInputRef.current?.focus();
-      const caret = start + displayName.length + 2;
-      commentInputRef.current?.setSelectionRange(caret, caret);
+      element.focus();
+      const selection = window.getSelection();
+      const range = document.createRange();
+      
+      // Find the position after the mention
+      const walker = document.createTreeWalker(
+        element,
+        NodeFilter.SHOW_TEXT,
+        null
+      );
+      
+      let charCount = 0;
+      const targetPos = start + mentionText.length;
+      let textNode = null;
+      let offset = 0;
+      
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const nodeLength = node.textContent.length;
+        if (charCount + nodeLength >= targetPos) {
+          textNode = node;
+          offset = targetPos - charCount;
+          break;
+        }
+        charCount += nodeLength;
+      }
+      
+      if (textNode) {
+        range.setStart(textNode, Math.min(offset, textNode.textContent.length));
+        range.setEnd(textNode, Math.min(offset, textNode.textContent.length));
+        selection.removeAllRanges();
+        selection.addRange(range);
+      } else {
+        // Fallback: move cursor to end
+        range.selectNodeContents(element);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
     }, 0);
   };
 
@@ -904,6 +1113,10 @@ export default function ClientOnboarding() {
       setSelectedJob(data.job);
       setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
       setCommentText('');
+      // Clear contenteditable
+      if (commentInputRef.current) {
+        commentInputRef.current.innerHTML = '';
+      }
       if (taggedUserIds.length) {
         toastUtils.success(`Comment added. ${taggedUserIds.length} person(s) will be notified.`);
       } else {
@@ -1087,6 +1300,76 @@ export default function ClientOnboarding() {
       }
     });
     return { taggedUserIds, taggedNames };
+  };
+
+  // Extract plain text from contenteditable div (removes HTML tags)
+  const extractTextFromContentEditable = (element) => {
+    if (!element) return '';
+    // Clone the element to avoid modifying the original
+    const clone = element.cloneNode(true);
+    // Replace mention chips with their text content
+    const chips = clone.querySelectorAll('[data-mention-chip]');
+    chips.forEach((chip) => {
+      const text = chip.textContent || '';
+      chip.replaceWith(document.createTextNode(text));
+    });
+    return clone.textContent || clone.innerText || '';
+  };
+
+  // Find mention in mentionableUsers list
+  const findMentionUser = (mentionText, mentionableUsers) => {
+    const handle = mentionText.replace('@', '').trim().toLowerCase();
+    if (!handle) return null;
+    return mentionableUsers.find(
+      (u) =>
+        (u.name && String(u.name).toLowerCase() === handle) ||
+        (u.email && String(u.email).toLowerCase().startsWith(handle)) ||
+        (u.email && String(u.email).toLowerCase().split('@')[0] === handle)
+    );
+  };
+
+  // Render text with mentions as HTML
+  const renderTextWithMentions = (text, mentionableUsers) => {
+    if (!text) return '';
+    const parts = [];
+    const mentionRegex = /@([\w.-]+)/g;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = mentionRegex.exec(text)) !== null) {
+      // Add text before the mention
+      if (match.index > lastIndex) {
+        const beforeText = text.slice(lastIndex, match.index);
+        // Escape HTML in plain text
+        parts.push(beforeText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+      }
+      
+      // Check if this mention matches a user
+      const user = findMentionUser(match[0], mentionableUsers);
+      if (user) {
+        const displayName = user.name || user.email || match[1];
+        const initial = (displayName[0] || 'U').toUpperCase();
+        parts.push(
+          `<span data-mention-chip data-mention-email="${(user.email || '').replace(/"/g, '&quot;')}" contenteditable="false" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 text-sm font-medium">` +
+          `<span class="w-4 h-4 rounded-full bg-orange-500 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">${initial}</span>` +
+          `<span>@${displayName.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>` +
+          `</span>`
+        );
+      } else {
+        // Not a valid mention, keep as plain text (escape HTML)
+        parts.push(match[0].replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+      }
+      
+      lastIndex = match.index + match[0].length;
+    }
+    
+    // Add remaining text
+    if (lastIndex < text.length) {
+      const remainingText = text.slice(lastIndex);
+      parts.push(remainingText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+    }
+    
+    return parts.join('');
   };
 
   const openAddModal = useCallback(() => {
@@ -1444,29 +1727,37 @@ export default function ClientOnboarding() {
                     onDragLeave={handleDragLeave}
                     onDrop={(e) => handleDrop(e, status)}
                   >
-                    {columnJobs.map((job) => (
-                      <JobCard
-                        key={job._id}
-                        job={job}
-                        draggedJobId={draggedJobId}
-                        editingClientNameJobId={editingClientNameJobId}
-                        editingClientNameValue={editingClientNameValue}
-                        isAdmin={isAdmin}
-                        visibleColumns={visibleColumns}
-                        onMoveTo={handleMoveToChoice}
-                        onDragStart={handleDragStart}
-                        onDragEnd={handleDragEnd}
-                        onCardClick={handleCardClick}
-                        onLongPressStart={handleCardLongPressStart}
-                        onLongPressEnd={handleCardLongPressEnd}
-                        onEditChange={(e) => setEditingClientNameValue(e.target.value)}
-                        onEditSave={saveClientName}
-                        onEditStart={(jobId, name) => {
-                          setEditingClientNameJobId(jobId);
-                          setEditingClientNameValue(name);
-                        }}
-                      />
-                    ))}
+                    {columnJobs.map((job) => {
+                      const showAnalysis = status === 'applications_in_progress' || status === 'completed';
+                      const clientEmail = (job.clientEmail || '').toLowerCase();
+                      const analysis = showAnalysis ? clientJobAnalysis[clientEmail] : null;
+                      
+                      return (
+                        <JobCard
+                          key={job._id}
+                          job={job}
+                          draggedJobId={draggedJobId}
+                          editingClientNameJobId={editingClientNameJobId}
+                          editingClientNameValue={editingClientNameValue}
+                          isAdmin={isAdmin}
+                          visibleColumns={visibleColumns}
+                          onMoveTo={handleMoveToChoice}
+                          onDragStart={handleDragStart}
+                          onDragEnd={handleDragEnd}
+                          onCardClick={handleCardClick}
+                          onLongPressStart={handleCardLongPressStart}
+                          onLongPressEnd={handleCardLongPressEnd}
+                          onEditChange={(e) => setEditingClientNameValue(e.target.value)}
+                          onEditSave={saveClientName}
+                          onEditStart={(jobId, name) => {
+                            setEditingClientNameJobId(jobId);
+                            setEditingClientNameValue(name);
+                          }}
+                          showJobAnalysis={showAnalysis}
+                          jobAnalysis={analysis}
+                        />
+                      );
+                    })}
                   </div>
                 </div>
               )
@@ -2005,19 +2296,90 @@ export default function ClientOnboarding() {
                     )}
 
                     <div className="relative">
-                      <textarea
+                      <div
                         ref={commentInputRef}
-                        value={commentText}
-                        onChange={handleCommentChange}
-                        placeholder="Write a comment... (Type @ to mention someone)"
-                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pr-24 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all resize-none min-h-[60px] max-h-[120px] shadow-sm"
+                        contentEditable
+                        onInput={handleCommentChange}
+                        onPaste={(e) => {
+                          e.preventDefault();
+                          const text = e.clipboardData.getData('text/plain');
+                          const selection = window.getSelection();
+                          if (selection.rangeCount > 0) {
+                            const range = selection.getRangeAt(0);
+                            range.deleteContents();
+                            const textNode = document.createTextNode(text);
+                            range.insertNode(textNode);
+                            range.setStartAfter(textNode);
+                            range.collapse(true);
+                            selection.removeAllRanges();
+                            selection.addRange(range);
+                            // Trigger input event to update state
+                            const event = new Event('input', { bubbles: true });
+                            e.target.dispatchEvent(event);
+                          }
+                        }}
+                        data-placeholder="Write a comment... (Type @ to mention someone)"
+                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pr-24 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all min-h-[60px] max-h-[120px] shadow-sm overflow-y-auto"
+                        style={{
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word'
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && !e.shiftKey) {
                             e.preventDefault();
                             handleAddComment();
                           }
+                          // Handle deletion of mention chips
+                          if (e.key === 'Backspace') {
+                            const selection = window.getSelection();
+                            if (selection.rangeCount > 0) {
+                              const range = selection.getRangeAt(0);
+                              const startContainer = range.startContainer;
+                              
+                              // If cursor is right after a mention chip, delete it
+                              if (startContainer.nodeType === Node.TEXT_NODE && range.startOffset === 0) {
+                                const prevSibling = startContainer.previousSibling;
+                                if (prevSibling && prevSibling.hasAttribute && prevSibling.hasAttribute('data-mention-chip')) {
+                                  e.preventDefault();
+                                  prevSibling.remove();
+                                  // Trigger input to update state
+                                  setTimeout(() => {
+                                    const event = new Event('input', { bubbles: true });
+                                    e.target.dispatchEvent(event);
+                                  }, 0);
+                                  return;
+                                }
+                              }
+                              
+                              // If cursor is inside a mention chip, delete it
+                              if (startContainer.nodeType === Node.TEXT_NODE) {
+                                const parent = startContainer.parentElement;
+                                if (parent && parent.hasAttribute('data-mention-chip')) {
+                                  e.preventDefault();
+                                  parent.remove();
+                                  // Trigger input to update state
+                                  setTimeout(() => {
+                                    const event = new Event('input', { bubbles: true });
+                                    e.target.dispatchEvent(event);
+                                  }, 0);
+                                  return;
+                                }
+                              }
+                            }
+                          }
                         }}
+                        suppressContentEditableWarning={true}
                       />
+                      <style>{`
+                        [contenteditable][data-placeholder]:empty:before {
+                          content: attr(data-placeholder);
+                          color: #9ca3af;
+                          pointer-events: none;
+                        }
+                        [data-mention-chip] {
+                          user-select: none;
+                        }
+                      `}</style>
 
                       {/* Move icon button - only show when someone is tagged */}
                       {(() => {
