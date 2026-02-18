@@ -1673,7 +1673,7 @@ export default function ClientOnboarding() {
   return (
     <div className="min-h-screen bg-[#F8FAFC] pb-10">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm backdrop-blur-md bg-white/90">
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm backdrop-blur-md bg-white bg-opacity-90">
         <div className="max-w-[1920px] mx-auto px-6 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Client Onboarding</h1>
@@ -1692,7 +1692,7 @@ export default function ClientOnboarding() {
                 placeholder="Search by client name, email, or job #..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 pr-4 py-2 w-72 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white shadow-sm text-sm"
+                className="pl-10 pr-4 py-2 w-72 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary focus:border-primary bg-white shadow-sm text-sm"
               />
             </div>
 
@@ -1714,8 +1714,8 @@ export default function ClientOnboarding() {
               {showNotificationPanel && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowNotificationPanel(false)} aria-hidden="true" />
-                  <div className="absolute right-0 top-full z-50 mt-4 w-96 rounded-2xl bg-white border border-gray-100 shadow-2xl ring-1 ring-black/5 max-h-[70vh] overflow-hidden flex flex-col">
-                    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                  <div className="absolute right-0 top-full z-50 mt-4 w-96 rounded-2xl bg-white border border-gray-100 shadow-2xl ring-1 ring-black max-h-[70vh] overflow-hidden flex flex-col">
+                    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
                       <h3 className="font-semibold text-gray-900">Notifications</h3>
                       <button type="button" onClick={() => setShowNotificationPanel(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
                         <X className="w-4 h-4" />
@@ -1735,7 +1735,7 @@ export default function ClientOnboarding() {
                             <button
                               type="button"
                               onClick={() => { handleNotificationClick(n); setShowNotificationPanel(false); }}
-                              className={`w-full text-left px-4 py-3 rounded-xl text-sm transition-all flex gap-3 group ${!n.read ? 'bg-orange-50/50 hover:bg-orange-50' : 'hover:bg-gray-50'}`}
+                              className={`w-full text-left px-4 py-3 rounded-xl text-sm transition-all flex gap-3 group ${!n.read ? 'bg-orange-50 hover:bg-orange-50' : 'hover:bg-gray-50'}`}
                             >
                               <div className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${!n.read ? 'bg-primary' : 'bg-transparent'}`} />
                               <div className="flex-1">
@@ -1755,7 +1755,7 @@ export default function ClientOnboarding() {
                     </ul>
                     {/* Pagination for notifications if needed */}
                     {notifications.length > notificationsPerPage && (
-                      <div className="p-3 border-t border-gray-100 flex justify-between items-center bg-gray-50/50">
+                      <div className="p-3 border-t border-gray-100 flex justify-between items-center bg-gray-50">
                         <button disabled={notificationPage === 1} onClick={() => setNotificationPage(p => p - 1)} className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-600 disabled:opacity-50 hover:bg-gray-50">Prev</button>
                         <span className="text-xs text-gray-400">Page {notificationPage}</span>
                         <button disabled={notificationPage >= Math.ceil(notifications.length / notificationsPerPage)} onClick={() => setNotificationPage(p => p + 1)} className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-600 disabled:opacity-50 hover:bg-gray-50">Next</button>
@@ -1780,7 +1780,7 @@ export default function ClientOnboarding() {
                 <button
                   type="button"
                   onClick={openAddModal}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl hover:bg-primary-hover text-sm font-semibold shadow-lg shadow-orange-500/20 transition-all active:scale-95"
+                  className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl hover:bg-primary-hover text-sm font-semibold shadow-lg shadow-orange-500 transition-all active:scale-95"
                 >
                   <Plus className="w-4 h-4 stroke-[3px]" />
                   <span className="tracking-wide">Add Client</span>
@@ -1818,7 +1818,7 @@ export default function ClientOnboarding() {
 
                   {/* Column Body */}
                   <div
-                    className={`flex-1 bg-gray-100/50 border-x border-b border-gray-200 rounded-b-2xl p-3 overflow-y-auto space-y-3 scrollbar-hide transition-[background-color,border-color,box-shadow] duration-200 ease-out ${dragOverStatus === status ? 'bg-orange-50 border-primary border-dashed shadow-inner' : ''}`}
+                    className={`flex-1 bg-gray-100 border-x border-b border-gray-200 rounded-b-2xl p-3 overflow-y-auto space-y-3 scrollbar-hide transition-[background-color,border-color,box-shadow] duration-200 ease-out ${dragOverStatus === status ? 'bg-orange-50 border-primary border-dashed shadow-inner' : ''}`}
                     onDragOver={(e) => handleDragOver(e, status)}
                     onDragLeave={handleDragLeave}
                     onDrop={(e) => handleDrop(e, status)}
@@ -1865,7 +1865,7 @@ export default function ClientOnboarding() {
       {/* Move to sheet (long-press 3.5s on a card) - mobile-style */}
       {moveToJob && (
         <div
-          className="fixed inset-0 z-[60] flex flex-col justify-end sm:justify-center sm:items-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-200"
+          className="fixed inset-0 z-[60] flex flex-col justify-end sm:justify-center sm:items-center bg-black bg-opacity-40 backdrop-blur-[2px] animate-in fade-in duration-200"
           onClick={() => setMoveToJob(null)}
         >
           <div
@@ -1874,7 +1874,7 @@ export default function ClientOnboarding() {
           >
             <div className="p-5 pb-4 border-b border-gray-100">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-full bg-primary bg-opacity-10 flex items-center justify-center">
                   <ArrowUpDown className="w-5 h-5 text-primary" />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -1929,7 +1929,7 @@ export default function ClientOnboarding() {
           }}
         >
           <div
-            className="bg-[#FAFAFA] rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] overflow-hidden flex flex-col ring-1 ring-white/20"
+            className="bg-[#FAFAFA] rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] overflow-hidden flex flex-col ring-1 ring-white"
             onClick={(e) => {
               e.stopPropagation();
             }}
@@ -2082,31 +2082,29 @@ export default function ClientOnboarding() {
                   </div>
                 </div>
 
-                {/* Gmail Credentials Section - Outside grid, full width */}
+                {/* Gmail Credentials Section - Simple Form */}
                 <div className="mb-6">
                   <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
-                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                      <Mail className="w-3 h-3" /> Gmail Credentials
-                    </h3>
-                    <div className="space-y-4">
+                    <h3 className="text-sm font-bold text-gray-700 mb-4">Gmail Credentials</h3>
+                    <div className="space-y-3">
                       <div>
-                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Username</label>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Username</label>
                         <input
                           type="text"
                           value={gmailUsername}
                           onChange={(e) => setGmailUsername(e.target.value)}
                           placeholder="Enter Gmail username"
-                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
+                          className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white"
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Password</label>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Password</label>
                         <input
-                          type="password"
+                          type="text"
                           value={gmailPassword}
                           onChange={(e) => setGmailPassword(e.target.value)}
                           placeholder="Enter Gmail password"
-                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
+                          className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white"
                         />
                       </div>
                       <button
@@ -2125,69 +2123,26 @@ export default function ClientOnboarding() {
                                 }
                               })
                             });
-                            if (!res.ok) throw new Error('Failed to save credentials');
+                            if (!res.ok) throw new Error('Failed to save');
                             const data = await res.json();
                             setSelectedJob(data.job);
                             setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
-                            toastUtils.success('Gmail credentials saved');
-                            // Update local state with saved values
+                            toastUtils.success('Saved');
                             if (data.job.gmailCredentials) {
                               setGmailUsername(data.job.gmailCredentials.username || '');
                               setGmailPassword(data.job.gmailCredentials.password || '');
                             }
                           } catch (e) {
-                            toastUtils.error(e.message || 'Failed to save credentials');
+                            toastUtils.error(e.message || 'Failed');
                           } finally {
                             setSavingGmailCredentials(false);
                           }
                         }}
                         disabled={savingGmailCredentials}
-                        className="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                        className="w-full px-4 py-2 bg-primary text-white rounded-lg disabled:opacity-50 text-sm font-medium"
                       >
-                        {savingGmailCredentials ? 'Saving...' : 'Save Credentials'}
+                        {savingGmailCredentials ? 'Saving...' : 'Save'}
                       </button>
-                      
-                      {/* Credentials History */}
-                      {(selectedJob.gmailCredentialsHistory || []).length > 0 && (
-                        <div className="mt-4 pt-4 border-t border-gray-200">
-                          <button
-                            type="button"
-                            onClick={() => setShowGmailCredentialsHistory(!showGmailCredentialsHistory)}
-                            className="w-full flex items-center justify-between text-xs font-semibold text-gray-700 hover:text-gray-900 transition-colors"
-                          >
-                            <span>Credentials History ({(selectedJob.gmailCredentialsHistory || []).length})</span>
-                            <ChevronRight className={`w-4 h-4 transition-transform ${showGmailCredentialsHistory ? 'rotate-90' : ''}`} />
-                          </button>
-                          {showGmailCredentialsHistory && (
-                            <div className="mt-3 space-y-2 max-h-60 overflow-y-auto">
-                              {(selectedJob.gmailCredentialsHistory || []).slice().reverse().map((history, idx) => (
-                                <div key={idx} className="bg-white rounded-lg p-3 border border-gray-200">
-                                  <div className="flex items-center justify-between mb-2">
-                                    <span className="text-[10px] text-gray-500">
-                                      Updated by: {history.updatedBy || 'Unknown'}
-                                    </span>
-                                    <span className="text-[10px] text-gray-500">
-                                      {new Date(history.updatedAt).toLocaleDateString()} {new Date(history.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                    </span>
-                                  </div>
-                                  <div className="space-y-1.5">
-                                    <div>
-                                      <span className="text-[10px] text-gray-500 font-medium">Username:</span>
-                                      <div className="text-xs text-gray-700 font-mono bg-gray-50 px-2 py-1 rounded mt-0.5">{history.username || '—'}</div>
-                                    </div>
-                                    <div>
-                                      <span className="text-[10px] text-gray-500 font-medium">Password:</span>
-                                      <div className="text-xs text-gray-700 font-mono bg-gray-50 px-2 py-1 rounded mt-0.5">
-                                        {history.password || '—'}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -2206,7 +2161,7 @@ export default function ClientOnboarding() {
                             type="date"
                             value={cardAnalysisDate}
                             onChange={(e) => setCardAnalysisDate(e.target.value)}
-                            className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
+                            className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary bg-white"
                             placeholder="Select date (optional)"
                           />
                           {cardAnalysisDate && (
@@ -2343,16 +2298,16 @@ export default function ClientOnboarding() {
                             <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Links & Documents</h4>
                             <div className="flex flex-wrap gap-2">
                               {clientProfileData.linkedinUrl && (
-                                <a href={clientProfileData.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">LinkedIn</a>
+                                <a href={clientProfileData.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary bg-opacity-5 rounded-lg border border-primary hover:bg-primary bg-opacity-10 hover:border-primary transition-colors">LinkedIn</a>
                               )}
                               {clientProfileData.githubUrl && (
-                                <a href={clientProfileData.githubUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">GitHub</a>
+                                <a href={clientProfileData.githubUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary bg-opacity-5 rounded-lg border border-primary hover:bg-primary bg-opacity-10 hover:border-primary transition-colors">GitHub</a>
                               )}
                               {clientProfileData.resumeUrl && (
-                                <a href={clientProfileData.resumeUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">Resume</a>
+                                <a href={clientProfileData.resumeUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary bg-opacity-5 rounded-lg border border-primary hover:bg-primary bg-opacity-10 hover:border-primary transition-colors">Resume</a>
                               )}
                               {clientProfileData.coverLetterUrl && (
-                                <a href={clientProfileData.coverLetterUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">Cover Letter</a>
+                                <a href={clientProfileData.coverLetterUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary bg-opacity-5 rounded-lg border border-primary hover:bg-primary bg-opacity-10 hover:border-primary transition-colors">Cover Letter</a>
                               )}
                               {!clientProfileData.linkedinUrl && !clientProfileData.githubUrl && !clientProfileData.resumeUrl && !clientProfileData.coverLetterUrl && (
                                 <span className="text-sm text-slate-400">No links</span>
@@ -2410,7 +2365,7 @@ export default function ClientOnboarding() {
                                 <span className="text-sm font-medium text-gray-900 truncate flex-1">{displayName}</span>
                               </button>
                               {isExpanded && (
-                                <div className="border-t border-gray-100 p-3 bg-gray-50/50">
+                                <div className="border-t border-gray-100 p-3 bg-gray-50">
                                   {isImage ? (
                                     <a href={a.url} target="_blank" rel="noopener noreferrer" className="block">
                                       <img src={a.url} alt={displayName} className="max-h-48 rounded-lg object-contain" />
@@ -2600,7 +2555,7 @@ export default function ClientOnboarding() {
                         }}
                         data-placeholder="Write a comment... (Type @ to mention someone)"
                         data-empty="true"
-                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pr-24 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all min-h-[60px] max-h-[120px] shadow-sm overflow-y-auto relative"
+                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pr-24 text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary transition-all min-h-[60px] max-h-[120px] shadow-sm overflow-y-auto relative"
                         style={{
                           whiteSpace: 'pre-wrap',
                           wordBreak: 'break-word'
@@ -2809,7 +2764,7 @@ export default function ClientOnboarding() {
 
       {/* Add Client Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm" onClick={(e) => {
           if (e.target === e.currentTarget) {
             setShowAddModal(false);
           }
@@ -2870,7 +2825,7 @@ export default function ClientOnboarding() {
                       <select
                         value={selectedClientEmail}
                         onChange={(e) => setSelectedClientEmail(e.target.value)}
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white"
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary transition-all bg-white"
                       >
                         <option value="">Choose a client...</option>
                         {availableClients.map((client) => (
@@ -2896,7 +2851,7 @@ export default function ClientOnboarding() {
                       value={newClientEmail}
                       onChange={(e) => setNewClientEmail(e.target.value)}
                       placeholder="client@example.com"
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary transition-all"
                     />
                   </div>
                   <div>
@@ -2908,7 +2863,7 @@ export default function ClientOnboarding() {
                       value={newClientName}
                       onChange={(e) => setNewClientName(e.target.value)}
                       placeholder="John Doe"
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary transition-all"
                     />
                   </div>
                   <div>
@@ -2918,7 +2873,7 @@ export default function ClientOnboarding() {
                     <select
                       value={newPlanType}
                       onChange={(e) => setNewPlanType(e.target.value)}
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary transition-all bg-white"
                     >
                       <option value="Professional">Professional</option>
                       <option value="Executive">Executive</option>
@@ -2935,7 +2890,7 @@ export default function ClientOnboarding() {
                       value={newDashboardManagerName}
                       onChange={(e) => setNewDashboardManagerName(e.target.value)}
                       placeholder="Manager name (optional)"
-                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white"
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary transition-all bg-white"
                     />
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2948,7 +2903,7 @@ export default function ClientOnboarding() {
                         value={newBachelorsStartDate}
                         onChange={(e) => setNewBachelorsStartDate(e.target.value)}
                         placeholder="YYYY-MM-DD"
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white text-gray-900"
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary transition-all bg-white text-gray-900"
                       />
                     </div>
                     <div>
@@ -2960,7 +2915,7 @@ export default function ClientOnboarding() {
                         value={newMastersEndDate}
                         onChange={(e) => setNewMastersEndDate(e.target.value)}
                         placeholder="YYYY-MM-DD"
-                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all bg-white text-gray-900"
+                        className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary transition-all bg-white text-gray-900"
                       />
                     </div>
                   </div>
@@ -2999,7 +2954,7 @@ export default function ClientOnboarding() {
 
       {/* Import All Clients Warning Modal */}
       {showImportModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm" onClick={(e) => {
           if (e.target === e.currentTarget) {
             setShowImportModal(false);
           }
@@ -3082,7 +3037,7 @@ export default function ClientOnboarding() {
 
       {/* Import Confirmation Modal (when no roles exist) */}
       {showImportConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm" onClick={(e) => {
           if (e.target === e.currentTarget) {
             setShowImportConfirmModal(false);
           }
@@ -3152,10 +3107,10 @@ export default function ClientOnboarding() {
 
       {/* Import Progress Modal */}
       {importingClients && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
             {/* Modal Header */}
-            <div className="px-6 py-5 border-b border-gray-200 bg-primary/5 flex items-center justify-between">
+            <div className="px-6 py-5 border-b border-gray-200 bg-primary bg-opacity-5 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <Loader2 className="w-5 h-5 text-primary animate-spin" />
                 <h2 className="text-xl font-bold text-gray-900">Importing Clients</h2>
