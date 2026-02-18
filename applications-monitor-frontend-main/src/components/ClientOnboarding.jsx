@@ -25,7 +25,8 @@ import {
   AlertCircle,
   ArrowUpDown,
   Search,
-  Pencil
+  Pencil,
+  Mail
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_BASE || '';
@@ -2066,11 +2067,13 @@ export default function ClientOnboarding() {
                       </div>
                     </div>
                   </div>
+                </div>
 
-                  {/* Gmail Credentials Section */}
+                {/* Gmail Credentials Section - Outside grid, full width */}
+                <div className="mb-6">
                   <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
                     <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                      <Briefcase className="w-3 h-3" /> Gmail Credentials
+                      <Mail className="w-3 h-3" /> Gmail Credentials
                     </h3>
                     <div className="space-y-4">
                       <div>
@@ -2174,8 +2177,9 @@ export default function ClientOnboarding() {
                       )}
                     </div>
                   </div>
+                </div>
 
-                  {/* Job Analysis Section */}
+                {/* Job Analysis Section */}
                   {(selectedJob.status === 'applications_in_progress' || selectedJob.status === 'completed') && (
                     <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
                       <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
