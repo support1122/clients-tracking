@@ -338,6 +338,8 @@ export default function ClientOnboarding() {
   const [clientJobAnalysis, setClientJobAnalysis] = useState({}); // Map of clientEmail -> { saved, applied, interviewing, offer, rejected, removed, lastAppliedOperatorName }
   const [cardAnalysisDate, setCardAnalysisDate] = useState(''); // Date filter for job analysis inside card modal
   const [cardJobAnalysis, setCardJobAnalysis] = useState(null); // Job analysis data for the currently opened card
+  const [appliedOnDateCount, setAppliedOnDateCount] = useState(null); // Count of jobs applied on selected date
+  const [fetchingAppliedOnDate, setFetchingAppliedOnDate] = useState(false); // Loading state for find applied
   const [gmailUsername, setGmailUsername] = useState('');
   const [gmailPassword, setGmailPassword] = useState('');
   const [savingGmailCredentials, setSavingGmailCredentials] = useState(false);
@@ -622,6 +624,40 @@ export default function ClientOnboarding() {
     }
   }, [convertToDMY]);
 
+  // Find applied jobs count on selected date (similar to ClientJobAnalysis)
+  const findAppliedOnDate = useCallback(async () => {
+    if (!cardAnalysisDate) {
+      toastUtils.error('Pick a date first');
+      return;
+    }
+    if (!selectedJob?.clientEmail) {
+      toastUtils.error('No client selected');
+      return;
+    }
+    setFetchingAppliedOnDate(true);
+    try {
+      const body = { date: convertToDMY(cardAnalysisDate) };
+      const url = `${API_BASE}/api/analytics/applied-by-date?t=${Date.now()}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: AUTH_HEADERS(),
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error('Failed');
+      const data = await res.json();
+      const counts = data.counts || {};
+      const clientEmailLower = (selectedJob.clientEmail || '').toLowerCase();
+      const count = Number(counts[clientEmailLower] || 0);
+      setAppliedOnDateCount(count);
+      toastUtils.success(`Found ${count} job(s) applied on ${convertToDMY(cardAnalysisDate)}`);
+    } catch (e) {
+      toastUtils.error('Failed to fetch applied-on-date');
+      setAppliedOnDateCount(null);
+    } finally {
+      setFetchingAppliedOnDate(false);
+    }
+  }, [cardAnalysisDate, selectedJob?.clientEmail, convertToDMY]);
+
   useEffect(() => {
     fetchNotifications();
   }, [fetchNotifications]);
@@ -640,6 +676,7 @@ export default function ClientOnboarding() {
     setShowAttachments(false);
     setShowMoveHistory(false);
     setClientProfileData(null);
+    setAppliedOnDateCount(null); // Reset applied on date count when card changes
   }, [selectedJob?._id]);
 
   // Close move options dropdown when clicking outside
@@ -1033,8 +1070,18 @@ export default function ClientOnboarding() {
     const textBefore = textBeforeRange.toString();
     
     const atIndex = textBefore.lastIndexOf('@');
-    if (atIndex === -1 || /\s/.test(textBefore.slice(atIndex + 1))) {
+    const whitespacePattern = new RegExp('\\s');
+    if (atIndex === -1 || whitespacePattern.test(textBefore.slice(atIndex + 1))) {
       setShowMentionDropdown(false);
+      // Still render existing mentions even if dropdown is closed
+      const mentionPattern = new RegExp('@[\\w.-]+');
+      const hasMentions = mentionPattern.test(text);
+      if (hasMentions) {
+        const htmlContent = renderTextWithMentions(text, effectiveMentionableUsers);
+        if (element.innerHTML !== htmlContent) {
+          element.innerHTML = htmlContent;
+        }
+      }
       return;
     }
     
@@ -1051,14 +1098,15 @@ export default function ClientOnboarding() {
     setMentionSuggestions(list);
     setShowMentionDropdown(list.length > 0);
     
-    // Only update HTML if we have mentions to render
-    const hasMentions = /@[\w.-]+/.test(text);
+    // Only render mentions that are NOT currently being typed
+    // Exclude the text from @ to cursor position from mention rendering
+    const mentionPattern = new RegExp('@[\\w.-]+');
+    const hasMentions = mentionPattern.test(text);
     if (hasMentions) {
       // Save cursor position
       const cursorOffset = textBefore.length;
-      
-      // Update HTML with mention chips
-      const htmlContent = renderTextWithMentions(text, effectiveMentionableUsers);
+      // Render mentions but exclude the currently typing part (from @ to cursor)
+      const htmlContent = renderTextWithMentions(text, effectiveMentionableUsers, atIndex, cursorOffset);
       
       // Only update if content actually changed
       if (element.innerHTML !== htmlContent) {
@@ -1124,7 +1172,7 @@ export default function ClientOnboarding() {
     const newText = currentText.slice(0, start) + mentionText + currentText.slice(end);
     setCommentText(newText);
     
-    // Render with mention chips
+    // Render with mention chips (no exclusion since mention is now complete)
     const htmlContent = renderTextWithMentions(newText, effectiveMentionableUsers);
     element.innerHTML = htmlContent;
     
@@ -1411,14 +1459,31 @@ export default function ClientOnboarding() {
   };
 
   // Render text with mentions as HTML
-  const renderTextWithMentions = (text, mentionableUsers) => {
+  // excludeStart and excludeEnd mark the range of text that's currently being typed (should not be rendered as mention chip)
+  const renderTextWithMentions = (text, mentionableUsers, excludeStart = -1, excludeEnd = -1) => {
     if (!text) return '';
     const parts = [];
-    const mentionRegex = /@([\w.-]+)/g;
+    const mentionRegex = new RegExp('@([\\w.-]+)', 'g');
     let lastIndex = 0;
     let match;
 
     while ((match = mentionRegex.exec(text)) !== null) {
+      const mentionStart = match.index;
+      const mentionEnd = match.index + match[0].length;
+      
+      // Skip rendering this mention as a chip if it overlaps with the currently typing range
+      if (excludeStart !== -1 && excludeEnd !== -1 && mentionStart < excludeEnd && mentionEnd > excludeStart) {
+        // This mention is being typed, keep it as plain text (don't convert to chip)
+        if (mentionStart > lastIndex) {
+          const beforeText = text.slice(lastIndex, mentionStart);
+          parts.push(beforeText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+        }
+        // Add the typing text as plain text (not a chip)
+        parts.push(match[0].replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+        lastIndex = mentionEnd;
+        continue;
+      }
+      
       // Add text before the mention
       if (match.index > lastIndex) {
         const beforeText = text.slice(lastIndex, match.index);
@@ -2188,20 +2253,43 @@ export default function ClientOnboarding() {
                           <input
                             type="date"
                             value={cardAnalysisDate}
-                            onChange={(e) => setCardAnalysisDate(e.target.value)}
+                            onChange={(e) => {
+                              setCardAnalysisDate(e.target.value);
+                              setAppliedOnDateCount(null); // Reset count when date changes
+                            }}
                             className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
                             placeholder="Select date (optional)"
                           />
                           {cardAnalysisDate && (
-                            <button
-                              type="button"
-                              onClick={() => setCardAnalysisDate('')}
-                              className="px-3 py-2 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200"
-                            >
-                              Clear
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={findAppliedOnDate}
+                                disabled={fetchingAppliedOnDate}
+                                className="px-3 py-2 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
+                              >
+                                {fetchingAppliedOnDate ? 'Loading...' : 'Find Applied'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCardAnalysisDate('');
+                                  setAppliedOnDateCount(null);
+                                }}
+                                className="px-3 py-2 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200"
+                              >
+                                Clear
+                              </button>
+                            </>
                           )}
                         </div>
+                        {cardAnalysisDate && appliedOnDateCount !== null && (
+                          <div className="mt-2 text-xs text-gray-600">
+                            <span className="font-semibold text-indigo-700">
+                              Applied on {convertToDMY(cardAnalysisDate)}: {appliedOnDateCount} job(s)
+                            </span>
+                          </div>
+                        )}
                       </div>
                       {/* Stats Display */}
                       {cardJobAnalysis ? (
@@ -2232,6 +2320,17 @@ export default function ClientOnboarding() {
                               <div className="text-sm font-semibold text-gray-600">{cardJobAnalysis.removed || 0}</div>
                             </div>
                           </div>
+                          {/* Applied on Date Count */}
+                          {appliedOnDateCount !== null && cardAnalysisDate && (
+                            <div className="bg-indigo-50 rounded-lg p-3 border border-indigo-200">
+                              <div className="text-[10px] text-indigo-600 font-medium mb-1">
+                                Applied on {convertToDMY(cardAnalysisDate)}
+                              </div>
+                              <div className="text-lg font-bold text-indigo-700">
+                                {appliedOnDateCount} job(s)
+                              </div>
+                            </div>
+                          )}
                           {/* Last Applied By */}
                           {cardJobAnalysis.lastAppliedOperatorName && (
                             <div className="bg-white rounded-lg p-3 border border-gray-200">
