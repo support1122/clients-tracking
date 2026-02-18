@@ -135,7 +135,7 @@ const JobCard = React.memo(({
       onTouchEnd={onLongPressEnd}
       onTouchCancel={onLongPressEnd}
       onClick={() => onCardClick(job)}
-      className={`group ${getCardBackgroundColor()} rounded-xl p-4 border shadow-sm hover:shadow-md hover:border-orange-100 transition-[transform,opacity,box-shadow,border-color] duration-200 ease-out cursor-grab active:cursor-grabbing relative ${isDragging ? 'opacity-50 scale-[0.98] shadow-lg ring-2 ring-primary/20 rotate-1' : 'hover:scale-[1.01]'}`}
+      className={`group ${getCardBackgroundColor()} rounded-xl p-4 border shadow-sm hover:shadow-md hover:border-orange-100 transition-[transform,opacity,box-shadow,border-color] duration-200 ease-out cursor-grab active:cursor-grabbing relative ${isDragging ? 'opacity-50 scale-[0.98] shadow-lg ring-2 ring-primary rotate-1' : 'hover:scale-[1.01]'}`}
     >
       <div className="flex items-start justify-between mb-2">
         <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
@@ -172,7 +172,7 @@ const JobCard = React.memo(({
 
       {/* Job Analysis Section - Show for applications_in_progress and completed */}
       {showJobAnalysis && jobAnalysis && (
-        <div className="mb-3 pb-3 border-b border-gray-100 bg-gray-50/50 rounded-lg px-2 py-2">
+        <div className="mb-3 pb-3 border-b border-gray-100 bg-gray-50 rounded-lg px-2 py-2">
           {/* Status Counts */}
           <div className="grid grid-cols-3 gap-2 mb-2">
             <div className="text-center">
@@ -1300,7 +1300,10 @@ export default function ClientOnboarding() {
     const file = e?.target?.files?.[0];
     if (file) {
       setAttachmentFilePending(file);
-      if (!attachmentNameInput.trim()) setAttachmentNameInput(file.name.replace(/\.[^/.]+$/, ''));
+      if (!attachmentNameInput.trim()) {
+        const nameWithoutExt = file.name.substring(0, file.name.lastIndexOf('.'));
+        setAttachmentNameInput(nameWithoutExt || file.name);
+      }
     }
     e.target.value = '';
   };
@@ -1918,7 +1921,7 @@ export default function ClientOnboarding() {
       {selectedJob && (
         <div
           key={selectedJob._id}
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900 bg-opacity-60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               handleCloseModal(e);
@@ -2652,8 +2655,6 @@ export default function ClientOnboarding() {
                         }}
                         suppressContentEditableWarning={true}
                       />
-
-                      {/* Move icon button - only show when someone is tagged */}
                       {(() => {
                         const { taggedUserIds } = parseMentions(commentText, effectiveMentionableUsers);
                         const hasTags = taggedUserIds.length > 0;
@@ -2680,7 +2681,7 @@ export default function ClientOnboarding() {
                                 e.stopPropagation();
                                 setShowMoveOptions(!showMoveOptions);
                               }}
-                              className="absolute right-14 top-1/2 -translate-y-1/2 px-2 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors shadow-sm border border-gray-200 flex flex-col items-center justify-center gap-0.5"
+                              className="absolute right-14 top-1/2 -translate-y-1/2 px-2 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors shadow-sm border border-gray-200 flex flex-col items-center justify-center"
                               title="Move ticket"
                             >
                               <ArrowUpDown className="w-3.5 h-3.5" />
@@ -2707,7 +2708,7 @@ export default function ClientOnboarding() {
                                         setShowMoveOptions(false);
                                       }}
                                       disabled={movingStatus === selectedJob._id}
-                                      className="text-left text-xs px-3 py-2 bg-primary/5 text-primary rounded-lg hover:bg-primary/10 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed border border-primary/10 hover:border-primary/30"
+                                      className="text-left text-xs px-3 py-2 bg-primary text-primary rounded-lg hover:bg-primary transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed border border-primary hover:border-primary"
                                     >
                                       {STATUS_LABELS[status] || status}
                                     </button>
@@ -2739,7 +2740,7 @@ export default function ClientOnboarding() {
 
       {/* Add Attachment Modal - above Detail Modal (z-[100]) so it appears on top */}
       {showAddAttachmentModal && selectedJob && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm" onClick={(e) => {
           if (e.target === e.currentTarget && !uploadingAttachment) {
             setShowAddAttachmentModal(false);
             setAttachmentNameInput('');
