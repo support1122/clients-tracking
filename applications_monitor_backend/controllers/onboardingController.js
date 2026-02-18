@@ -219,7 +219,7 @@ function validateTransition(fromStatus, toStatus) {
 export async function patchOnboardingJob(req, res) {
   try {
     const { id } = req.params;
-    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment, clientName } = req.body || {};
+    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment, clientName, gmailCredentials } = req.body || {};
     
     // Validate ID format
     if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
@@ -342,6 +342,42 @@ export async function patchOnboardingJob(req, res) {
       job.clientName = clientName.trim() || job.clientName;
     }
 
+    // Handle Gmail credentials update with history
+    if (gmailCredentials !== undefined && typeof gmailCredentials === 'object') {
+      const newUsername = (gmailCredentials.username || '').trim();
+      const newPassword = (gmailCredentials.password || '').trim();
+      const currentUsername = (job.gmailCredentials?.username || '').trim();
+      const currentPassword = (job.gmailCredentials?.password || '').trim();
+      
+      // Check if credentials have changed
+      const usernameChanged = newUsername !== currentUsername;
+      const passwordChanged = newPassword !== currentPassword;
+      
+      if (usernameChanged || passwordChanged) {
+        // Save current credentials to history before updating
+        if (!job.gmailCredentialsHistory) {
+          job.gmailCredentialsHistory = [];
+        }
+        
+        // Only add to history if there were previous credentials
+        if (currentUsername || currentPassword) {
+          job.gmailCredentialsHistory.push({
+            username: currentUsername,
+            password: currentPassword,
+            updatedBy: req.user?.email || req.user?.name || 'unknown',
+            updatedAt: new Date()
+          });
+        }
+        
+        // Update current credentials
+        if (!job.gmailCredentials) {
+          job.gmailCredentials = {};
+        }
+        if (newUsername) job.gmailCredentials.username = newUsername;
+        if (newPassword) job.gmailCredentials.password = newPassword;
+      }
+    }
+
     if (comment && typeof comment.body === 'string' && comment.body.trim()) {
       if (!job.comments) job.comments = [];
       const taggedUserIds = Array.isArray(comment.taggedUserIds) ? comment.taggedUserIds : [];
@@ -382,6 +418,9 @@ export async function patchOnboardingJob(req, res) {
     }
 
     const updated = await OnboardingJobModel.findById(id).lean();
+    
+    // Note: Passwords are stored as plain text strings (not hashed) as per requirements
+    // History passwords are kept as plain text for reference
     
     // Fetch client status and isPaused
     const clientEmail = (updated?.clientEmail || '').toLowerCase();
