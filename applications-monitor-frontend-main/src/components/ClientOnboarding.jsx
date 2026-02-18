@@ -709,6 +709,9 @@ export default function ClientOnboarding() {
   useEffect(() => {
     if (!commentText && commentInputRef.current) {
       commentInputRef.current.innerHTML = '';
+      commentInputRef.current.setAttribute('data-empty', 'true');
+    } else if (commentInputRef.current) {
+      commentInputRef.current.removeAttribute('data-empty');
     }
   }, [commentText]);
 
@@ -1017,6 +1020,13 @@ export default function ClientOnboarding() {
     const element = e.target;
     const text = extractTextFromContentEditable(element);
     setCommentText(text);
+    
+    // Update placeholder visibility
+    if (text.trim() === '') {
+      element.setAttribute('data-empty', 'true');
+    } else {
+      element.removeAttribute('data-empty');
+    }
     
     // Get cursor position
     const selection = window.getSelection();
@@ -2586,7 +2596,12 @@ export default function ClientOnboarding() {
                           }
                         }}
                         data-placeholder="Write a comment... (Type @ to mention someone)"
-                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pr-24 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all min-h-[60px] max-h-[120px] shadow-sm overflow-y-auto"
+                        data-empty="true"
+                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pr-24 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all min-h-[60px] max-h-[120px] shadow-sm overflow-y-auto relative"
+                        style={{
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word'
+                        }}
                         style={{
                           whiteSpace: 'pre-wrap',
                           wordBreak: 'break-word'
@@ -2637,16 +2652,6 @@ export default function ClientOnboarding() {
                         }}
                         suppressContentEditableWarning={true}
                       />
-                      <style>{`
-                        [contenteditable][data-placeholder]:empty:before {
-                          content: attr(data-placeholder);
-                          color: #9ca3af;
-                          pointer-events: none;
-                        }
-                        [data-mention-chip] {
-                          user-select: none;
-                        }
-                      `}</style>
 
                       {/* Move icon button - only show when someone is tagged */}
                       {(() => {
