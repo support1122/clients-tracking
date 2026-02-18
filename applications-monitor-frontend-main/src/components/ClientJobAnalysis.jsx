@@ -24,6 +24,7 @@ export default function ClientJobAnalysis() {
   const [savingStatus, setSavingStatus] = useState(new Set());
   const [savingPause, setSavingPause] = useState(new Set());
   const [userRole, setUserRole] = useState(null);
+  const [lastAppliedByFilter, setLastAppliedByFilter] = useState(''); // Filter for "Last applied by" operator name
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -244,6 +245,28 @@ export default function ClientJobAnalysis() {
               >
                 Find Applied
               </button>
+              <label className="text-xs text-gray-700">Last Applied By:</label>
+              <select
+                value={lastAppliedByFilter}
+                onChange={(e) => setLastAppliedByFilter(e.target.value)}
+                className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white"
+              >
+                <option value="">All Operators</option>
+                {[...new Set(rows.map(r => r.lastAppliedOperatorName).filter(Boolean))].sort().map((name) => (
+                  <option key={name} value={name}>
+                    {capitalizeOperatorName(name)}
+                  </option>
+                ))}
+              </select>
+              {lastAppliedByFilter && (
+                <button
+                  onClick={() => setLastAppliedByFilter('')}
+                  className="px-2 py-1 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-md border border-gray-300"
+                  title="Clear filter"
+                >
+                  ✕
+                </button>
+              )}
               <button
                 onClick={onRefresh}
                 disabled={loading}
@@ -289,7 +312,17 @@ export default function ClientJobAnalysis() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {[...(rows||[])].sort((a,b)=>{
+                {[...(rows||[])]
+                  .filter((r) => {
+                    // Filter by "Last applied by" operator name
+                    if (lastAppliedByFilter) {
+                      const operatorName = (r.lastAppliedOperatorName || '').toLowerCase();
+                      const filterName = lastAppliedByFilter.toLowerCase();
+                      return operatorName === filterName;
+                    }
+                    return true;
+                  })
+                  .sort((a,b)=>{
                   // When date is selected, sort by applied-on-date metric
                   if (date) {
                     const av = Number(a?.appliedOnDate || 0);
@@ -456,9 +489,18 @@ export default function ClientJobAnalysis() {
                     </td>
                   </tr>
                 )})}
-                {rows.length===0 && (
+                {rows.filter((r) => {
+                  if (lastAppliedByFilter) {
+                    const operatorName = (r.lastAppliedOperatorName || '').toLowerCase();
+                    const filterName = lastAppliedByFilter.toLowerCase();
+                    return operatorName === filterName;
+                  }
+                  return true;
+                }).length === 0 && (
                   <tr>
-                    <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">No data</td>
+                    <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">
+                      {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
+                    </td>
                   </tr>
                 )}
               </tbody>
