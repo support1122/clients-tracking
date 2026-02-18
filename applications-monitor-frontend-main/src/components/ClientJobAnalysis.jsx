@@ -245,28 +245,6 @@ export default function ClientJobAnalysis() {
               >
                 Find Applied
               </button>
-              <label className="text-xs text-gray-700">Last Applied By:</label>
-              <select
-                value={lastAppliedByFilter}
-                onChange={(e) => setLastAppliedByFilter(e.target.value)}
-                className="px-2 py-1 text-xs border border-gray-300 rounded-md bg-white"
-              >
-                <option value="">All Operators</option>
-                {[...new Set(rows.map(r => r.lastAppliedOperatorName).filter(Boolean))].sort().map((name) => (
-                  <option key={name} value={name}>
-                    {capitalizeOperatorName(name)}
-                  </option>
-                ))}
-              </select>
-              {lastAppliedByFilter && (
-                <button
-                  onClick={() => setLastAppliedByFilter('')}
-                  className="px-2 py-1 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-md border border-gray-300"
-                  title="Clear filter"
-                >
-                  ✕
-                </button>
-              )}
               <button
                 onClick={onRefresh}
                 disabled={loading}
@@ -285,7 +263,38 @@ export default function ClientJobAnalysis() {
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Status</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Pause</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Plan</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Last applied by</th>
+                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                    <div className="flex items-center gap-2">
+                      <span>Last applied by</span>
+                      <select
+                        value={lastAppliedByFilter}
+                        onChange={(e) => setLastAppliedByFilter(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="px-1.5 py-0.5 text-[10px] border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        title="Filter by operator"
+                      >
+                        <option value="">All</option>
+                        {[...new Set(rows.map(r => r.lastAppliedOperatorName).filter(Boolean))].sort().map((name) => (
+                          <option key={name} value={name}>
+                            {capitalizeOperatorName(name)}
+                          </option>
+                        ))}
+                      </select>
+                      {lastAppliedByFilter && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLastAppliedByFilter('');
+                          }}
+                          className="px-1 py-0.5 text-[10px] text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300"
+                          title="Clear filter"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Dashboard Mgr</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Total Apps</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Saved</th>
