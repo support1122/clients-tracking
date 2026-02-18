@@ -26,7 +26,6 @@ import {
   ArrowUpDown,
   Search,
   Pencil,
-  Mail
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_BASE || '';
@@ -339,10 +338,6 @@ export default function ClientOnboarding() {
   const [clientJobAnalysis, setClientJobAnalysis] = useState({}); // Map of clientEmail -> { saved, applied, interviewing, offer, rejected, removed, lastAppliedOperatorName }
   const [cardAnalysisDate, setCardAnalysisDate] = useState(''); // Date filter for job analysis inside card modal
   const [cardJobAnalysis, setCardJobAnalysis] = useState(null); // Job analysis data for the currently opened card
-  const [gmailUsername, setGmailUsername] = useState('');
-  const [gmailPassword, setGmailPassword] = useState('');
-  const [savingGmailCredentials, setSavingGmailCredentials] = useState(false);
-  const [showGmailCredentialsHistory, setShowGmailCredentialsHistory] = useState(false);
   const attachmentNameInputRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const longPressActivatedRef = useRef(false);
@@ -695,10 +690,6 @@ export default function ClientOnboarding() {
     // Clear card analysis date and data
     setCardAnalysisDate('');
     setCardJobAnalysis(null);
-    // Clear Gmail credentials
-    setGmailUsername('');
-    setGmailPassword('');
-    setShowGmailCredentialsHistory(false);
     // Clear the selected job using store method
     clearSelected();
     // Also set directly to ensure it's cleared immediately
@@ -715,16 +706,6 @@ export default function ClientOnboarding() {
     }
   }, [commentText]);
 
-  // Initialize Gmail credentials when job is selected
-  useEffect(() => {
-    if (selectedJob?.gmailCredentials) {
-      setGmailUsername(selectedJob.gmailCredentials.username || '');
-      setGmailPassword(selectedJob.gmailCredentials.password || '');
-    } else {
-      setGmailUsername('');
-      setGmailPassword('');
-    }
-  }, [selectedJob?.gmailCredentials]);
 
   // Fetch client profile only when user expands the Client Profile section (avoids lag on modal open)
   useEffect(() => {
@@ -2078,71 +2059,6 @@ export default function ClientOnboarding() {
                           <span className="text-sm text-gray-900 font-mono bg-white px-2 py-1 rounded border border-gray-200">{selectedJob.clientEmail}</span>
                         </div>
                       </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Gmail Credentials Section - Simple Form */}
-                <div className="mb-6">
-                  <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
-                    <h3 className="text-sm font-bold text-gray-700 mb-4">Gmail Credentials</h3>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Username</label>
-                        <input
-                          type="text"
-                          value={gmailUsername}
-                          onChange={(e) => setGmailUsername(e.target.value)}
-                          placeholder="Enter Gmail username"
-                          className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Password</label>
-                        <input
-                          type="text"
-                          value={gmailPassword}
-                          onChange={(e) => setGmailPassword(e.target.value)}
-                          placeholder="Enter Gmail password"
-                          className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white"
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          if (!selectedJob?._id || savingGmailCredentials) return;
-                          setSavingGmailCredentials(true);
-                          try {
-                            const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, {
-                              method: 'PATCH',
-                              headers: AUTH_HEADERS(),
-                              body: JSON.stringify({
-                                gmailCredentials: {
-                                  username: gmailUsername.trim(),
-                                  password: gmailPassword.trim()
-                                }
-                              })
-                            });
-                            if (!res.ok) throw new Error('Failed to save');
-                            const data = await res.json();
-                            setSelectedJob(data.job);
-                            setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
-                            toastUtils.success('Saved');
-                            if (data.job.gmailCredentials) {
-                              setGmailUsername(data.job.gmailCredentials.username || '');
-                              setGmailPassword(data.job.gmailCredentials.password || '');
-                            }
-                          } catch (e) {
-                            toastUtils.error(e.message || 'Failed');
-                          } finally {
-                            setSavingGmailCredentials(false);
-                          }
-                        }}
-                        disabled={savingGmailCredentials}
-                        className="w-full px-4 py-2 bg-primary text-white rounded-lg disabled:opacity-50 text-sm font-medium"
-                      >
-                        {savingGmailCredentials ? 'Saving...' : 'Save'}
-                      </button>
                     </div>
                   </div>
                 </div>
