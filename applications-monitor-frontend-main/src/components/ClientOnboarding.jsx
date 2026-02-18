@@ -336,6 +336,7 @@ export default function ClientOnboarding() {
   const [expandedAttachmentIndices, setExpandedAttachmentIndices] = useState(new Set());
   const [moveToJob, setMoveToJob] = useState(null);
   const [clientJobAnalysis, setClientJobAnalysis] = useState({}); // Map of clientEmail -> { saved, applied, interviewing, offer, rejected, removed, lastAppliedOperatorName }
+  const [analysisDate, setAnalysisDate] = useState(''); // Date filter for job analysis
   const attachmentNameInputRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const longPressActivatedRef = useRef(false);
@@ -513,13 +514,24 @@ export default function ClientOnboarding() {
     } catch (_) { }
   }, []);
 
+  // Convert date from YYYY-MM-DD to D/M/YYYY format
+  const convertToDMY = useCallback((iso) => {
+    if (!iso) return '';
+    const dt = new Date(iso);
+    const d = dt.getDate();
+    const m = dt.getMonth() + 1;
+    const y = dt.getFullYear();
+    return `${d}/${m}/${y}`;
+  }, []);
+
   // Fetch client job analysis data for clients in applications_in_progress and completed columns
-  const fetchClientJobAnalysis = useCallback(async () => {
+  const fetchClientJobAnalysis = useCallback(async (selectedDate) => {
     try {
-      const res = await fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
+      const body = selectedDate ? { date: convertToDMY(selectedDate) } : {};
+      const res = await fetch(`${API_BASE}/api/analytics/client-job-analysis?t=${Date.now()}`, {
         method: 'POST',
         headers: AUTH_HEADERS(),
-        body: JSON.stringify({})
+        body: JSON.stringify(body)
       });
       if (res.ok) {
         const data = await res.json();
@@ -540,7 +552,7 @@ export default function ClientOnboarding() {
     } catch (e) {
       console.error('Failed to fetch client job analysis:', e);
     }
-  }, []);
+  }, [convertToDMY]);
 
   const markNotificationRead = useCallback(async (id) => {
     try {
@@ -555,8 +567,8 @@ export default function ClientOnboarding() {
   useEffect(() => {
     fetchJobs();
     fetchRoles();
-    fetchClientJobAnalysis();
-  }, [fetchJobs, fetchRoles, fetchClientJobAnalysis]);
+    fetchClientJobAnalysis(analysisDate);
+  }, [fetchJobs, fetchRoles, fetchClientJobAnalysis, analysisDate]);
 
   useEffect(() => {
     fetchNotifications();
@@ -1588,6 +1600,28 @@ export default function ClientOnboarding() {
           </div>
 
           <div className="flex items-center gap-4">
+            {/* Date Filter for Job Analysis */}
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-600 font-medium whitespace-nowrap">Filter by Date:</label>
+              <input
+                type="date"
+                value={analysisDate}
+                onChange={(e) => setAnalysisDate(e.target.value)}
+                className="px-3 py-2 text-sm border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white shadow-sm"
+                title="Select date to filter job analysis data (Saved, Applied, Interview, Offer, Rejected, Removed, Last applied by)"
+              />
+              {analysisDate && (
+                <button
+                  type="button"
+                  onClick={() => setAnalysisDate('')}
+                  className="px-2 py-2 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                  title="Clear date filter"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
             {/* Search */}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
