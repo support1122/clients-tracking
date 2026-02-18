@@ -30,6 +30,13 @@ const moveHistorySchema = new mongoose.Schema({
   movedAt: { type: Date, default: Date.now }
 }, { _id: false });
 
+const gmailCredentialHistorySchema = new mongoose.Schema({
+  username: { type: String, default: '' },
+  password: { type: String, default: '' },
+  updatedBy: { type: String, required: true },
+  updatedAt: { type: Date, default: Date.now }
+}, { _id: true });
+
 const attachmentSchema = new mongoose.Schema({
   url: { type: String, required: true },
   filename: { type: String, required: true },
@@ -59,6 +66,11 @@ const onboardingJobSchema = new mongoose.Schema({
     password: { type: String, default: '' },
     loginUrl: { type: String, default: '' }
   },
+  gmailCredentials: {
+    username: { type: String, default: '' },
+    password: { type: String, default: '' }
+  },
+  gmailCredentialsHistory: [gmailCredentialHistorySchema],
   attachments: [attachmentSchema],
   comments: [commentSchema],
   moveHistory: [moveHistorySchema],
