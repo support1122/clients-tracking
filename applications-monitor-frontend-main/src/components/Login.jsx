@@ -55,6 +55,9 @@ export default function Login({ onLogin }) {
 
       setUserRole(data.role);
 
+      const rolesRequiringSecondStep = ['team_lead', 'operations_intern', 'onboarding_team', 'csm'];
+      const needSecondStep = data.needSecondStep === true || (data.role && rolesRequiringSecondStep.includes(data.role));
+
       if (data.role === 'admin') {
         const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
           method: 'POST',
@@ -71,7 +74,7 @@ export default function Login({ onLogin }) {
         return;
       }
 
-      if (data.needSecondStep) {
+      if (needSecondStep) {
         const emailLower = formData.email.toLowerCase();
         const storedTrust = localStorage.getItem('portalOtpTrust');
         if (storedTrust) {
