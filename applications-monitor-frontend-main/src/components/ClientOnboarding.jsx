@@ -336,7 +336,8 @@ export default function ClientOnboarding() {
   const [expandedAttachmentIndices, setExpandedAttachmentIndices] = useState(new Set());
   const [moveToJob, setMoveToJob] = useState(null);
   const [clientJobAnalysis, setClientJobAnalysis] = useState({}); // Map of clientEmail -> { saved, applied, interviewing, offer, rejected, removed, lastAppliedOperatorName }
-  const [analysisDate, setAnalysisDate] = useState(''); // Date filter for job analysis
+  const [cardAnalysisDate, setCardAnalysisDate] = useState(''); // Date filter for job analysis inside card modal
+  const [cardJobAnalysis, setCardJobAnalysis] = useState(null); // Job analysis data for the currently opened card
   const attachmentNameInputRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const longPressActivatedRef = useRef(false);
@@ -567,8 +568,55 @@ export default function ClientOnboarding() {
   useEffect(() => {
     fetchJobs();
     fetchRoles();
-    fetchClientJobAnalysis(analysisDate);
-  }, [fetchJobs, fetchRoles, fetchClientJobAnalysis, analysisDate]);
+    fetchClientJobAnalysis(''); // Fetch all-time data for card previews
+  }, [fetchJobs, fetchRoles, fetchClientJobAnalysis]);
+
+  // Fetch job analysis for the opened card when date changes
+  useEffect(() => {
+    if (selectedJob?.clientEmail) {
+      fetchClientJobAnalysisForCard(selectedJob.clientEmail, cardAnalysisDate);
+    } else {
+      setCardJobAnalysis(null);
+    }
+  }, [selectedJob?.clientEmail, cardAnalysisDate]);
+
+  // Fetch job analysis data for a specific client with date filter
+  const fetchClientJobAnalysisForCard = useCallback(async (clientEmail, selectedDate) => {
+    if (!clientEmail) {
+      setCardJobAnalysis(null);
+      return;
+    }
+    try {
+      const body = selectedDate ? { date: convertToDMY(selectedDate) } : {};
+      const res = await fetch(`${API_BASE}/api/analytics/client-job-analysis?t=${Date.now()}`, {
+        method: 'POST',
+        headers: AUTH_HEADERS(),
+        body: JSON.stringify(body)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const clientRow = (data.rows || []).find((row) => 
+          (row.email || '').toLowerCase() === (clientEmail || '').toLowerCase()
+        );
+        if (clientRow) {
+          setCardJobAnalysis({
+            saved: clientRow.saved || 0,
+            applied: clientRow.applied || 0,
+            interviewing: clientRow.interviewing || 0,
+            offer: clientRow.offer || 0,
+            rejected: clientRow.rejected || 0,
+            removed: clientRow.removed || 0,
+            lastAppliedOperatorName: clientRow.lastAppliedOperatorName || ''
+          });
+        } else {
+          setCardJobAnalysis(null);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch client job analysis for card:', e);
+      setCardJobAnalysis(null);
+    }
+  }, [convertToDMY]);
 
   useEffect(() => {
     fetchNotifications();
@@ -639,6 +687,9 @@ export default function ClientOnboarding() {
     setShowClientProfile(false);
     setEditingClientNameJobId(null);
     setEditingClientNameValue('');
+    // Clear card analysis date and data
+    setCardAnalysisDate('');
+    setCardJobAnalysis(null);
     // Clear the selected job using store method
     clearSelected();
     // Also set directly to ensure it's cleared immediately
@@ -1600,28 +1651,6 @@ export default function ClientOnboarding() {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Date Filter for Job Analysis */}
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-gray-600 font-medium whitespace-nowrap">Filter by Date:</label>
-              <input
-                type="date"
-                value={analysisDate}
-                onChange={(e) => setAnalysisDate(e.target.value)}
-                className="px-3 py-2 text-sm border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white shadow-sm"
-                title="Select date to filter job analysis data (Saved, Applied, Interview, Offer, Rejected, Removed, Last applied by)"
-              />
-              {analysisDate && (
-                <button
-                  type="button"
-                  onClick={() => setAnalysisDate('')}
-                  className="px-2 py-2 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
-                  title="Clear date filter"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-
             {/* Search */}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -2018,6 +2047,79 @@ export default function ClientOnboarding() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Job Analysis Section */}
+                  {(selectedJob.status === 'applications_in_progress' || selectedJob.status === 'completed') && (
+                    <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
+                      <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <Briefcase className="w-3 h-3" /> Job Analysis
+                      </h3>
+                      {/* Date Filter */}
+                      <div className="mb-4">
+                        <label className="block text-xs font-semibold text-gray-700 mb-2">Filter by Date:</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="date"
+                            value={cardAnalysisDate}
+                            onChange={(e) => setCardAnalysisDate(e.target.value)}
+                            className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
+                            placeholder="Select date (optional)"
+                          />
+                          {cardAnalysisDate && (
+                            <button
+                              type="button"
+                              onClick={() => setCardAnalysisDate('')}
+                              className="px-3 py-2 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors border border-gray-200"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {/* Stats Display */}
+                      {cardJobAnalysis ? (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-3 gap-2">
+                            <div className="text-center bg-white rounded-lg p-2 border border-gray-200">
+                              <div className="text-[10px] text-gray-500 font-medium mb-1">Saved</div>
+                              <div className="text-sm font-semibold text-gray-700">{cardJobAnalysis.saved || 0}</div>
+                            </div>
+                            <div className="text-center bg-white rounded-lg p-2 border border-gray-200">
+                              <div className="text-[10px] text-gray-500 font-medium mb-1">Applied</div>
+                              <div className="text-sm font-semibold text-green-600">{cardJobAnalysis.applied || 0}</div>
+                            </div>
+                            <div className="text-center bg-white rounded-lg p-2 border border-gray-200">
+                              <div className="text-[10px] text-gray-500 font-medium mb-1">Interview</div>
+                              <div className="text-sm font-semibold text-yellow-600">{cardJobAnalysis.interviewing || 0}</div>
+                            </div>
+                            <div className="text-center bg-white rounded-lg p-2 border border-gray-200">
+                              <div className="text-[10px] text-gray-500 font-medium mb-1">Offer</div>
+                              <div className="text-sm font-semibold text-purple-600">{cardJobAnalysis.offer || 0}</div>
+                            </div>
+                            <div className="text-center bg-white rounded-lg p-2 border border-gray-200">
+                              <div className="text-[10px] text-gray-500 font-medium mb-1">Rejected</div>
+                              <div className="text-sm font-semibold text-red-600">{cardJobAnalysis.rejected || 0}</div>
+                            </div>
+                            <div className="text-center bg-white rounded-lg p-2 border border-gray-200">
+                              <div className="text-[10px] text-gray-500 font-medium mb-1">Removed</div>
+                              <div className="text-sm font-semibold text-gray-600">{cardJobAnalysis.removed || 0}</div>
+                            </div>
+                          </div>
+                          {/* Last Applied By */}
+                          {cardJobAnalysis.lastAppliedOperatorName && (
+                            <div className="bg-white rounded-lg p-3 border border-gray-200">
+                              <div className="text-[10px] text-gray-500 font-medium mb-1">Last applied by</div>
+                              <div className="text-sm font-semibold text-gray-700">
+                                {cardJobAnalysis.lastAppliedOperatorName.charAt(0).toUpperCase() + cardJobAnalysis.lastAppliedOperatorName.slice(1).toLowerCase()}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-500 py-4 text-center">No data available</div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Client Profile (from /profile - for resume-making) */}
