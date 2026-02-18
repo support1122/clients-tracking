@@ -1686,7 +1686,7 @@ export default function ClientOnboarding() {
           <div className="flex items-center gap-4">
             {/* Search */}
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <Search className="absolute left-3 top-2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
                 placeholder="Search by client name, email, or job #..."
@@ -1865,7 +1865,7 @@ export default function ClientOnboarding() {
       {/* Move to sheet (long-press 3.5s on a card) - mobile-style */}
       {moveToJob && (
         <div
-          className="fixed inset-0 z-[60] flex flex-col justify-end sm:justify-center sm:items-center bg-black bg-opacity-40 backdrop-blur-[2px] animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center sm:items-center bg-black bg-opacity-40 backdrop-blur-sm animate-in fade-in duration-200"
           onClick={() => setMoveToJob(null)}
         >
           <div
@@ -1921,7 +1921,7 @@ export default function ClientOnboarding() {
       {selectedJob && (
         <div
           key={selectedJob._id}
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900 bg-opacity-60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900 bg-opacity-60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               handleCloseModal(e);
@@ -1986,7 +1986,7 @@ export default function ClientOnboarding() {
             {/* Modal Body */}
             <div className="flex flex-1 overflow-hidden min-h-0">
               {/* Left Column: Details */}
-              <div className="w-[55%] overflow-y-auto p-6 border-r border-gray-200 bg-white">
+              <div style={{ width: '55%' }} className="overflow-y-auto p-6 border-r border-gray-200 bg-white">
                 <div className="grid grid-cols-2 gap-6 mb-6">
                   {/* Team Section */}
                   <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
@@ -2560,10 +2560,6 @@ export default function ClientOnboarding() {
                           whiteSpace: 'pre-wrap',
                           wordBreak: 'break-word'
                         }}
-                        style={{
-                          whiteSpace: 'pre-wrap',
-                          wordBreak: 'break-word'
-                        }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && !e.shiftKey) {
                             e.preventDefault();
@@ -2636,7 +2632,7 @@ export default function ClientOnboarding() {
                                 e.stopPropagation();
                                 setShowMoveOptions(!showMoveOptions);
                               }}
-                              className="absolute right-14 top-1/2 -translate-y-1/2 px-2 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors shadow-sm border border-gray-200 flex flex-col items-center justify-center"
+                              className="absolute right-14 top-2 px-2 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors shadow-sm border border-gray-200 flex flex-col items-center justify-center"
                               title="Move ticket"
                             >
                               <ArrowUpDown className="w-3.5 h-3.5" />
@@ -2679,10 +2675,10 @@ export default function ClientOnboarding() {
                       <button
                         onClick={handleAddComment}
                         disabled={!commentText.trim() || addingComment}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-primary text-white rounded-lg disabled:opacity-50 disabled:bg-gray-300 hover:bg-[#c94a28] transition-colors shadow-md disabled:shadow-none flex items-center justify-center"
+                        className="absolute right-2 top-2 p-2 bg-primary text-white rounded-lg disabled:opacity-50 disabled:bg-gray-300 hover:bg-red-600 transition-colors shadow-md disabled:shadow-none flex items-center justify-center"
                         title="Send comment (Enter)"
                       >
-                        {addingComment ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                        {addingComment ? <Loader2 className="w-4 h-4 animate-spin"></Loader2> : <Send className="w-4 h-4"></Send>}
                       </button>
                     </div>
                   </div>
@@ -2693,9 +2689,9 @@ export default function ClientOnboarding() {
         </div>
       )}
 
-      {/* Add Attachment Modal - above Detail Modal (z-[100]) so it appears on top */}
+      {/* Add Attachment Modal */}
       {showAddAttachmentModal && selectedJob && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm" onClick={(e) => {
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm" onClick={(e) => {
           if (e.target === e.currentTarget && !uploadingAttachment) {
             setShowAddAttachmentModal(false);
             setAttachmentNameInput('');
