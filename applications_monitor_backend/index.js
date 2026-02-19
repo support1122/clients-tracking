@@ -38,6 +38,7 @@ import {
   listOnboardingJobs,
   getOnboardingJobById,
   patchOnboardingJob,
+  resolveOnboardingComment,
   postOnboardingJob,
   getOnboardingRoles,
   getNextResumeMakerApi,
@@ -1765,7 +1766,9 @@ const updateUser = async (req, res) => {
     if (email !== undefined && email !== null) {
       const newEmail = String(email).trim().toLowerCase();
       if (!newEmail) return res.status(400).json({ error: 'Email cannot be empty' });
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) return res.status(400).json({ error: 'Invalid email format' });
+      const isValidStandard = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail);
+      const isValidFlashfirehq = /^[^\s@]+@flashfirehq$/.test(newEmail);
+      if (!isValidStandard && !isValidFlashfirehq) return res.status(400).json({ error: 'Invalid email format' });
       const existing = await UserModel.findOne({ email: newEmail });
       if (existing && existing._id.toString() !== userId) return res.status(400).json({ error: 'Email already in use' });
       user.email = newEmail;
@@ -3662,6 +3665,7 @@ app.get('/api/onboarding/notifications', verifyToken, getOnboardingNotifications
 app.patch('/api/onboarding/notifications/:id/read', verifyToken, markOnboardingNotificationRead);
 app.post('/api/onboarding/jobs', verifyToken, postOnboardingJob);
 app.get('/api/onboarding/jobs/:id', verifyToken, getOnboardingJobById);
+app.patch('/api/onboarding/jobs/:id/comments/:commentId/resolve', verifyToken, resolveOnboardingComment);
 app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
 app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
 

@@ -5,6 +5,7 @@ import { OnboardingNotificationModel } from '../OnboardingNotificationModel.js';
 import { UserModel } from '../UserModel.js';
 import { ClientModel } from '../ClientModel.js';
 import { ManagerModel } from '../ManagerModel.js';
+import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
 
 const VALID_TRANSITIONS = {
   resume_in_progress: ['resume_draft_done'],
@@ -219,7 +220,7 @@ function validateTransition(fromStatus, toStatus) {
 export async function patchOnboardingJob(req, res) {
   try {
     const { id } = req.params;
-    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment, clientName, gmailCredentials } = req.body || {};
+    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment, clientName } = req.body || {};
     
     // Validate ID format
     if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
@@ -342,42 +343,6 @@ export async function patchOnboardingJob(req, res) {
       job.clientName = clientName.trim() || job.clientName;
     }
 
-    // Handle Gmail credentials update with history
-    if (gmailCredentials !== undefined && typeof gmailCredentials === 'object') {
-      const newUsername = (gmailCredentials.username || '').trim();
-      const newPassword = (gmailCredentials.password || '').trim();
-      const currentUsername = (job.gmailCredentials?.username || '').trim();
-      const currentPassword = (job.gmailCredentials?.password || '').trim();
-      
-      // Check if credentials have changed
-      const usernameChanged = newUsername !== currentUsername;
-      const passwordChanged = newPassword !== currentPassword;
-      
-      if (usernameChanged || passwordChanged) {
-        // Save current credentials to history before updating
-        if (!job.gmailCredentialsHistory) {
-          job.gmailCredentialsHistory = [];
-        }
-        
-        // Only add to history if there were previous credentials
-        if (currentUsername || currentPassword) {
-          job.gmailCredentialsHistory.push({
-            username: currentUsername,
-            password: currentPassword,
-            updatedBy: req.user?.email || req.user?.name || 'unknown',
-            updatedAt: new Date()
-          });
-        }
-        
-        // Update current credentials
-        if (!job.gmailCredentials) {
-          job.gmailCredentials = {};
-        }
-        if (newUsername) job.gmailCredentials.username = newUsername;
-        if (newPassword) job.gmailCredentials.password = newPassword;
-      }
-    }
-
     if (comment && typeof comment.body === 'string' && comment.body.trim()) {
       if (!job.comments) job.comments = [];
       const taggedUserIds = Array.isArray(comment.taggedUserIds) ? comment.taggedUserIds : [];
@@ -397,7 +362,7 @@ export async function patchOnboardingJob(req, res) {
         const commentSnippet = comment.body.trim().slice(0, 120);
         const authorName = req.user?.name || req.user?.email || '';
         const authorEmail = req.user?.email || '';
-        const notifications = taggedUserIds.map(email => ({
+        const notifications = taggedUserIds.map((email, i) => ({
           userEmail: (email || '').toLowerCase().trim(),
           jobId: job._id,
           jobNumber: job.jobNumber,
@@ -410,6 +375,31 @@ export async function patchOnboardingJob(req, res) {
         })).filter(n => n.userEmail);
         if (notifications.length) {
           await OnboardingNotificationModel.insertMany(notifications).catch(err => console.error('OnboardingNotification insert:', err));
+        }
+        // Send email notifications to tagged users (use otpEmail when available - same as OTP login)
+        for (let i = 0; i < taggedUserIds.length; i++) {
+          const userEmail = (taggedUserIds[i] || '').toLowerCase().trim();
+          if (!userEmail) continue;
+          const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) ? comment.taggedNames[i] : null;
+          // Look up user's otpEmail - tagged notifications go to otpEmail (same destination as OTP)
+          const taggedUser = await UserModel.findOne({ email: userEmail }).select('otpEmail name').lean();
+          const toEmail = (taggedUser?.otpEmail || '').trim() || userEmail;
+          const emailType = taggedUser?.otpEmail ? 'otpEmail' : 'primary';
+          console.log(`[Tagged] ${authorName} tagged ${userEmail} in job #${job.jobNumber} -> sending email to ${toEmail} (${emailType})`);
+          sendTagNotificationEmail({
+            toEmail,
+            recipientName: recipientName || taggedUser?.name,
+            authorName,
+            commentSnippet,
+            jobNumber: job.jobNumber,
+            clientName: job.clientName || '',
+            clientNumber: job.clientNumber ?? null,
+            jobId: String(job._id)
+          }).then(() => {
+            console.log(`[Tag Email] Sent successfully to ${toEmail} for tagged user ${userEmail}`);
+          }).catch(err => {
+            console.error(`[Tag Email] Failed to send to ${toEmail} for tagged user ${userEmail}:`, err?.message || err);
+          });
         }
       }
     } else {
@@ -581,6 +571,47 @@ export async function markOnboardingNotificationRead(req, res) {
   } catch (e) {
     console.error('markOnboardingNotificationRead:', e);
     res.status(500).json({ error: e.message || 'Failed to mark read' });
+  }
+}
+
+export async function resolveOnboardingComment(req, res) {
+  try {
+    const { id: jobId, commentId } = req.params;
+    const userEmail = (req.user?.email || '').toLowerCase().trim();
+    if (!userEmail) return res.status(401).json({ error: 'Unauthorized' });
+    const job = await OnboardingJobModel.findById(jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const comment = (job.comments || []).find(
+      c => String(c._id) === commentId || String(c._id) === String(commentId)
+    );
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+    const taggedEmails = (comment.taggedUserIds || []).map(e => (e || '').toLowerCase().trim()).filter(Boolean);
+    if (!taggedEmails.includes(userEmail)) {
+      return res.status(403).json({ error: 'Only tagged users can mark this as resolved' });
+    }
+    const resolvedByTagged = comment.resolvedByTagged || [];
+    if (resolvedByTagged.some(r => (r.email || '').toLowerCase() === userEmail)) {
+      return res.status(200).json({ job: job.toObject(), alreadyResolved: true });
+    }
+    const commentIndex = job.comments.findIndex(
+      c => String(c._id) === commentId || String(c._id) === String(commentId)
+    );
+    if (commentIndex < 0) return res.status(404).json({ error: 'Comment not found' });
+    if (!job.comments[commentIndex].resolvedByTagged) {
+      job.comments[commentIndex].resolvedByTagged = [];
+    }
+    job.comments[commentIndex].resolvedByTagged.push({
+      email: userEmail,
+      resolvedAt: new Date()
+    });
+    job.updatedAt = new Date();
+    job.markModified('comments');
+    await job.save();
+    const updated = await OnboardingJobModel.findById(jobId).lean();
+    res.status(200).json({ job: updated });
+  } catch (e) {
+    console.error('resolveOnboardingComment:', e);
+    res.status(500).json({ error: e.message || 'Failed to mark as resolved' });
   }
 }
 

@@ -14,12 +14,18 @@ const ONBOARDING_STATUSES = [
   'completed'
 ];
 
+const resolvedByTaggedSchema = new mongoose.Schema({
+  email: { type: String, required: true, lowercase: true },
+  resolvedAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const commentSchema = new mongoose.Schema({
   body: { type: String, required: true },
   authorEmail: { type: String, required: true },
   authorName: { type: String, default: '' },
   taggedUserIds: [{ type: String }],
   taggedNames: [{ type: String }],
+  resolvedByTagged: [resolvedByTaggedSchema],
   createdAt: { type: Date, default: Date.now }
 }, { _id: true });
 

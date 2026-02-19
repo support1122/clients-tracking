@@ -10,9 +10,10 @@ if (SENDGRID_API_KEY) {
 
 export async function sendOtpEmail(toEmail, otp, name) {
   if (!SENDGRID_API_KEY) {
-    console.log(`[Portal OTP] ${toEmail} -> ${otp} (SendGrid not configured)`);
+    console.log(`[OTP Email] ${toEmail} -> OTP (SendGrid not configured)`);
     return;
   }
+  console.log(`[OTP Email] Sending OTP to ${toEmail}`);
 
   const displayName = name || (toEmail && toEmail.split('@')[0]) || 'User';
 
@@ -52,5 +53,11 @@ export async function sendOtpEmail(toEmail, otp, name) {
     html
   };
 
-  await sgMail.send(msg);
+  try {
+    await sgMail.send(msg);
+    console.log(`[OTP Email] Sent successfully to ${toEmail}`);
+  } catch (err) {
+    console.error(`[OTP Email] Failed to send to ${toEmail}:`, err?.response?.body || err.message);
+    throw err;
+  }
 }
