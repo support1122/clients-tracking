@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import mongoose from 'mongoose';
 import { JobModel } from './JobModel.js';
 import { ClientModel } from './ClientModel.js';
@@ -141,6 +142,8 @@ app.use(
 );
 app.options(/.*/, cors());
 
+// Gzip all JSON/text responses — cuts payload size 60-80%
+app.use(compression());
 app.use(express.json());
 // Twilio webhooks send application/x-www-form-urlencoded by default
 app.use(express.urlencoded({ extended: false }));

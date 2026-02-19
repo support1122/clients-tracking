@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo, useTransition } from 'react';
 import {
   useOnboardingStore,
   ONBOARDING_STATUSES,
@@ -92,6 +92,8 @@ const JobCard = React.memo(({
   onEditChange,
   onEditSave,
   onEditStart,
+  onHoverStart,
+  onHoverEnd,
   jobAnalysis, // { saved, applied, interviewing, offer, rejected, removed, lastAppliedOperatorName }
   showJobAnalysis // boolean to show/hide the analysis section
 }) => {
@@ -128,9 +130,10 @@ const JobCard = React.memo(({
       draggable
       onDragStart={(e) => onDragStart(e, job)}
       onDragEnd={onDragEnd}
+      onMouseEnter={() => onHoverStart?.(job)}
       onMouseDown={(e) => { e.button === 0 && onLongPressStart(e, job); }}
       onMouseUp={onLongPressEnd}
-      onMouseLeave={onLongPressEnd}
+      onMouseLeave={(e) => { onLongPressEnd(e); onHoverEnd?.(); }}
       onTouchStart={(e) => onLongPressStart(e, job)}
       onTouchEnd={onLongPressEnd}
       onTouchCancel={onLongPressEnd}
@@ -334,7 +337,9 @@ export default function ClientOnboarding() {
   const [showClientProfile, setShowClientProfile] = useState(false);
   const [clientProfileData, setClientProfileData] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchInput, setSearchInput] = useState('');   // immediate – drives the controlled input
+  const [searchQuery, setSearchQuery] = useState('');   // deferred – drives the expensive filter
+  const [, startSearchTransition] = useTransition();
   const [editingClientNameJobId, setEditingClientNameJobId] = useState(null);
   const [editingClientNameValue, setEditingClientNameValue] = useState('');
   const [savingClientName, setSavingClientName] = useState(false);
@@ -349,6 +354,8 @@ export default function ClientOnboarding() {
   const [appliedOnDateCount, setAppliedOnDateCount] = useState(null); // Count of jobs applied on selected date
   const [fetchingAppliedOnDate, setFetchingAppliedOnDate] = useState(false); // Loading state for find applied
   const [loadingJobDetails, setLoadingJobDetails] = useState(false); // Loading state for full job details (lazy-loaded on card open)
+  const prefetchCacheRef = useRef(new Map()); // jobId → full job data (populated on hover)
+  const hoverTimerRef   = useRef(null);       // setTimeout handle for hover delay
   const attachmentNameInputRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const longPressActivatedRef = useRef(false);
@@ -842,6 +849,7 @@ export default function ClientOnboarding() {
       if (!res.ok) throw new Error(data.error || 'Move failed');
 
       // Server success: replace job with server response (moveHistory, etc.)
+      prefetchCacheRef.current.delete(jobId); // invalidate stale prefetch
       setJobs((prev) => prev.map((j) => (j._id === jobId ? data.job : j)));
       if (selectedJob?._id === jobId) {
         setSelectedJob(data.job);
@@ -952,13 +960,22 @@ export default function ClientOnboarding() {
       longPressActivatedRef.current = false;
       return;
     }
-    // Open panel immediately with lightweight card data, then fetch full details in background
+    // If hover-prefetch already loaded the full data, use it immediately (zero wait)
+    const prefetched = prefetchCacheRef.current.get(job._id);
+    if (prefetched) {
+      setSelectedJob(prefetched);
+      setJobs(prev => prev.map(j => j._id === job._id ? { ...j, ...prefetched } : j));
+      return;
+    }
+
+    // Otherwise open panel with lightweight card data and fetch full details in background
     setSelectedJob(job);
     setLoadingJobDetails(true);
     fetch(`${API_BASE}/api/onboarding/jobs/${job._id}`, { headers: AUTH_HEADERS() })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data?.job) {
+          prefetchCacheRef.current.set(job._id, data.job); // cache for next open
           // Only update if the same job is still selected (user hasn't switched cards)
           const current = useOnboardingStore.getState().selectedJob;
           if (current?._id === job._id) {
@@ -971,6 +988,23 @@ export default function ClientOnboarding() {
       .catch(() => {})
       .finally(() => setLoadingJobDetails(false));
   }, [setSelectedJob, setJobs]);
+
+  // Prefetch full job on hover (200 ms delay) so the detail panel opens with zero wait time
+  const handleCardHoverStart = useCallback((job) => {
+    if (prefetchCacheRef.current.has(job._id)) return; // already cached
+    clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      if (prefetchCacheRef.current.has(job._id)) return;
+      fetch(`${API_BASE}/api/onboarding/jobs/${job._id}`, { headers: AUTH_HEADERS() })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data?.job) prefetchCacheRef.current.set(job._id, data.job); })
+        .catch(() => {});
+    }, 200);
+  }, []);
+
+  const handleCardHoverEnd = useCallback(() => {
+    clearTimeout(hoverTimerRef.current);
+  }, []);
 
   const handleMoveToChoice = useCallback((job, newStatus) => {
     if (job.status === newStatus) return;
@@ -1788,8 +1822,12 @@ export default function ClientOnboarding() {
               <input
                 type="text"
                 placeholder="Search by client name, email, or job #..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={searchInput}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSearchInput(val); // instant — no jitter in the input
+                  startSearchTransition(() => setSearchQuery(val)); // deferred — heavy filter
+                }}
                 className="pl-10 pr-4 py-2 w-72 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white shadow-sm text-sm"
               />
             </div>
@@ -1947,6 +1985,8 @@ export default function ClientOnboarding() {
                             setEditingClientNameJobId(jobId);
                             setEditingClientNameValue(name);
                           }}
+                          onHoverStart={handleCardHoverStart}
+                          onHoverEnd={handleCardHoverEnd}
                           showJobAnalysis={showAnalysis}
                           jobAnalysis={analysis}
                         />

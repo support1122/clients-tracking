@@ -7,6 +7,32 @@ import { ClientModel } from '../ClientModel.js';
 import { ManagerModel } from '../ManagerModel.js';
 import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
 
+// ---------------------------------------------------------------------------
+// Simple in-process TTL cache — avoids redundant DB round-trips
+// ---------------------------------------------------------------------------
+const createTTLCache = (defaultTtlMs) => {
+  const store = new Map();
+  return {
+    get(key) {
+      const entry = store.get(key);
+      if (!entry) return null;
+      if (Date.now() > entry.exp) { store.delete(key); return null; }
+      return entry.val;
+    },
+    set(key, val, ttlMs = defaultTtlMs) {
+      store.set(key, { val, exp: Date.now() + ttlMs });
+    },
+    del(key) { store.delete(key); },
+    clear() { store.clear(); }
+  };
+};
+
+// 5 s TTL for the Kanban board list (invalidated on every write)
+const jobListCache = createTTLCache(5_000);
+// 60 s TTL for user roles (changes only when admin updates users)
+const rolesCache   = createTTLCache(60_000);
+// ---------------------------------------------------------------------------
+
 const VALID_TRANSITIONS = {
   resume_in_progress: ['resume_draft_done'],
   resume_draft_done: ['resume_in_review'],
@@ -127,6 +153,11 @@ export async function listOnboardingJobs(req, res) {
     const filter = {};
     if (status && ONBOARDING_STATUSES_LIST.includes(status)) filter.status = status;
 
+    // Serve from cache when available (5 s TTL, invalidated on any write)
+    const cacheKey = `jobs:${status || 'all'}`;
+    const cached = jobListCache.get(cacheKey);
+    if (cached) return res.status(200).json(cached);
+
     // Fetch jobs with lightweight projection — heavy arrays loaded lazily on card open
     const jobs = await OnboardingJobModel.find(filter)
       .select(LIST_PROJECTION)
@@ -163,7 +194,9 @@ export async function listOnboardingJobs(req, res) {
       };
     });
 
-    res.status(200).json({ jobs: enrichedJobs });
+    const payload = { jobs: enrichedJobs };
+    jobListCache.set(cacheKey, payload);
+    res.status(200).json(payload);
   } catch (e) {
     console.error('listOnboardingJobs:', e);
     res.status(500).json({ error: e.message || 'Failed to list onboarding jobs' });
@@ -404,6 +437,8 @@ export async function patchOnboardingJob(req, res) {
       await job.save();
     }
 
+    jobListCache.clear(); // invalidate list cache after any mutation
+
     // Use the already-mutated job object — avoids an extra findById round-trip
     const updated = job.toObject();
 
@@ -448,6 +483,7 @@ export async function postOnboardingJob(req, res) {
       mastersEndDate: mastersEndDate || '',
       dashboardCredentials: dashboardCredentials || {}
     });
+    jobListCache.clear(); // invalidate list cache after new ticket
     
     // Create notification for ticket creation
     try {
@@ -487,13 +523,17 @@ export async function postOnboardingJob(req, res) {
 
 export async function getOnboardingRoles(req, res) {
   try {
+    // Roles change only when admin updates users — serve from 60 s cache
+    const cachedRoles = rolesCache.get('roles');
+    if (cachedRoles) return res.status(200).json(cachedRoles);
+
     const users = await UserModel.find({ isActive: true })
       .select('email role onboardingSubRole roles name')
       .lean();
     const csms = users.filter(u => u.roles?.includes?.('csm') || u.role === 'csm');
     const resumeMakers = users.filter(u => u.role === 'onboarding_team' && u.onboardingSubRole === 'resume_maker');
-    const linkedInMembers = users.filter(u => 
-      u.role === 'onboarding_team' && 
+    const linkedInMembers = users.filter(u =>
+      u.role === 'onboarding_team' &&
       u.onboardingSubRole === 'linkedin_and_cover_letter_optimization'
     );
     const teamLeads = users.filter(u => u.role === 'team_lead');
@@ -504,19 +544,24 @@ export async function getOnboardingRoles(req, res) {
       if (u.email) mentionableMap.set(u.email.toLowerCase(), { email: u.email, name: u.name || u.email });
     });
     const mentionableUsers = Array.from(mentionableMap.values());
-    res.status(200).json({
+    const rolesPayload = {
       csms: csms.map(u => ({ email: u.email, name: u.name || u.email })),
       resumeMakers: resumeMakers.map(u => ({ email: u.email, name: u.name || u.email })),
       linkedInMembers: linkedInMembers.map(u => ({ email: u.email, name: u.name || u.email })),
       teamLeads: teamLeads.map(u => ({ email: u.email, name: u.name || u.email })),
       admins: admins.map(u => ({ email: u.email, name: u.name || u.email })),
       mentionableUsers
-    });
+    };
+    rolesCache.set('roles', rolesPayload);
+    res.status(200).json(rolesPayload);
   } catch (e) {
     console.error('getOnboardingRoles:', e);
     res.status(500).json({ error: e.message || 'Failed to get onboarding roles' });
   }
 }
+
+// Exported so auth routes can invalidate when users are created/updated/deleted
+export function invalidateRolesCache() { rolesCache.clear(); }
 
 export async function getNextResumeMakerApi(req, res) {
   try {
@@ -548,11 +593,14 @@ export async function markOnboardingNotificationRead(req, res) {
     const { id } = req.params;
     const email = (req.user?.email || '').toLowerCase().trim();
     if (!email) return res.status(401).json({ error: 'Unauthorized' });
-    const notification = await OnboardingNotificationModel.findOne({ _id: id, userEmail: email });
+    // Atomic single-query update — no find then save
+    const notification = await OnboardingNotificationModel.findOneAndUpdate(
+      { _id: id, userEmail: email },
+      { $set: { read: true } },
+      { new: true, lean: true }
+    );
     if (!notification) return res.status(404).json({ error: 'Notification not found' });
-    notification.read = true;
-    await notification.save();
-    res.status(200).json({ notification: notification.toObject() });
+    res.status(200).json({ notification });
   } catch (e) {
     console.error('markOnboardingNotificationRead:', e);
     res.status(500).json({ error: e.message || 'Failed to mark read' });
@@ -592,8 +640,8 @@ export async function resolveOnboardingComment(req, res) {
     job.updatedAt = new Date();
     job.markModified('comments');
     await job.save();
-    const updated = await OnboardingJobModel.findById(jobId).lean();
-    res.status(200).json({ job: updated });
+    jobListCache.clear();
+    res.status(200).json({ job: job.toObject() }); // use mutated doc directly
   } catch (e) {
     console.error('resolveOnboardingComment:', e);
     res.status(500).json({ error: e.message || 'Failed to mark as resolved' });
@@ -617,6 +665,7 @@ export async function postOnboardingJobAttachment(req, res) {
     });
     job.updatedAt = new Date();
     await job.save();
+    jobListCache.clear(); // invalidate list cache after attachment change
     res.status(201).json({ attachment: job.attachments[job.attachments.length - 1] });
   } catch (e) {
     console.error('postOnboardingJobAttachment:', e);
