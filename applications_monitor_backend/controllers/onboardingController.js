@@ -145,7 +145,7 @@ export async function createOnboardingJobPayload(payload) {
 // Fields needed for Kanban card display (excludes heavy arrays loaded on card open)
 const LIST_PROJECTION = 'jobNumber clientNumber clientEmail clientName planType status ' +
   'resumeMakerEmail resumeMakerName linkedInMemberEmail linkedInMemberName ' +
-  'csmEmail csmName dashboardManagerName linkedInPhaseStarted createdAt updatedAt';
+  'csmEmail csmName dashboardManagerName linkedInPhaseStarted adminUnreadCount createdAt updatedAt';
 
 export async function listOnboardingJobs(req, res) {
   try {
@@ -244,7 +244,7 @@ function validateTransition(fromStatus, toStatus) {
 export async function patchOnboardingJob(req, res) {
   try {
     const { id } = req.params;
-    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment, clientName } = req.body || {};
+    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment, clientName, gmailCredentials } = req.body || {};
     
     // Validate ID format
     if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
@@ -367,6 +367,32 @@ export async function patchOnboardingJob(req, res) {
       job.clientName = clientName.trim() || job.clientName;
     }
 
+    // Handle Gmail credentials update with history
+    if (gmailCredentials !== undefined && typeof gmailCredentials === 'object') {
+      const newUsername = (gmailCredentials.username || '').trim();
+      const newPassword = (gmailCredentials.password || '').trim();
+      const currentUsername = (job.gmailCredentials?.username || '').trim();
+      const currentPassword = (job.gmailCredentials?.password || '').trim();
+
+      const usernameChanged = newUsername !== currentUsername;
+      const passwordChanged = newPassword !== currentPassword;
+
+      if (usernameChanged || passwordChanged) {
+        if (!job.gmailCredentialsHistory) job.gmailCredentialsHistory = [];
+        if (currentUsername || currentPassword) {
+          job.gmailCredentialsHistory.push({
+            username: currentUsername,
+            password: currentPassword,
+            updatedBy: req.user?.email || req.user?.name || 'unknown',
+            updatedAt: new Date()
+          });
+        }
+        if (!job.gmailCredentials) job.gmailCredentials = {};
+        if (newUsername) job.gmailCredentials.username = newUsername;
+        if (newPassword) job.gmailCredentials.password = newPassword;
+      }
+    }
+
     if (comment && typeof comment.body === 'string' && comment.body.trim()) {
       if (!job.comments) job.comments = [];
       const taggedUserIds = Array.isArray(comment.taggedUserIds) ? comment.taggedUserIds : [];
@@ -380,6 +406,10 @@ export async function patchOnboardingJob(req, res) {
         createdAt: new Date()
       });
       job.updatedAt = new Date();
+      // Non-admin comment → increment unread counter for admins (stored on doc, zero extra query)
+      if (req.user?.role !== 'admin') {
+        job.adminUnreadCount = (job.adminUnreadCount || 0) + 1;
+      }
       await job.save();
 
       if (taggedUserIds.length > 0) {
@@ -670,5 +700,29 @@ export async function postOnboardingJobAttachment(req, res) {
   } catch (e) {
     console.error('postOnboardingJobAttachment:', e);
     res.status(500).json({ error: e.message || 'Failed to add attachment' });
+  }
+}
+
+/**
+ * POST /api/onboarding/jobs/:id/admin-read
+ * Admin-only. Atomically resets adminUnreadCount to 0.
+ * Single findOneAndUpdate — no read first, no extra round-trips.
+ * Clears the 5 s list cache so the next board refresh reflects the new count.
+ */
+export async function markAdminRead(req, res) {
+  try {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin only' });
+    }
+    const { id } = req.params;
+    await OnboardingJobModel.findOneAndUpdate(
+      { _id: id, adminUnreadCount: { $gt: 0 } }, // only write if there's something to clear
+      { $set: { adminUnreadCount: 0 } }
+    );
+    jobListCache.clear();
+    res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('markAdminRead:', e);
+    res.status(500).json({ error: e.message || 'Failed to mark as read' });
   }
 }

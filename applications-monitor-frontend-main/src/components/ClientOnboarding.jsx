@@ -141,9 +141,16 @@ const JobCard = React.memo(({
       className={`group ${getCardBackgroundColor()} rounded-xl p-4 border shadow-sm hover:shadow-md hover:border-orange-100 transition-[transform,opacity,box-shadow,border-color] duration-200 ease-out cursor-grab active:cursor-grabbing relative ${isDragging ? 'opacity-50 scale-[0.98] shadow-lg ring-2 ring-primary/20 rotate-1' : 'hover:scale-[1.01]'}`}
     >
       <div className="flex items-start justify-between mb-2">
-        <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
-          {job.jobNumber}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
+            {job.jobNumber}
+          </span>
+          {isAdmin && job.adminUnreadCount > 0 && (
+            <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
+              {job.adminUnreadCount > 99 ? '99+' : job.adminUnreadCount}
+            </span>
+          )}
+        </div>
         <div className="opacity-0 group-hover:opacity-100 transition-opacity">
           <button type="button" className="text-gray-400 hover:text-primary"><MoreHorizontal className="w-4 h-4" /></button>
         </div>
@@ -276,6 +283,7 @@ const JobCard = React.memo(({
     prevProps.job.jobNumber === nextProps.job.jobNumber &&
     prevProps.job.clientStatus === nextProps.job.clientStatus &&
     prevProps.job.clientIsPaused === nextProps.job.clientIsPaused &&
+    prevProps.job.adminUnreadCount === nextProps.job.adminUnreadCount &&
     prevProps.draggedJobId === nextProps.draggedJobId &&
     prevProps.editingClientNameJobId === nextProps.editingClientNameJobId &&
     prevProps.editingClientNameValue === nextProps.editingClientNameValue &&
@@ -328,6 +336,10 @@ export default function ClientOnboarding() {
   const [showMoveHistory, setShowMoveHistory] = useState(false);
   const [addingComment, setAddingComment] = useState(false);
   const [resolvingCommentId, setResolvingCommentId] = useState(null);
+  const [gmailUsername, setGmailUsername] = useState('');
+  const [gmailPassword, setGmailPassword] = useState('');
+  const [savingGmailCredentials, setSavingGmailCredentials] = useState(false);
+  const [showGmailCredentialsHistory, setShowGmailCredentialsHistory] = useState(false);
   const [showAttachments, setShowAttachments] = useState(false);
   const [showMoveOptions, setShowMoveOptions] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -763,6 +775,10 @@ export default function ClientOnboarding() {
     // Clear card analysis date and data
     setCardAnalysisDate('');
     setCardJobAnalysis(null);
+    // Clear Gmail credentials
+    setGmailUsername('');
+    setGmailPassword('');
+    setShowGmailCredentialsHistory(false);
     // Clear the selected job using store method
     clearSelected();
     // Also set directly to ensure it's cleared immediately
@@ -775,6 +791,17 @@ export default function ClientOnboarding() {
       commentInputRef.current.innerHTML = '';
     }
   }, [commentText]);
+
+  // Initialize Gmail credentials when job is selected
+  useEffect(() => {
+    if (selectedJob?.gmailCredentials) {
+      setGmailUsername(selectedJob.gmailCredentials.username || '');
+      setGmailPassword(selectedJob.gmailCredentials.password || '');
+    } else {
+      setGmailUsername('');
+      setGmailPassword('');
+    }
+  }, [selectedJob?.gmailCredentials]);
 
   // Fetch client profile only when user expands the Client Profile section (avoids lag on modal open)
   useEffect(() => {
@@ -960,6 +987,18 @@ export default function ClientOnboarding() {
       longPressActivatedRef.current = false;
       return;
     }
+
+    // Admin unread: optimistic reset + fire-and-forget server sync
+    if (user?.role === 'admin' && job.adminUnreadCount > 0) {
+      setJobs(prev => prev.map(j => j._id === job._id ? { ...j, adminUnreadCount: 0 } : j));
+      const cached = prefetchCacheRef.current.get(job._id);
+      if (cached) prefetchCacheRef.current.set(job._id, { ...cached, adminUnreadCount: 0 });
+      fetch(`${API_BASE}/api/onboarding/jobs/${job._id}/admin-read`, {
+        method: 'POST',
+        headers: AUTH_HEADERS()
+      }).catch(() => {});
+    }
+
     // If hover-prefetch already loaded the full data, use it immediately (zero wait)
     const prefetched = prefetchCacheRef.current.get(job._id);
     if (prefetched) {
@@ -987,7 +1026,7 @@ export default function ClientOnboarding() {
       })
       .catch(() => {})
       .finally(() => setLoadingJobDetails(false));
-  }, [setSelectedJob, setJobs]);
+  }, [setSelectedJob, setJobs, user]);
 
   // Prefetch full job on hover (200 ms delay) so the detail panel opens with zero wait time
   const handleCardHoverStart = useCallback((job) => {
@@ -2222,6 +2261,107 @@ export default function ClientOnboarding() {
                           <span className="text-sm text-gray-900 font-mono bg-white px-2 py-1 rounded border border-gray-200">{selectedJob.clientEmail}</span>
                         </div>
                       </div>
+                    </div>
+                  </div>
+
+                  {/* Gmail Credentials Section */}
+                  <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
+                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                      <Briefcase className="w-3 h-3" /> Gmail Credentials
+                    </h3>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Username</label>
+                        <input
+                          type="text"
+                          value={gmailUsername}
+                          onChange={(e) => setGmailUsername(e.target.value)}
+                          placeholder="Enter Gmail username"
+                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Password</label>
+                        <input
+                          type="password"
+                          value={gmailPassword}
+                          onChange={(e) => setGmailPassword(e.target.value)}
+                          placeholder="Enter Gmail password"
+                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!selectedJob?._id || savingGmailCredentials) return;
+                          setSavingGmailCredentials(true);
+                          try {
+                            const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, {
+                              method: 'PATCH',
+                              headers: AUTH_HEADERS(),
+                              body: JSON.stringify({
+                                gmailCredentials: {
+                                  username: gmailUsername.trim(),
+                                  password: gmailPassword.trim()
+                                }
+                              })
+                            });
+                            if (!res.ok) throw new Error('Failed to save credentials');
+                            const data = await res.json();
+                            setSelectedJob(data.job);
+                            setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
+                            toastUtils.success('Gmail credentials saved');
+                            if (data.job.gmailCredentials) {
+                              setGmailUsername(data.job.gmailCredentials.username || '');
+                              setGmailPassword(data.job.gmailCredentials.password || '');
+                            }
+                          } catch (e) {
+                            toastUtils.error(e.message || 'Failed to save credentials');
+                          } finally {
+                            setSavingGmailCredentials(false);
+                          }
+                        }}
+                        disabled={savingGmailCredentials}
+                        className="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                      >
+                        {savingGmailCredentials ? 'Saving...' : 'Save Credentials'}
+                      </button>
+                      {(selectedJob.gmailCredentialsHistory || []).length > 0 && (
+                        <div className="mt-4 pt-4 border-t border-gray-200">
+                          <button
+                            type="button"
+                            onClick={() => setShowGmailCredentialsHistory(!showGmailCredentialsHistory)}
+                            className="w-full flex items-center justify-between text-xs font-semibold text-gray-700 hover:text-gray-900 transition-colors"
+                          >
+                            <span>Credentials History ({(selectedJob.gmailCredentialsHistory || []).length})</span>
+                            <ChevronRight className={`w-4 h-4 transition-transform ${showGmailCredentialsHistory ? 'rotate-90' : ''}`} />
+                          </button>
+                          {showGmailCredentialsHistory && (
+                            <div className="mt-3 space-y-2 max-h-60 overflow-y-auto">
+                              {(selectedJob.gmailCredentialsHistory || []).slice().reverse().map((history, idx) => (
+                                <div key={idx} className="bg-white rounded-lg p-3 border border-gray-200">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <span className="text-[10px] text-gray-500">Updated by: {history.updatedBy || 'Unknown'}</span>
+                                    <span className="text-[10px] text-gray-500">
+                                      {new Date(history.updatedAt).toLocaleDateString()} {new Date(history.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <div>
+                                      <span className="text-[10px] text-gray-500 font-medium">Username:</span>
+                                      <div className="text-xs text-gray-700 font-mono bg-gray-50 px-2 py-1 rounded mt-0.5">{history.username || '—'}</div>
+                                    </div>
+                                    <div>
+                                      <span className="text-[10px] text-gray-500 font-medium">Password:</span>
+                                      <div className="text-xs text-gray-700 font-mono bg-gray-50 px-2 py-1 rounded mt-0.5">{history.password || '—'}</div>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
 

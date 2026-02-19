@@ -45,7 +45,8 @@ import {
   getNextResumeMakerApi,
   postOnboardingJobAttachment,
   getOnboardingNotifications,
-  markOnboardingNotificationRead
+  markOnboardingNotificationRead,
+  markAdminRead
 } from './controllers/onboardingController.js';
 import { ClientCounterModel } from './ClientCounterModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
@@ -3671,6 +3672,7 @@ app.get('/api/onboarding/jobs/:id', verifyToken, getOnboardingJobById);
 app.patch('/api/onboarding/jobs/:id/comments/:commentId/resolve', verifyToken, resolveOnboardingComment);
 app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
 app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
+app.post('/api/onboarding/jobs/:id/admin-read', verifyToken, markAdminRead);
 
 // Onboarding attachment upload (R2 or Cloudinary) - R2: onboarding-assets/images|pdf|others
 app.post('/api/upload/onboarding-attachment', fileUpload.single('file'), async (req, res) => {

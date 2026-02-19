@@ -81,6 +81,9 @@ const onboardingJobSchema = new mongoose.Schema({
   comments: [commentSchema],
   moveHistory: [moveHistorySchema],
   linkedInPhaseStarted: { type: Boolean, default: false },
+  // Pre-computed counter: incremented when a non-admin posts a comment, zeroed when any admin reads the job.
+  // Stored on the document so it costs zero extra DB queries on the list endpoint.
+  adminUnreadCount: { type: Number, default: 0, min: 0 },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
