@@ -25,6 +25,7 @@ export default function ClientJobAnalysis() {
   const [savingPause, setSavingPause] = useState(new Set());
   const [userRole, setUserRole] = useState(null);
   const [lastAppliedByFilter, setLastAppliedByFilter] = useState(''); // Filter for "Last applied by" operator name
+  const [dashboardManagerFilter, setDashboardManagerFilter] = useState(''); // Filter for "Dashboard Mgr" name
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -295,7 +296,38 @@ export default function ClientJobAnalysis() {
                       )}
                     </div>
                   </th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Dashboard Mgr</th>
+                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                    <div className="flex items-center gap-2">
+                      <span>Dashboard Mgr</span>
+                      <select
+                        value={dashboardManagerFilter}
+                        onChange={(e) => setDashboardManagerFilter(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="px-1.5 py-0.5 text-[10px] border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        title="Filter by dashboard manager"
+                      >
+                        <option value="">All</option>
+                        {[...new Set(rows.map(r => r.dashboardTeamLeadName).filter(Boolean))].sort().map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                      {dashboardManagerFilter && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDashboardManagerFilter('');
+                          }}
+                          className="px-1 py-0.5 text-[10px] text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300"
+                          title="Clear filter"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Total Apps</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Saved</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Applied</th>
@@ -327,7 +359,13 @@ export default function ClientJobAnalysis() {
                     if (lastAppliedByFilter) {
                       const operatorName = (r.lastAppliedOperatorName || '').toLowerCase();
                       const filterName = lastAppliedByFilter.toLowerCase();
-                      return operatorName === filterName;
+                      if (operatorName !== filterName) return false;
+                    }
+                    // Filter by "Dashboard Mgr" name
+                    if (dashboardManagerFilter) {
+                      const managerName = (r.dashboardTeamLeadName || '').toLowerCase();
+                      const filterName = dashboardManagerFilter.toLowerCase();
+                      if (managerName !== filterName) return false;
                     }
                     return true;
                   })
@@ -502,13 +540,20 @@ export default function ClientJobAnalysis() {
                   if (lastAppliedByFilter) {
                     const operatorName = (r.lastAppliedOperatorName || '').toLowerCase();
                     const filterName = lastAppliedByFilter.toLowerCase();
-                    return operatorName === filterName;
+                    if (operatorName !== filterName) return false;
+                  }
+                  if (dashboardManagerFilter) {
+                    const managerName = (r.dashboardTeamLeadName || '').toLowerCase();
+                    const filterName = dashboardManagerFilter.toLowerCase();
+                    if (managerName !== filterName) return false;
                   }
                   return true;
                 }).length === 0 && (
                   <tr>
                     <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">
-                      {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
+                      {lastAppliedByFilter || dashboardManagerFilter 
+                        ? 'No clients found for selected filter' 
+                        : 'No data'}
                     </td>
                   </tr>
                 )}
