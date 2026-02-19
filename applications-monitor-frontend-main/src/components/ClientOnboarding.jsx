@@ -39,7 +39,8 @@ function getVisibleColumns(user) {
   const role = user?.role || '';
   const roles = user?.roles || [];
   const subRole = user?.onboardingSubRole || '';
-  if (role === 'admin' || roles.includes('csm')) return ONBOARDING_STATUSES;
+  // Admin and CSM (including users who have 'csm' in their secondary roles)
+  if (role === 'admin' || role === 'csm' || roles.includes('csm')) return ONBOARDING_STATUSES;
   if (role === 'onboarding_team') {
     if (subRole === 'resume_maker') return ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved'];
     // LinkedIn & Cover Letter Optimization team sees all 4 statuses
