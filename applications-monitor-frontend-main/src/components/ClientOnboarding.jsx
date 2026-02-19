@@ -278,7 +278,13 @@ const JobCard = React.memo(({
     prevProps.editingClientNameValue === nextProps.editingClientNameValue &&
     prevProps.visibleColumns === nextProps.visibleColumns &&
     prevProps.showJobAnalysis === nextProps.showJobAnalysis &&
-    JSON.stringify(prevProps.jobAnalysis) === JSON.stringify(nextProps.jobAnalysis)
+    prevProps.jobAnalysis?.saved === nextProps.jobAnalysis?.saved &&
+    prevProps.jobAnalysis?.applied === nextProps.jobAnalysis?.applied &&
+    prevProps.jobAnalysis?.interviewing === nextProps.jobAnalysis?.interviewing &&
+    prevProps.jobAnalysis?.offer === nextProps.jobAnalysis?.offer &&
+    prevProps.jobAnalysis?.rejected === nextProps.jobAnalysis?.rejected &&
+    prevProps.jobAnalysis?.removed === nextProps.jobAnalysis?.removed &&
+    prevProps.jobAnalysis?.lastAppliedOperatorName === nextProps.jobAnalysis?.lastAppliedOperatorName
   );
 });
 
@@ -342,6 +348,7 @@ export default function ClientOnboarding() {
   const [cardJobAnalysis, setCardJobAnalysis] = useState(null); // Job analysis data for the currently opened card
   const [appliedOnDateCount, setAppliedOnDateCount] = useState(null); // Count of jobs applied on selected date
   const [fetchingAppliedOnDate, setFetchingAppliedOnDate] = useState(false); // Loading state for find applied
+  const [loadingJobDetails, setLoadingJobDetails] = useState(false); // Loading state for full job details (lazy-loaded on card open)
   const attachmentNameInputRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const longPressActivatedRef = useRef(false);
@@ -482,9 +489,22 @@ export default function ClientOnboarding() {
       // Use the store's current state to avoid stale closure issues
       const store = useOnboardingStore.getState();
       if (store.selectedJob?._id) {
-        const updatedSelectedJob = uniqueJobs.find((j) => j._id === store.selectedJob._id);
-        if (updatedSelectedJob) {
-          setSelectedJob(updatedSelectedJob);
+        const freshLightweight = uniqueJobs.find((j) => j._id === store.selectedJob._id);
+        if (freshLightweight) {
+          // Merge: keep the full-detail fields already loaded (comments, history, attachments, credentials)
+          // but refresh the lightweight display fields from the server
+          const existing = store.selectedJob;
+          const merged = {
+            ...freshLightweight,
+            // Preserve heavy fields that were lazy-loaded on card open
+            ...(existing.comments !== undefined && { comments: existing.comments }),
+            ...(existing.moveHistory !== undefined && { moveHistory: existing.moveHistory }),
+            ...(existing.attachments !== undefined && { attachments: existing.attachments }),
+            ...(existing.dashboardCredentials !== undefined && { dashboardCredentials: existing.dashboardCredentials }),
+            ...(existing.gmailCredentials !== undefined && { gmailCredentials: existing.gmailCredentials }),
+            ...(existing.gmailCredentialsHistory !== undefined && { gmailCredentialsHistory: existing.gmailCredentialsHistory }),
+          };
+          setSelectedJob(merged);
         } else {
           // If selected job no longer exists, clear selection
           clearSelected();
@@ -575,14 +595,21 @@ export default function ClientOnboarding() {
     fetchClientJobAnalysis(''); // Fetch all-time data for card previews
   }, [fetchJobs, fetchRoles, fetchClientJobAnalysis]);
 
-  // Fetch job analysis for the opened card when date changes
+  // Update card job analysis when card opens or date filter changes
   useEffect(() => {
-    if (selectedJob?.clientEmail) {
-      fetchClientJobAnalysisForCard(selectedJob.clientEmail, cardAnalysisDate);
-    } else {
+    if (!selectedJob?.clientEmail) {
       setCardJobAnalysis(null);
+      return;
     }
-  }, [selectedJob?.clientEmail, cardAnalysisDate]);
+    if (!cardAnalysisDate) {
+      // No date filter: use the already-fetched all-time data (zero extra network request)
+      const cached = clientJobAnalysis[(selectedJob.clientEmail || '').toLowerCase()];
+      setCardJobAnalysis(cached || null);
+    } else {
+      // Date filter: need a fresh fetch for the specific date
+      fetchClientJobAnalysisForCard(selectedJob.clientEmail, cardAnalysisDate);
+    }
+  }, [selectedJob?.clientEmail, cardAnalysisDate, clientJobAnalysis]);
 
   // Fetch job analysis data for a specific client with date filter
   const fetchClientJobAnalysisForCard = useCallback(async (clientEmail, selectedDate) => {
@@ -925,8 +952,25 @@ export default function ClientOnboarding() {
       longPressActivatedRef.current = false;
       return;
     }
+    // Open panel immediately with lightweight card data, then fetch full details in background
     setSelectedJob(job);
-  }, [setSelectedJob]);
+    setLoadingJobDetails(true);
+    fetch(`${API_BASE}/api/onboarding/jobs/${job._id}`, { headers: AUTH_HEADERS() })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.job) {
+          // Only update if the same job is still selected (user hasn't switched cards)
+          const current = useOnboardingStore.getState().selectedJob;
+          if (current?._id === job._id) {
+            setSelectedJob(data.job);
+            // Keep list entry in sync with any enriched fields
+            setJobs(prev => prev.map(j => j._id === job._id ? { ...j, ...data.job } : j));
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingJobDetails(false));
+  }, [setSelectedJob, setJobs]);
 
   const handleMoveToChoice = useCallback((job, newStatus) => {
     if (job.status === newStatus) return;
@@ -1702,7 +1746,7 @@ export default function ClientOnboarding() {
   const unreadNotifications = (notifications || []).filter((n) => !n.read);
   const handleNotificationClick = (notification) => {
     const job = jobs.find((j) => j._id === notification.jobId);
-    if (job) setSelectedJob(job);
+    if (job) handleCardClick(job);
     if (notification._id) markNotificationRead(notification._id);
   };
 
@@ -1992,6 +2036,12 @@ export default function ClientOnboarding() {
               e.stopPropagation();
             }}
           >
+            {/* Loading bar: visible while full job details are being fetched */}
+            {loadingJobDetails && (
+              <div className="h-0.5 w-full bg-orange-100 overflow-hidden">
+                <div className="h-full bg-primary w-2/5" style={{ animation: 'slideRight 1s ease-in-out infinite' }} />
+              </div>
+            )}
             {/* Modal Header */}
             <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-start justify-between sticky top-0 z-10">
               <div>

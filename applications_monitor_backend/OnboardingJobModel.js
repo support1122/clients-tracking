@@ -87,6 +87,8 @@ const onboardingJobSchema = new mongoose.Schema({
 
 onboardingJobSchema.index({ status: 1 });
 onboardingJobSchema.index({ clientEmail: 1 });
+onboardingJobSchema.index({ status: 1, jobNumber: 1 });
+onboardingJobSchema.index({ updatedAt: -1 });
 
 export const ONBOARDING_STATUSES_LIST = ONBOARDING_STATUSES;
 export const OnboardingJobModel = mongoose.model('OnboardingJob', onboardingJobSchema);

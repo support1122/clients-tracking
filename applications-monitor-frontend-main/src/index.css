@@ -35,3 +35,9 @@ body {
 ::-webkit-scrollbar-thumb:hover {
     background: #94A3B8;
 }
+
+/* Loading bar animation for lazy-loaded job detail panel */
+@keyframes slideRight {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}

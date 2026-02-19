@@ -116,38 +116,39 @@ export async function createOnboardingJobPayload(payload) {
   return job;
 }
 
+// Fields needed for Kanban card display (excludes heavy arrays loaded on card open)
+const LIST_PROJECTION = 'jobNumber clientNumber clientEmail clientName planType status ' +
+  'resumeMakerEmail resumeMakerName linkedInMemberEmail linkedInMemberName ' +
+  'csmEmail csmName dashboardManagerName linkedInPhaseStarted createdAt updatedAt';
+
 export async function listOnboardingJobs(req, res) {
   try {
     const { status } = req.query || {};
     const filter = {};
     if (status && ONBOARDING_STATUSES_LIST.includes(status)) filter.status = status;
+
+    // Fetch jobs with lightweight projection — heavy arrays loaded lazily on card open
     const jobs = await OnboardingJobModel.find(filter)
+      .select(LIST_PROJECTION)
       .sort({ jobNumber: 1 })
       .lean();
-    
-    // Fetch client status and isPaused for all unique client emails
-    const clientEmails = [...new Set(jobs.map(job => (job.clientEmail || '').toLowerCase()).filter(Boolean))];
-    const clients = await ClientModel.find({ email: { $in: clientEmails } })
-      .select('email status isPaused')
-      .lean();
-    
-    const clientStatusMap = new Map();
-    clients.forEach(client => {
-      clientStatusMap.set(client.email.toLowerCase(), {
-        status: client.status || 'active',
-        isPaused: client.isPaused || false
-      });
-    });
-    
-    const maskCredentials = (job) => {
-      if (!job.dashboardCredentials) return job;
-      const creds = { ...job.dashboardCredentials };
-      if (creds.password) creds.password = '********';
-      return { ...job, dashboardCredentials: creds };
-    };
 
+    // Parallel: fetch client statuses AND manager emails at the same time
+    const clientEmails = [...new Set(jobs.map(job => (job.clientEmail || '').toLowerCase()).filter(Boolean))];
     const managerNames = [...new Set(jobs.map(j => (j.dashboardManagerName || '').trim()).filter(Boolean))];
-    const managers = managerNames.length ? await ManagerModel.find({ fullName: { $in: managerNames }, isActive: true }).select('fullName email').lean() : [];
+
+    const [clients, managers] = await Promise.all([
+      clientEmails.length
+        ? ClientModel.find({ email: { $in: clientEmails } }).select('email status isPaused').lean()
+        : Promise.resolve([]),
+      managerNames.length
+        ? ManagerModel.find({ fullName: { $in: managerNames }, isActive: true }).select('fullName email').lean()
+        : Promise.resolve([])
+    ]);
+
+    const clientStatusMap = new Map(
+      clients.map(c => [c.email.toLowerCase(), { status: c.status || 'active', isPaused: c.isPaused || false }])
+    );
     const managerEmailByName = new Map(managers.map(m => [m.fullName, m.email]));
 
     const enrichedJobs = jobs.map(job => {
@@ -155,7 +156,7 @@ export async function listOnboardingJobs(req, res) {
       const clientInfo = clientStatusMap.get(clientEmail) || { status: 'active', isPaused: false };
       const dashboardManagerEmail = (job.dashboardManagerName && managerEmailByName.get(job.dashboardManagerName)) || '';
       return {
-        ...maskCredentials(job),
+        ...job,
         clientStatus: clientInfo.status,
         clientIsPaused: clientInfo.isPaused,
         dashboardManagerEmail
@@ -178,31 +179,21 @@ export async function getOnboardingJobById(req, res) {
     if (!canSeeCredentials && job.dashboardCredentials?.password) {
       job.dashboardCredentials = { ...job.dashboardCredentials, password: '********' };
     }
-    
-    // Fetch client status and isPaused
-    const clientEmail = (job.clientEmail || '').toLowerCase();
-    if (clientEmail) {
-      const client = await ClientModel.findOne({ email: clientEmail })
-        .select('status isPaused')
-        .lean();
-      if (client) {
-        job.clientStatus = client.status || 'active';
-        job.clientIsPaused = client.isPaused || false;
-      } else {
-        job.clientStatus = 'active';
-        job.clientIsPaused = false;
-      }
-    } else {
-      job.clientStatus = 'active';
-      job.clientIsPaused = false;
-    }
 
-    if (job.dashboardManagerName) {
-      const manager = await ManagerModel.findOne({ fullName: job.dashboardManagerName, isActive: true }).select('email').lean();
-      job.dashboardManagerEmail = manager?.email || '';
-    } else {
-      job.dashboardManagerEmail = '';
-    }
+    // Parallel: fetch client status + manager email at the same time
+    const clientEmail = (job.clientEmail || '').toLowerCase();
+    const [client, manager] = await Promise.all([
+      clientEmail
+        ? ClientModel.findOne({ email: clientEmail }).select('status isPaused').lean()
+        : Promise.resolve(null),
+      job.dashboardManagerName
+        ? ManagerModel.findOne({ fullName: job.dashboardManagerName, isActive: true }).select('email').lean()
+        : Promise.resolve(null)
+    ]);
+
+    job.clientStatus = client?.status || 'active';
+    job.clientIsPaused = client?.isPaused || false;
+    job.dashboardManagerEmail = manager?.email || '';
 
     res.status(200).json({ job });
   } catch (e) {
@@ -362,8 +353,10 @@ export async function patchOnboardingJob(req, res) {
         const commentSnippet = comment.body.trim().slice(0, 120);
         const authorName = req.user?.name || req.user?.email || '';
         const authorEmail = req.user?.email || '';
-        const notifications = taggedUserIds.map((email, i) => ({
-          userEmail: (email || '').toLowerCase().trim(),
+        const cleanTaggedEmails = taggedUserIds.map(e => (e || '').toLowerCase().trim()).filter(Boolean);
+
+        const notifications = cleanTaggedEmails.map((email) => ({
+          userEmail: email,
           jobId: job._id,
           jobNumber: job.jobNumber,
           clientNumber: job.clientNumber ?? null,
@@ -372,18 +365,22 @@ export async function patchOnboardingJob(req, res) {
           authorEmail,
           authorName,
           read: false
-        })).filter(n => n.userEmail);
+        }));
         if (notifications.length) {
           await OnboardingNotificationModel.insertMany(notifications).catch(err => console.error('OnboardingNotification insert:', err));
         }
-        // Send email notifications to tagged users (use otpEmail when available - same as OTP login)
-        for (let i = 0; i < taggedUserIds.length; i++) {
-          const userEmail = (taggedUserIds[i] || '').toLowerCase().trim();
-          if (!userEmail) continue;
-          const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) ? comment.taggedNames[i] : null;
-          // Look up user's otpEmail - tagged notifications go to otpEmail (same destination as OTP)
-          const taggedUser = await UserModel.findOne({ email: userEmail }).select('otpEmail name').lean();
+
+        // Batch lookup all tagged users' otpEmails in a single query
+        const taggedUsersData = await UserModel.find({ email: { $in: cleanTaggedEmails } })
+          .select('email otpEmail name')
+          .lean();
+        const taggedUserMap = new Map(taggedUsersData.map(u => [u.email.toLowerCase(), u]));
+
+        // Send email notifications to tagged users (fire-and-forget)
+        cleanTaggedEmails.forEach((userEmail, i) => {
+          const taggedUser = taggedUserMap.get(userEmail);
           const toEmail = (taggedUser?.otpEmail || '').trim() || userEmail;
+          const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) ? comment.taggedNames[i] : null;
           const emailType = taggedUser?.otpEmail ? 'otpEmail' : 'primary';
           console.log(`[Tagged] ${authorName} tagged ${userEmail} in job #${job.jobNumber} -> sending email to ${toEmail} (${emailType})`);
           sendTagNotificationEmail({
@@ -400,42 +397,30 @@ export async function patchOnboardingJob(req, res) {
           }).catch(err => {
             console.error(`[Tag Email] Failed to send to ${toEmail} for tagged user ${userEmail}:`, err?.message || err);
           });
-        }
+        });
       }
     } else {
       job.updatedAt = new Date();
       await job.save();
     }
 
-    const updated = await OnboardingJobModel.findById(id).lean();
-    
-    // Note: Passwords are stored as plain text strings (not hashed) as per requirements
-    // History passwords are kept as plain text for reference
-    
-    // Fetch client status and isPaused
-    const clientEmail = (updated?.clientEmail || '').toLowerCase();
-    if (clientEmail && updated) {
-      const client = await ClientModel.findOne({ email: clientEmail })
-        .select('status isPaused')
-        .lean();
-      if (client) {
-        updated.clientStatus = client.status || 'active';
-        updated.clientIsPaused = client.isPaused || false;
-      } else {
-        updated.clientStatus = 'active';
-        updated.clientIsPaused = false;
-      }
-    } else if (updated) {
-      updated.clientStatus = 'active';
-      updated.clientIsPaused = false;
-    }
+    // Use the already-mutated job object — avoids an extra findById round-trip
+    const updated = job.toObject();
 
-    if (updated?.dashboardManagerName) {
-      const manager = await ManagerModel.findOne({ fullName: updated.dashboardManagerName, isActive: true }).select('email').lean();
-      updated.dashboardManagerEmail = manager?.email || '';
-    } else if (updated) {
-      updated.dashboardManagerEmail = '';
-    }
+    // Parallel: fetch client status + manager email at the same time
+    const enrichClientEmail = (updated.clientEmail || '').toLowerCase();
+    const [clientDoc, managerDoc] = await Promise.all([
+      enrichClientEmail
+        ? ClientModel.findOne({ email: enrichClientEmail }).select('status isPaused').lean()
+        : Promise.resolve(null),
+      updated.dashboardManagerName
+        ? ManagerModel.findOne({ fullName: updated.dashboardManagerName, isActive: true }).select('email').lean()
+        : Promise.resolve(null)
+    ]);
+
+    updated.clientStatus = clientDoc?.status || 'active';
+    updated.clientIsPaused = clientDoc?.isPaused || false;
+    updated.dashboardManagerEmail = managerDoc?.email || '';
 
     res.status(200).json({ job: updated });
   } catch (e) {
