@@ -14,12 +14,18 @@ const ONBOARDING_STATUSES = [
   'completed'
 ];
 
+const resolvedByTaggedSchema = new mongoose.Schema({
+  email: { type: String, required: true, lowercase: true },
+  resolvedAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 const commentSchema = new mongoose.Schema({
   body: { type: String, required: true },
   authorEmail: { type: String, required: true },
   authorName: { type: String, default: '' },
   taggedUserIds: [{ type: String }],
   taggedNames: [{ type: String }],
+  resolvedByTagged: [resolvedByTaggedSchema],
   createdAt: { type: Date, default: Date.now }
 }, { _id: true });
 
@@ -75,12 +81,17 @@ const onboardingJobSchema = new mongoose.Schema({
   comments: [commentSchema],
   moveHistory: [moveHistorySchema],
   linkedInPhaseStarted: { type: Boolean, default: false },
+  // Pre-computed counter: incremented when a non-admin posts a comment, zeroed when any admin reads the job.
+  // Stored on the document so it costs zero extra DB queries on the list endpoint.
+  adminUnreadCount: { type: Number, default: 0, min: 0 },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
 
 onboardingJobSchema.index({ status: 1 });
 onboardingJobSchema.index({ clientEmail: 1 });
+onboardingJobSchema.index({ status: 1, jobNumber: 1 });
+onboardingJobSchema.index({ updatedAt: -1 });
 
 export const ONBOARDING_STATUSES_LIST = ONBOARDING_STATUSES;
 export const OnboardingJobModel = mongoose.model('OnboardingJob', onboardingJobSchema);

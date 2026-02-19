@@ -176,7 +176,14 @@ function App() {
   // ===============================
   // ✅ Team Lead / Operations Intern Layout (with Navbar)
   // ===============================
-  const roleLabel = user.role === 'operations_intern' ? 'Operations Intern' : 'Team Lead';
+  const roleLabel =
+    user.role === 'operations_intern'
+      ? 'Operations Intern'
+      : user.role === 'csm'
+        ? 'CSM'
+        : user.role === 'onboarding_team'
+          ? 'Onboarding'
+          : 'Team Lead';
   
   return (
     <div>
@@ -198,12 +205,35 @@ function App() {
                 <p className="text-sm text-gray-600">{roleLabel}: {user.email}</p>
               </div>
             </div>
-            <button
-              onClick={handleLogout}
-              className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm"
-            >
-              Logout
-            </button>
+            <div className="flex items-center gap-3">
+              {['team_lead', 'csm', 'onboarding_team'].includes(user.role) && (
+                <Link to="/client-onboarding">
+                  <button className="px-3 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors text-sm">
+                    Client Onboarding
+                  </button>
+                </Link>
+              )}
+              {['team_lead', 'csm', 'operations_intern'].includes(user.role) && (
+                <Link to="/client-job-analysis">
+                  <button className="px-3 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors text-sm">
+                    Client Job Analysis
+                  </button>
+                </Link>
+              )}
+              {['team_lead', 'csm', 'operations_intern'].includes(user.role) && (
+                <Link to="/monitor-clients">
+                  <button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm">
+                    Client Tracking
+                  </button>
+                </Link>
+              )}
+              <button
+                onClick={handleLogout}
+                className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm"
+              >
+                Logout
+              </button>
+            </div>
           </div>
         </div>
       </div>

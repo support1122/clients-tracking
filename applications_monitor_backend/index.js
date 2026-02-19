@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import mongoose from 'mongoose';
 import { JobModel } from './JobModel.js';
 import { ClientModel } from './ClientModel.js';
@@ -38,12 +39,14 @@ import {
   listOnboardingJobs,
   getOnboardingJobById,
   patchOnboardingJob,
+  resolveOnboardingComment,
   postOnboardingJob,
   getOnboardingRoles,
   getNextResumeMakerApi,
   postOnboardingJobAttachment,
   getOnboardingNotifications,
-  markOnboardingNotificationRead
+  markOnboardingNotificationRead,
+  markAdminRead
 } from './controllers/onboardingController.js';
 import { ClientCounterModel } from './ClientCounterModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
@@ -140,6 +143,8 @@ app.use(
 );
 app.options(/.*/, cors());
 
+// Gzip all JSON/text responses — cuts payload size 60-80%
+app.use(compression());
 app.use(express.json());
 // Twilio webhooks send application/x-www-form-urlencoded by default
 app.use(express.urlencoded({ extended: false }));
@@ -1765,7 +1770,9 @@ const updateUser = async (req, res) => {
     if (email !== undefined && email !== null) {
       const newEmail = String(email).trim().toLowerCase();
       if (!newEmail) return res.status(400).json({ error: 'Email cannot be empty' });
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) return res.status(400).json({ error: 'Invalid email format' });
+      const isValidStandard = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail);
+      const isValidFlashfirehq = /^[^\s@]+@flashfirehq$/.test(newEmail);
+      if (!isValidStandard && !isValidFlashfirehq) return res.status(400).json({ error: 'Invalid email format' });
       const existing = await UserModel.findOne({ email: newEmail });
       if (existing && existing._id.toString() !== userId) return res.status(400).json({ error: 'Email already in use' });
       user.email = newEmail;
@@ -3662,8 +3669,10 @@ app.get('/api/onboarding/notifications', verifyToken, getOnboardingNotifications
 app.patch('/api/onboarding/notifications/:id/read', verifyToken, markOnboardingNotificationRead);
 app.post('/api/onboarding/jobs', verifyToken, postOnboardingJob);
 app.get('/api/onboarding/jobs/:id', verifyToken, getOnboardingJobById);
+app.patch('/api/onboarding/jobs/:id/comments/:commentId/resolve', verifyToken, resolveOnboardingComment);
 app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
 app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
+app.post('/api/onboarding/jobs/:id/admin-read', verifyToken, markAdminRead);
 
 // Onboarding attachment upload (R2 or Cloudinary) - R2: onboarding-assets/images|pdf|others
 app.post('/api/upload/onboarding-attachment', fileUpload.single('file'), async (req, res) => {

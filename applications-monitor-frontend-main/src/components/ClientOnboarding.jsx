@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo, useTransition } from 'react';
 import {
   useOnboardingStore,
   ONBOARDING_STATUSES,
@@ -25,7 +25,8 @@ import {
   AlertCircle,
   ArrowUpDown,
   Search,
-  Pencil
+  Pencil,
+  CheckCircle
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_BASE || '';
@@ -38,7 +39,8 @@ function getVisibleColumns(user) {
   const role = user?.role || '';
   const roles = user?.roles || [];
   const subRole = user?.onboardingSubRole || '';
-  if (role === 'admin' || roles.includes('csm')) return ONBOARDING_STATUSES;
+  // Admin and CSM (including users who have 'csm' in their secondary roles)
+  if (role === 'admin' || role === 'csm' || roles.includes('csm')) return ONBOARDING_STATUSES;
   if (role === 'onboarding_team') {
     if (subRole === 'resume_maker') return ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved'];
     // LinkedIn & Cover Letter Optimization team sees all 4 statuses
@@ -91,6 +93,8 @@ const JobCard = React.memo(({
   onEditChange,
   onEditSave,
   onEditStart,
+  onHoverStart,
+  onHoverEnd,
   jobAnalysis, // { saved, applied, interviewing, offer, rejected, removed, lastAppliedOperatorName }
   showJobAnalysis // boolean to show/hide the analysis section
 }) => {
@@ -127,9 +131,10 @@ const JobCard = React.memo(({
       draggable
       onDragStart={(e) => onDragStart(e, job)}
       onDragEnd={onDragEnd}
+      onMouseEnter={() => onHoverStart?.(job)}
       onMouseDown={(e) => { e.button === 0 && onLongPressStart(e, job); }}
       onMouseUp={onLongPressEnd}
-      onMouseLeave={onLongPressEnd}
+      onMouseLeave={(e) => { onLongPressEnd(e); onHoverEnd?.(); }}
       onTouchStart={(e) => onLongPressStart(e, job)}
       onTouchEnd={onLongPressEnd}
       onTouchCancel={onLongPressEnd}
@@ -137,9 +142,16 @@ const JobCard = React.memo(({
       className={`group ${getCardBackgroundColor()} rounded-xl p-4 border shadow-sm hover:shadow-md hover:border-orange-100 transition-[transform,opacity,box-shadow,border-color] duration-200 ease-out cursor-grab active:cursor-grabbing relative ${isDragging ? 'opacity-50 scale-[0.98] shadow-lg ring-2 ring-primary/20 rotate-1' : 'hover:scale-[1.01]'}`}
     >
       <div className="flex items-start justify-between mb-2">
-        <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
-          {job.jobNumber}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
+            {job.jobNumber}
+          </span>
+          {isAdmin && job.adminUnreadCount > 0 && (
+            <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
+              {job.adminUnreadCount > 99 ? '99+' : job.adminUnreadCount}
+            </span>
+          )}
+        </div>
         <div className="opacity-0 group-hover:opacity-100 transition-opacity">
           <button type="button" className="text-gray-400 hover:text-primary"><MoreHorizontal className="w-4 h-4" /></button>
         </div>
@@ -272,12 +284,19 @@ const JobCard = React.memo(({
     prevProps.job.jobNumber === nextProps.job.jobNumber &&
     prevProps.job.clientStatus === nextProps.job.clientStatus &&
     prevProps.job.clientIsPaused === nextProps.job.clientIsPaused &&
+    prevProps.job.adminUnreadCount === nextProps.job.adminUnreadCount &&
     prevProps.draggedJobId === nextProps.draggedJobId &&
     prevProps.editingClientNameJobId === nextProps.editingClientNameJobId &&
     prevProps.editingClientNameValue === nextProps.editingClientNameValue &&
     prevProps.visibleColumns === nextProps.visibleColumns &&
     prevProps.showJobAnalysis === nextProps.showJobAnalysis &&
-    JSON.stringify(prevProps.jobAnalysis) === JSON.stringify(nextProps.jobAnalysis)
+    prevProps.jobAnalysis?.saved === nextProps.jobAnalysis?.saved &&
+    prevProps.jobAnalysis?.applied === nextProps.jobAnalysis?.applied &&
+    prevProps.jobAnalysis?.interviewing === nextProps.jobAnalysis?.interviewing &&
+    prevProps.jobAnalysis?.offer === nextProps.jobAnalysis?.offer &&
+    prevProps.jobAnalysis?.rejected === nextProps.jobAnalysis?.rejected &&
+    prevProps.jobAnalysis?.removed === nextProps.jobAnalysis?.removed &&
+    prevProps.jobAnalysis?.lastAppliedOperatorName === nextProps.jobAnalysis?.lastAppliedOperatorName
   );
 });
 
@@ -317,6 +336,11 @@ export default function ClientOnboarding() {
   const [notificationPage, setNotificationPage] = useState(1);
   const [showMoveHistory, setShowMoveHistory] = useState(false);
   const [addingComment, setAddingComment] = useState(false);
+  const [resolvingCommentId, setResolvingCommentId] = useState(null);
+  const [gmailUsername, setGmailUsername] = useState('');
+  const [gmailPassword, setGmailPassword] = useState('');
+  const [savingGmailCredentials, setSavingGmailCredentials] = useState(false);
+  const [showGmailCredentialsHistory, setShowGmailCredentialsHistory] = useState(false);
   const [showAttachments, setShowAttachments] = useState(false);
   const [showMoveOptions, setShowMoveOptions] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
@@ -326,7 +350,9 @@ export default function ClientOnboarding() {
   const [showClientProfile, setShowClientProfile] = useState(false);
   const [clientProfileData, setClientProfileData] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchInput, setSearchInput] = useState('');   // immediate – drives the controlled input
+  const [searchQuery, setSearchQuery] = useState('');   // deferred – drives the expensive filter
+  const [, startSearchTransition] = useTransition();
   const [editingClientNameJobId, setEditingClientNameJobId] = useState(null);
   const [editingClientNameValue, setEditingClientNameValue] = useState('');
   const [savingClientName, setSavingClientName] = useState(false);
@@ -340,10 +366,9 @@ export default function ClientOnboarding() {
   const [cardJobAnalysis, setCardJobAnalysis] = useState(null); // Job analysis data for the currently opened card
   const [appliedOnDateCount, setAppliedOnDateCount] = useState(null); // Count of jobs applied on selected date
   const [fetchingAppliedOnDate, setFetchingAppliedOnDate] = useState(false); // Loading state for find applied
-  const [gmailUsername, setGmailUsername] = useState('');
-  const [gmailPassword, setGmailPassword] = useState('');
-  const [savingGmailCredentials, setSavingGmailCredentials] = useState(false);
-  const [showGmailCredentialsHistory, setShowGmailCredentialsHistory] = useState(false);
+  const [loadingJobDetails, setLoadingJobDetails] = useState(false); // Loading state for full job details (lazy-loaded on card open)
+  const prefetchCacheRef = useRef(new Map()); // jobId → full job data (populated on hover)
+  const hoverTimerRef   = useRef(null);       // setTimeout handle for hover delay
   const attachmentNameInputRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const longPressActivatedRef = useRef(false);
@@ -484,9 +509,22 @@ export default function ClientOnboarding() {
       // Use the store's current state to avoid stale closure issues
       const store = useOnboardingStore.getState();
       if (store.selectedJob?._id) {
-        const updatedSelectedJob = uniqueJobs.find((j) => j._id === store.selectedJob._id);
-        if (updatedSelectedJob) {
-          setSelectedJob(updatedSelectedJob);
+        const freshLightweight = uniqueJobs.find((j) => j._id === store.selectedJob._id);
+        if (freshLightweight) {
+          // Merge: keep the full-detail fields already loaded (comments, history, attachments, credentials)
+          // but refresh the lightweight display fields from the server
+          const existing = store.selectedJob;
+          const merged = {
+            ...freshLightweight,
+            // Preserve heavy fields that were lazy-loaded on card open
+            ...(existing.comments !== undefined && { comments: existing.comments }),
+            ...(existing.moveHistory !== undefined && { moveHistory: existing.moveHistory }),
+            ...(existing.attachments !== undefined && { attachments: existing.attachments }),
+            ...(existing.dashboardCredentials !== undefined && { dashboardCredentials: existing.dashboardCredentials }),
+            ...(existing.gmailCredentials !== undefined && { gmailCredentials: existing.gmailCredentials }),
+            ...(existing.gmailCredentialsHistory !== undefined && { gmailCredentialsHistory: existing.gmailCredentialsHistory }),
+          };
+          setSelectedJob(merged);
         } else {
           // If selected job no longer exists, clear selection
           clearSelected();
@@ -577,14 +615,21 @@ export default function ClientOnboarding() {
     fetchClientJobAnalysis(''); // Fetch all-time data for card previews
   }, [fetchJobs, fetchRoles, fetchClientJobAnalysis]);
 
-  // Fetch job analysis for the opened card when date changes
+  // Update card job analysis when card opens or date filter changes
   useEffect(() => {
-    if (selectedJob?.clientEmail) {
-      fetchClientJobAnalysisForCard(selectedJob.clientEmail, cardAnalysisDate);
-    } else {
+    if (!selectedJob?.clientEmail) {
       setCardJobAnalysis(null);
+      return;
     }
-  }, [selectedJob?.clientEmail, cardAnalysisDate]);
+    if (!cardAnalysisDate) {
+      // No date filter: use the already-fetched all-time data (zero extra network request)
+      const cached = clientJobAnalysis[(selectedJob.clientEmail || '').toLowerCase()];
+      setCardJobAnalysis(cached || null);
+    } else {
+      // Date filter: need a fresh fetch for the specific date
+      fetchClientJobAnalysisForCard(selectedJob.clientEmail, cardAnalysisDate);
+    }
+  }, [selectedJob?.clientEmail, cardAnalysisDate, clientJobAnalysis]);
 
   // Fetch job analysis data for a specific client with date filter
   const fetchClientJobAnalysisForCard = useCallback(async (clientEmail, selectedDate) => {
@@ -832,6 +877,7 @@ export default function ClientOnboarding() {
       if (!res.ok) throw new Error(data.error || 'Move failed');
 
       // Server success: replace job with server response (moveHistory, etc.)
+      prefetchCacheRef.current.delete(jobId); // invalidate stale prefetch
       setJobs((prev) => prev.map((j) => (j._id === jobId ? data.job : j)));
       if (selectedJob?._id === jobId) {
         setSelectedJob(data.job);
@@ -942,8 +988,63 @@ export default function ClientOnboarding() {
       longPressActivatedRef.current = false;
       return;
     }
+
+    // Admin unread: optimistic reset + fire-and-forget server sync
+    if (user?.role === 'admin' && job.adminUnreadCount > 0) {
+      setJobs(prev => prev.map(j => j._id === job._id ? { ...j, adminUnreadCount: 0 } : j));
+      const cached = prefetchCacheRef.current.get(job._id);
+      if (cached) prefetchCacheRef.current.set(job._id, { ...cached, adminUnreadCount: 0 });
+      fetch(`${API_BASE}/api/onboarding/jobs/${job._id}/admin-read`, {
+        method: 'POST',
+        headers: AUTH_HEADERS()
+      }).catch(() => {});
+    }
+
+    // If hover-prefetch already loaded the full data, use it immediately (zero wait)
+    const prefetched = prefetchCacheRef.current.get(job._id);
+    if (prefetched) {
+      setSelectedJob(prefetched);
+      setJobs(prev => prev.map(j => j._id === job._id ? { ...j, ...prefetched } : j));
+      return;
+    }
+
+    // Otherwise open panel with lightweight card data and fetch full details in background
     setSelectedJob(job);
-  }, [setSelectedJob]);
+    setLoadingJobDetails(true);
+    fetch(`${API_BASE}/api/onboarding/jobs/${job._id}`, { headers: AUTH_HEADERS() })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.job) {
+          prefetchCacheRef.current.set(job._id, data.job); // cache for next open
+          // Only update if the same job is still selected (user hasn't switched cards)
+          const current = useOnboardingStore.getState().selectedJob;
+          if (current?._id === job._id) {
+            setSelectedJob(data.job);
+            // Keep list entry in sync with any enriched fields
+            setJobs(prev => prev.map(j => j._id === job._id ? { ...j, ...data.job } : j));
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingJobDetails(false));
+  }, [setSelectedJob, setJobs, user]);
+
+  // Prefetch full job on hover (200 ms delay) so the detail panel opens with zero wait time
+  const handleCardHoverStart = useCallback((job) => {
+    if (prefetchCacheRef.current.has(job._id)) return; // already cached
+    clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      if (prefetchCacheRef.current.has(job._id)) return;
+      fetch(`${API_BASE}/api/onboarding/jobs/${job._id}`, { headers: AUTH_HEADERS() })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data?.job) prefetchCacheRef.current.set(job._id, data.job); })
+        .catch(() => {});
+    }, 200);
+  }, []);
+
+  const handleCardHoverEnd = useCallback(() => {
+    clearTimeout(hoverTimerRef.current);
+  }, []);
 
   const handleMoveToChoice = useCallback((job, newStatus) => {
     if (job.status === newStatus) return;
@@ -1256,6 +1357,26 @@ export default function ClientOnboarding() {
       toastUtils.error(e.message || 'Failed to add comment');
     } finally {
       setAddingComment(false);
+    }
+  };
+
+  const handleResolve = async (comment) => {
+    if (!selectedJob || !comment?._id) return;
+    setResolvingCommentId(comment._id);
+    try {
+      const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}/comments/${comment._id}/resolve`, {
+        method: 'PATCH',
+        headers: AUTH_HEADERS()
+      });
+      if (!res.ok) throw new Error('Failed to mark as resolved');
+      const data = await res.json();
+      setSelectedJob(data.job);
+      setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
+      toastUtils.success('Marked as resolved');
+    } catch (e) {
+      toastUtils.error(e.message || 'Failed to mark as resolved');
+    } finally {
+      setResolvingCommentId(null);
     }
   };
 
@@ -1699,7 +1820,7 @@ export default function ClientOnboarding() {
   const unreadNotifications = (notifications || []).filter((n) => !n.read);
   const handleNotificationClick = (notification) => {
     const job = jobs.find((j) => j._id === notification.jobId);
-    if (job) setSelectedJob(job);
+    if (job) handleCardClick(job);
     if (notification._id) markNotificationRead(notification._id);
   };
 
@@ -1741,8 +1862,12 @@ export default function ClientOnboarding() {
               <input
                 type="text"
                 placeholder="Search by client name, email, or job #..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={searchInput}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSearchInput(val); // instant — no jitter in the input
+                  startSearchTransition(() => setSearchQuery(val)); // deferred — heavy filter
+                }}
                 className="pl-10 pr-4 py-2 w-72 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white shadow-sm text-sm"
               />
             </div>
@@ -1900,6 +2025,8 @@ export default function ClientOnboarding() {
                             setEditingClientNameJobId(jobId);
                             setEditingClientNameValue(name);
                           }}
+                          onHoverStart={handleCardHoverStart}
+                          onHoverEnd={handleCardHoverEnd}
                           showJobAnalysis={showAnalysis}
                           jobAnalysis={analysis}
                         />
@@ -1989,6 +2116,12 @@ export default function ClientOnboarding() {
               e.stopPropagation();
             }}
           >
+            {/* Loading bar: visible while full job details are being fetched */}
+            {loadingJobDetails && (
+              <div className="h-0.5 w-full bg-orange-100 overflow-hidden">
+                <div className="h-full bg-primary w-2/5" style={{ animation: 'slideRight 1s ease-in-out infinite' }} />
+              </div>
+            )}
             {/* Modal Header */}
             <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-start justify-between sticky top-0 z-10">
               <div>
@@ -2179,7 +2312,6 @@ export default function ClientOnboarding() {
                             setSelectedJob(data.job);
                             setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
                             toastUtils.success('Gmail credentials saved');
-                            // Update local state with saved values
                             if (data.job.gmailCredentials) {
                               setGmailUsername(data.job.gmailCredentials.username || '');
                               setGmailPassword(data.job.gmailCredentials.password || '');
@@ -2195,8 +2327,6 @@ export default function ClientOnboarding() {
                       >
                         {savingGmailCredentials ? 'Saving...' : 'Save Credentials'}
                       </button>
-                      
-                      {/* Credentials History */}
                       {(selectedJob.gmailCredentialsHistory || []).length > 0 && (
                         <div className="mt-4 pt-4 border-t border-gray-200">
                           <button
@@ -2212,9 +2342,7 @@ export default function ClientOnboarding() {
                               {(selectedJob.gmailCredentialsHistory || []).slice().reverse().map((history, idx) => (
                                 <div key={idx} className="bg-white rounded-lg p-3 border border-gray-200">
                                   <div className="flex items-center justify-between mb-2">
-                                    <span className="text-[10px] text-gray-500">
-                                      Updated by: {history.updatedBy || 'Unknown'}
-                                    </span>
+                                    <span className="text-[10px] text-gray-500">Updated by: {history.updatedBy || 'Unknown'}</span>
                                     <span className="text-[10px] text-gray-500">
                                       {new Date(history.updatedAt).toLocaleDateString()} {new Date(history.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                     </span>
@@ -2226,9 +2354,7 @@ export default function ClientOnboarding() {
                                     </div>
                                     <div>
                                       <span className="text-[10px] text-gray-500 font-medium">Password:</span>
-                                      <div className="text-xs text-gray-700 font-mono bg-gray-50 px-2 py-1 rounded mt-0.5">
-                                        {history.password || '—'}
-                                      </div>
+                                      <div className="text-xs text-gray-700 font-mono bg-gray-50 px-2 py-1 rounded mt-0.5">{history.password || '—'}</div>
                                     </div>
                                   </div>
                                 </div>
@@ -2630,6 +2756,39 @@ export default function ClientOnboarding() {
                                 </p>
                               </div>
                             ) : null}
+                            {(() => {
+                              const taggedEmails = (comment.taggedUserIds || []).map(e => (e || '').toLowerCase().trim()).filter(Boolean);
+                              const resolvedByTagged = comment.resolvedByTagged || [];
+                              const currentUserEmail = (user?.email || '').toLowerCase().trim();
+                              const isTagged = currentUserEmail && taggedEmails.includes(currentUserEmail);
+                              const hasResolved = resolvedByTagged.some(r => (r.email || '').toLowerCase() === currentUserEmail);
+                              const canResolve = isTagged && !hasResolved && comment._id;
+                              return (
+                                <>
+                                  {resolvedByTagged.length > 0 && (
+                                    <div className="mt-2 pt-2 border-t border-gray-200 flex items-center gap-2 flex-wrap">
+                                      <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
+                                      <span className="text-xs text-green-700">
+                                        Resolved by {resolvedByTagged.map(r => r.email).join(', ')} {resolvedByTagged[0]?.resolvedAt ? `on ${new Date(resolvedByTagged[0].resolvedAt).toLocaleDateString()}` : ''}
+                                      </span>
+                                    </div>
+                                  )}
+                                  {canResolve && (
+                                    <div className="mt-2 pt-2 border-t border-gray-200">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleResolve(comment)}
+                                        disabled={resolvingCommentId === comment._id}
+                                        className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
+                                      >
+                                        {resolvingCommentId === comment._id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />}
+                                        Resolve
+                                      </button>
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </div>
                         </div>
                       </div>

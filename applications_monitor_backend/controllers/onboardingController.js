@@ -5,6 +5,33 @@ import { OnboardingNotificationModel } from '../OnboardingNotificationModel.js';
 import { UserModel } from '../UserModel.js';
 import { ClientModel } from '../ClientModel.js';
 import { ManagerModel } from '../ManagerModel.js';
+import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
+
+// ---------------------------------------------------------------------------
+// Simple in-process TTL cache — avoids redundant DB round-trips
+// ---------------------------------------------------------------------------
+const createTTLCache = (defaultTtlMs) => {
+  const store = new Map();
+  return {
+    get(key) {
+      const entry = store.get(key);
+      if (!entry) return null;
+      if (Date.now() > entry.exp) { store.delete(key); return null; }
+      return entry.val;
+    },
+    set(key, val, ttlMs = defaultTtlMs) {
+      store.set(key, { val, exp: Date.now() + ttlMs });
+    },
+    del(key) { store.delete(key); },
+    clear() { store.clear(); }
+  };
+};
+
+// 5 s TTL for the Kanban board list (invalidated on every write)
+const jobListCache = createTTLCache(5_000);
+// 60 s TTL for user roles (changes only when admin updates users)
+const rolesCache   = createTTLCache(60_000);
+// ---------------------------------------------------------------------------
 
 const VALID_TRANSITIONS = {
   resume_in_progress: ['resume_draft_done'],
@@ -115,38 +142,44 @@ export async function createOnboardingJobPayload(payload) {
   return job;
 }
 
+// Fields needed for Kanban card display (excludes heavy arrays loaded on card open)
+const LIST_PROJECTION = 'jobNumber clientNumber clientEmail clientName planType status ' +
+  'resumeMakerEmail resumeMakerName linkedInMemberEmail linkedInMemberName ' +
+  'csmEmail csmName dashboardManagerName linkedInPhaseStarted adminUnreadCount createdAt updatedAt';
+
 export async function listOnboardingJobs(req, res) {
   try {
     const { status } = req.query || {};
     const filter = {};
     if (status && ONBOARDING_STATUSES_LIST.includes(status)) filter.status = status;
+
+    // Serve from cache when available (5 s TTL, invalidated on any write)
+    const cacheKey = `jobs:${status || 'all'}`;
+    const cached = jobListCache.get(cacheKey);
+    if (cached) return res.status(200).json(cached);
+
+    // Fetch jobs with lightweight projection — heavy arrays loaded lazily on card open
     const jobs = await OnboardingJobModel.find(filter)
+      .select(LIST_PROJECTION)
       .sort({ jobNumber: 1 })
       .lean();
-    
-    // Fetch client status and isPaused for all unique client emails
-    const clientEmails = [...new Set(jobs.map(job => (job.clientEmail || '').toLowerCase()).filter(Boolean))];
-    const clients = await ClientModel.find({ email: { $in: clientEmails } })
-      .select('email status isPaused')
-      .lean();
-    
-    const clientStatusMap = new Map();
-    clients.forEach(client => {
-      clientStatusMap.set(client.email.toLowerCase(), {
-        status: client.status || 'active',
-        isPaused: client.isPaused || false
-      });
-    });
-    
-    const maskCredentials = (job) => {
-      if (!job.dashboardCredentials) return job;
-      const creds = { ...job.dashboardCredentials };
-      if (creds.password) creds.password = '********';
-      return { ...job, dashboardCredentials: creds };
-    };
 
+    // Parallel: fetch client statuses AND manager emails at the same time
+    const clientEmails = [...new Set(jobs.map(job => (job.clientEmail || '').toLowerCase()).filter(Boolean))];
     const managerNames = [...new Set(jobs.map(j => (j.dashboardManagerName || '').trim()).filter(Boolean))];
-    const managers = managerNames.length ? await ManagerModel.find({ fullName: { $in: managerNames }, isActive: true }).select('fullName email').lean() : [];
+
+    const [clients, managers] = await Promise.all([
+      clientEmails.length
+        ? ClientModel.find({ email: { $in: clientEmails } }).select('email status isPaused').lean()
+        : Promise.resolve([]),
+      managerNames.length
+        ? ManagerModel.find({ fullName: { $in: managerNames }, isActive: true }).select('fullName email').lean()
+        : Promise.resolve([])
+    ]);
+
+    const clientStatusMap = new Map(
+      clients.map(c => [c.email.toLowerCase(), { status: c.status || 'active', isPaused: c.isPaused || false }])
+    );
     const managerEmailByName = new Map(managers.map(m => [m.fullName, m.email]));
 
     const enrichedJobs = jobs.map(job => {
@@ -154,14 +187,16 @@ export async function listOnboardingJobs(req, res) {
       const clientInfo = clientStatusMap.get(clientEmail) || { status: 'active', isPaused: false };
       const dashboardManagerEmail = (job.dashboardManagerName && managerEmailByName.get(job.dashboardManagerName)) || '';
       return {
-        ...maskCredentials(job),
+        ...job,
         clientStatus: clientInfo.status,
         clientIsPaused: clientInfo.isPaused,
         dashboardManagerEmail
       };
     });
 
-    res.status(200).json({ jobs: enrichedJobs });
+    const payload = { jobs: enrichedJobs };
+    jobListCache.set(cacheKey, payload);
+    res.status(200).json(payload);
   } catch (e) {
     console.error('listOnboardingJobs:', e);
     res.status(500).json({ error: e.message || 'Failed to list onboarding jobs' });
@@ -177,31 +212,21 @@ export async function getOnboardingJobById(req, res) {
     if (!canSeeCredentials && job.dashboardCredentials?.password) {
       job.dashboardCredentials = { ...job.dashboardCredentials, password: '********' };
     }
-    
-    // Fetch client status and isPaused
-    const clientEmail = (job.clientEmail || '').toLowerCase();
-    if (clientEmail) {
-      const client = await ClientModel.findOne({ email: clientEmail })
-        .select('status isPaused')
-        .lean();
-      if (client) {
-        job.clientStatus = client.status || 'active';
-        job.clientIsPaused = client.isPaused || false;
-      } else {
-        job.clientStatus = 'active';
-        job.clientIsPaused = false;
-      }
-    } else {
-      job.clientStatus = 'active';
-      job.clientIsPaused = false;
-    }
 
-    if (job.dashboardManagerName) {
-      const manager = await ManagerModel.findOne({ fullName: job.dashboardManagerName, isActive: true }).select('email').lean();
-      job.dashboardManagerEmail = manager?.email || '';
-    } else {
-      job.dashboardManagerEmail = '';
-    }
+    // Parallel: fetch client status + manager email at the same time
+    const clientEmail = (job.clientEmail || '').toLowerCase();
+    const [client, manager] = await Promise.all([
+      clientEmail
+        ? ClientModel.findOne({ email: clientEmail }).select('status isPaused').lean()
+        : Promise.resolve(null),
+      job.dashboardManagerName
+        ? ManagerModel.findOne({ fullName: job.dashboardManagerName, isActive: true }).select('email').lean()
+        : Promise.resolve(null)
+    ]);
+
+    job.clientStatus = client?.status || 'active';
+    job.clientIsPaused = client?.isPaused || false;
+    job.dashboardManagerEmail = manager?.email || '';
 
     res.status(200).json({ job });
   } catch (e) {
@@ -348,18 +373,12 @@ export async function patchOnboardingJob(req, res) {
       const newPassword = (gmailCredentials.password || '').trim();
       const currentUsername = (job.gmailCredentials?.username || '').trim();
       const currentPassword = (job.gmailCredentials?.password || '').trim();
-      
-      // Check if credentials have changed
+
       const usernameChanged = newUsername !== currentUsername;
       const passwordChanged = newPassword !== currentPassword;
-      
+
       if (usernameChanged || passwordChanged) {
-        // Save current credentials to history before updating
-        if (!job.gmailCredentialsHistory) {
-          job.gmailCredentialsHistory = [];
-        }
-        
-        // Only add to history if there were previous credentials
+        if (!job.gmailCredentialsHistory) job.gmailCredentialsHistory = [];
         if (currentUsername || currentPassword) {
           job.gmailCredentialsHistory.push({
             username: currentUsername,
@@ -368,11 +387,7 @@ export async function patchOnboardingJob(req, res) {
             updatedAt: new Date()
           });
         }
-        
-        // Update current credentials
-        if (!job.gmailCredentials) {
-          job.gmailCredentials = {};
-        }
+        if (!job.gmailCredentials) job.gmailCredentials = {};
         if (newUsername) job.gmailCredentials.username = newUsername;
         if (newPassword) job.gmailCredentials.password = newPassword;
       }
@@ -391,14 +406,20 @@ export async function patchOnboardingJob(req, res) {
         createdAt: new Date()
       });
       job.updatedAt = new Date();
+      // Non-admin comment → increment unread counter for admins (stored on doc, zero extra query)
+      if (req.user?.role !== 'admin') {
+        job.adminUnreadCount = (job.adminUnreadCount || 0) + 1;
+      }
       await job.save();
 
       if (taggedUserIds.length > 0) {
         const commentSnippet = comment.body.trim().slice(0, 120);
         const authorName = req.user?.name || req.user?.email || '';
         const authorEmail = req.user?.email || '';
-        const notifications = taggedUserIds.map(email => ({
-          userEmail: (email || '').toLowerCase().trim(),
+        const cleanTaggedEmails = taggedUserIds.map(e => (e || '').toLowerCase().trim()).filter(Boolean);
+
+        const notifications = cleanTaggedEmails.map((email) => ({
+          userEmail: email,
           jobId: job._id,
           jobNumber: job.jobNumber,
           clientNumber: job.clientNumber ?? null,
@@ -407,45 +428,64 @@ export async function patchOnboardingJob(req, res) {
           authorEmail,
           authorName,
           read: false
-        })).filter(n => n.userEmail);
+        }));
         if (notifications.length) {
           await OnboardingNotificationModel.insertMany(notifications).catch(err => console.error('OnboardingNotification insert:', err));
         }
+
+        // Batch lookup all tagged users' otpEmails in a single query
+        const taggedUsersData = await UserModel.find({ email: { $in: cleanTaggedEmails } })
+          .select('email otpEmail name')
+          .lean();
+        const taggedUserMap = new Map(taggedUsersData.map(u => [u.email.toLowerCase(), u]));
+
+        // Send email notifications to tagged users (fire-and-forget)
+        cleanTaggedEmails.forEach((userEmail, i) => {
+          const taggedUser = taggedUserMap.get(userEmail);
+          const toEmail = (taggedUser?.otpEmail || '').trim() || userEmail;
+          const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) ? comment.taggedNames[i] : null;
+          const emailType = taggedUser?.otpEmail ? 'otpEmail' : 'primary';
+          console.log(`[Tagged] ${authorName} tagged ${userEmail} in job #${job.jobNumber} -> sending email to ${toEmail} (${emailType})`);
+          sendTagNotificationEmail({
+            toEmail,
+            recipientName: recipientName || taggedUser?.name,
+            authorName,
+            commentSnippet,
+            jobNumber: job.jobNumber,
+            clientName: job.clientName || '',
+            clientNumber: job.clientNumber ?? null,
+            jobId: String(job._id)
+          }).then(() => {
+            console.log(`[Tag Email] Sent successfully to ${toEmail} for tagged user ${userEmail}`);
+          }).catch(err => {
+            console.error(`[Tag Email] Failed to send to ${toEmail} for tagged user ${userEmail}:`, err?.message || err);
+          });
+        });
       }
     } else {
       job.updatedAt = new Date();
       await job.save();
     }
 
-    const updated = await OnboardingJobModel.findById(id).lean();
-    
-    // Note: Passwords are stored as plain text strings (not hashed) as per requirements
-    // History passwords are kept as plain text for reference
-    
-    // Fetch client status and isPaused
-    const clientEmail = (updated?.clientEmail || '').toLowerCase();
-    if (clientEmail && updated) {
-      const client = await ClientModel.findOne({ email: clientEmail })
-        .select('status isPaused')
-        .lean();
-      if (client) {
-        updated.clientStatus = client.status || 'active';
-        updated.clientIsPaused = client.isPaused || false;
-      } else {
-        updated.clientStatus = 'active';
-        updated.clientIsPaused = false;
-      }
-    } else if (updated) {
-      updated.clientStatus = 'active';
-      updated.clientIsPaused = false;
-    }
+    jobListCache.clear(); // invalidate list cache after any mutation
 
-    if (updated?.dashboardManagerName) {
-      const manager = await ManagerModel.findOne({ fullName: updated.dashboardManagerName, isActive: true }).select('email').lean();
-      updated.dashboardManagerEmail = manager?.email || '';
-    } else if (updated) {
-      updated.dashboardManagerEmail = '';
-    }
+    // Use the already-mutated job object — avoids an extra findById round-trip
+    const updated = job.toObject();
+
+    // Parallel: fetch client status + manager email at the same time
+    const enrichClientEmail = (updated.clientEmail || '').toLowerCase();
+    const [clientDoc, managerDoc] = await Promise.all([
+      enrichClientEmail
+        ? ClientModel.findOne({ email: enrichClientEmail }).select('status isPaused').lean()
+        : Promise.resolve(null),
+      updated.dashboardManagerName
+        ? ManagerModel.findOne({ fullName: updated.dashboardManagerName, isActive: true }).select('email').lean()
+        : Promise.resolve(null)
+    ]);
+
+    updated.clientStatus = clientDoc?.status || 'active';
+    updated.clientIsPaused = clientDoc?.isPaused || false;
+    updated.dashboardManagerEmail = managerDoc?.email || '';
 
     res.status(200).json({ job: updated });
   } catch (e) {
@@ -473,6 +513,7 @@ export async function postOnboardingJob(req, res) {
       mastersEndDate: mastersEndDate || '',
       dashboardCredentials: dashboardCredentials || {}
     });
+    jobListCache.clear(); // invalidate list cache after new ticket
     
     // Create notification for ticket creation
     try {
@@ -512,13 +553,17 @@ export async function postOnboardingJob(req, res) {
 
 export async function getOnboardingRoles(req, res) {
   try {
+    // Roles change only when admin updates users — serve from 60 s cache
+    const cachedRoles = rolesCache.get('roles');
+    if (cachedRoles) return res.status(200).json(cachedRoles);
+
     const users = await UserModel.find({ isActive: true })
       .select('email role onboardingSubRole roles name')
       .lean();
     const csms = users.filter(u => u.roles?.includes?.('csm') || u.role === 'csm');
     const resumeMakers = users.filter(u => u.role === 'onboarding_team' && u.onboardingSubRole === 'resume_maker');
-    const linkedInMembers = users.filter(u => 
-      u.role === 'onboarding_team' && 
+    const linkedInMembers = users.filter(u =>
+      u.role === 'onboarding_team' &&
       u.onboardingSubRole === 'linkedin_and_cover_letter_optimization'
     );
     const teamLeads = users.filter(u => u.role === 'team_lead');
@@ -529,19 +574,24 @@ export async function getOnboardingRoles(req, res) {
       if (u.email) mentionableMap.set(u.email.toLowerCase(), { email: u.email, name: u.name || u.email });
     });
     const mentionableUsers = Array.from(mentionableMap.values());
-    res.status(200).json({
+    const rolesPayload = {
       csms: csms.map(u => ({ email: u.email, name: u.name || u.email })),
       resumeMakers: resumeMakers.map(u => ({ email: u.email, name: u.name || u.email })),
       linkedInMembers: linkedInMembers.map(u => ({ email: u.email, name: u.name || u.email })),
       teamLeads: teamLeads.map(u => ({ email: u.email, name: u.name || u.email })),
       admins: admins.map(u => ({ email: u.email, name: u.name || u.email })),
       mentionableUsers
-    });
+    };
+    rolesCache.set('roles', rolesPayload);
+    res.status(200).json(rolesPayload);
   } catch (e) {
     console.error('getOnboardingRoles:', e);
     res.status(500).json({ error: e.message || 'Failed to get onboarding roles' });
   }
 }
+
+// Exported so auth routes can invalidate when users are created/updated/deleted
+export function invalidateRolesCache() { rolesCache.clear(); }
 
 export async function getNextResumeMakerApi(req, res) {
   try {
@@ -573,14 +623,58 @@ export async function markOnboardingNotificationRead(req, res) {
     const { id } = req.params;
     const email = (req.user?.email || '').toLowerCase().trim();
     if (!email) return res.status(401).json({ error: 'Unauthorized' });
-    const notification = await OnboardingNotificationModel.findOne({ _id: id, userEmail: email });
+    // Atomic single-query update — no find then save
+    const notification = await OnboardingNotificationModel.findOneAndUpdate(
+      { _id: id, userEmail: email },
+      { $set: { read: true } },
+      { new: true, lean: true }
+    );
     if (!notification) return res.status(404).json({ error: 'Notification not found' });
-    notification.read = true;
-    await notification.save();
-    res.status(200).json({ notification: notification.toObject() });
+    res.status(200).json({ notification });
   } catch (e) {
     console.error('markOnboardingNotificationRead:', e);
     res.status(500).json({ error: e.message || 'Failed to mark read' });
+  }
+}
+
+export async function resolveOnboardingComment(req, res) {
+  try {
+    const { id: jobId, commentId } = req.params;
+    const userEmail = (req.user?.email || '').toLowerCase().trim();
+    if (!userEmail) return res.status(401).json({ error: 'Unauthorized' });
+    const job = await OnboardingJobModel.findById(jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const comment = (job.comments || []).find(
+      c => String(c._id) === commentId || String(c._id) === String(commentId)
+    );
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+    const taggedEmails = (comment.taggedUserIds || []).map(e => (e || '').toLowerCase().trim()).filter(Boolean);
+    if (!taggedEmails.includes(userEmail)) {
+      return res.status(403).json({ error: 'Only tagged users can mark this as resolved' });
+    }
+    const resolvedByTagged = comment.resolvedByTagged || [];
+    if (resolvedByTagged.some(r => (r.email || '').toLowerCase() === userEmail)) {
+      return res.status(200).json({ job: job.toObject(), alreadyResolved: true });
+    }
+    const commentIndex = job.comments.findIndex(
+      c => String(c._id) === commentId || String(c._id) === String(commentId)
+    );
+    if (commentIndex < 0) return res.status(404).json({ error: 'Comment not found' });
+    if (!job.comments[commentIndex].resolvedByTagged) {
+      job.comments[commentIndex].resolvedByTagged = [];
+    }
+    job.comments[commentIndex].resolvedByTagged.push({
+      email: userEmail,
+      resolvedAt: new Date()
+    });
+    job.updatedAt = new Date();
+    job.markModified('comments');
+    await job.save();
+    jobListCache.clear();
+    res.status(200).json({ job: job.toObject() }); // use mutated doc directly
+  } catch (e) {
+    console.error('resolveOnboardingComment:', e);
+    res.status(500).json({ error: e.message || 'Failed to mark as resolved' });
   }
 }
 
@@ -601,9 +695,34 @@ export async function postOnboardingJobAttachment(req, res) {
     });
     job.updatedAt = new Date();
     await job.save();
+    jobListCache.clear(); // invalidate list cache after attachment change
     res.status(201).json({ attachment: job.attachments[job.attachments.length - 1] });
   } catch (e) {
     console.error('postOnboardingJobAttachment:', e);
     res.status(500).json({ error: e.message || 'Failed to add attachment' });
+  }
+}
+
+/**
+ * POST /api/onboarding/jobs/:id/admin-read
+ * Admin-only. Atomically resets adminUnreadCount to 0.
+ * Single findOneAndUpdate — no read first, no extra round-trips.
+ * Clears the 5 s list cache so the next board refresh reflects the new count.
+ */
+export async function markAdminRead(req, res) {
+  try {
+    if (req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin only' });
+    }
+    const { id } = req.params;
+    await OnboardingJobModel.findOneAndUpdate(
+      { _id: id, adminUnreadCount: { $gt: 0 } }, // only write if there's something to clear
+      { $set: { adminUnreadCount: 0 } }
+    );
+    jobListCache.clear();
+    res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error('markAdminRead:', e);
+    res.status(500).json({ error: e.message || 'Failed to mark as read' });
   }
 }

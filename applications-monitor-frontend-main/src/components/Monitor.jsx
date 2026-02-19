@@ -1689,47 +1689,45 @@ const [clientsPostFilter, setClientsPostFilter] = useState([]);
     (async () => {
       try {
         setLoading(true);
-        
 
         const now = Date.now();
 
-        // Fetch all clients initially
-        const clientData = await fetchAllClients();
-        setClients(clientData.map(c => c.email));
-
-        // Fetch clients from FlashFire Dashboard Backend (always fresh to ensure status sync)
+        // Single fetch — derive both email list and detail map from one request
         const FLASHFIRE_API_BASE = import.meta.env.VITE_BASE;
         const clientsResponse = await fetch(`${FLASHFIRE_API_BASE}/api/clients?t=${Date.now()}`, {
           cache: 'no-store'
         });
-          
-          if (clientsResponse.ok) {
-            const clientsData = await clientsResponse.json();
 
-            const validEmail = (s) =>
-              typeof s === "string" &&
-              /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(s);
+        if (clientsResponse.ok) {
+          const clientsData = await clientsResponse.json();
 
-            const clientsArray = clientsData.clients || clientsData.data || [];
-            setClientsPostFilter(clientsArray);
-            
-            const clientDetailsMap = {};
-            clientsArray.forEach(client => {
-              if (validEmail(client.email)) {
-                const emailLower = client.email.toLowerCase();
-                clientDetailsMap[emailLower] = {
-                  ...client,
-                  status: (client.status === 'active' || client.status === 'inactive') ? client.status : 'active'
-                };
-              }
-            });
-            
-            cacheRef.current.clients = { data: clientDetailsMap, ts: now };
-            setClientDetails(clientDetailsMap);
-            setClientsLoaded(true);
-          } else {
-            setErr("Failed to fetch client data");
-          }
+          const validEmail = (s) =>
+            typeof s === "string" &&
+            /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/.test(s);
+
+          const clientsArray = clientsData.clients || clientsData.data || [];
+          setClientsPostFilter(clientsArray);
+
+          const clientDetailsMap = {};
+          const emailList = [];
+          clientsArray.forEach(client => {
+            if (validEmail(client.email)) {
+              const emailLower = client.email.toLowerCase();
+              clientDetailsMap[emailLower] = {
+                ...client,
+                status: (client.status === 'active' || client.status === 'inactive') ? client.status : 'active'
+              };
+              emailList.push(client.email);
+            }
+          });
+
+          setClients(emailList);
+          cacheRef.current.clients = { data: clientDetailsMap, ts: now };
+          setClientDetails(clientDetailsMap);
+          setClientsLoaded(true);
+        } else {
+          setErr("Failed to fetch client data");
+        }
 
         // Fetch operations data
         await fetchOperations();
