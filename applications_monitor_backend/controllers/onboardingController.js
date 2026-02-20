@@ -393,16 +393,22 @@ export async function patchOnboardingJob(req, res) {
       }
     }
 
-    if (comment && typeof comment.body === 'string' && comment.body.trim()) {
+    const commentBody = comment && typeof comment.body === 'string' ? comment.body.trim() : '';
+    const commentImages = Array.isArray(comment?.images)
+      ? (comment.images.filter((img) => img && img.url).map((img) => ({ url: img.url, filename: img.filename || '' })))
+      : [];
+    const hasCommentContent = commentBody.length > 0 || commentImages.length > 0;
+    if (comment && hasCommentContent) {
       if (!job.comments) job.comments = [];
       const taggedUserIds = Array.isArray(comment.taggedUserIds) ? comment.taggedUserIds : [];
       const taggedNames = Array.isArray(comment.taggedNames) ? comment.taggedNames : [];
       job.comments.push({
-        body: comment.body.trim(),
+        body: commentBody || '(image)',
         authorEmail: req.user?.email || '',
         authorName: req.user?.name || req.user?.email || '',
         taggedUserIds,
         taggedNames,
+        images: commentImages,
         createdAt: new Date()
       });
       job.updatedAt = new Date();
@@ -413,7 +419,7 @@ export async function patchOnboardingJob(req, res) {
       await job.save();
 
       if (taggedUserIds.length > 0) {
-        const commentSnippet = comment.body.trim().slice(0, 120);
+        const commentSnippet = (commentBody || '(image)').slice(0, 120);
         const authorName = req.user?.name || req.user?.email || '';
         const authorEmail = req.user?.email || '';
         const cleanTaggedEmails = taggedUserIds.map(e => (e || '').toLowerCase().trim()).filter(Boolean);
@@ -465,6 +471,17 @@ export async function patchOnboardingJob(req, res) {
     } else {
       job.updatedAt = new Date();
       await job.save();
+    }
+
+    // When ticket reaches Applications In Progress, mark client as ready for reminders (unpaused, out of onboarding phase)
+    if (job.status === 'applications_in_progress') {
+      const clientEmail = (job.clientEmail || '').toLowerCase().trim();
+      if (clientEmail) {
+        await ClientModel.updateOne(
+          { email: clientEmail },
+          { $set: { onboardingPhase: false, isPaused: false } }
+        ).catch(err => console.error('Onboarding: client phase update failed', err?.message));
+      }
     }
 
     jobListCache.clear(); // invalidate list cache after any mutation

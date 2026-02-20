@@ -193,29 +193,33 @@ export default function ClientJobAnalysis() {
     }
   }
 
-  const handlePauseChange = async (email, isPaused) => {
+  /** value: 'new' | 'paused' | 'unpaused'. New = onboarding phase (no reminders); Paused = paused; Unpaused = active reminders. */
+  const handlePhasePauseChange = async (email, value) => {
     if (userRole !== 'admin') {
-      toast.error('Only admins can change client pause status');
+      toast.error('Only admins can change client phase/pause status');
       return;
     }
-    
+    const onboardingPhase = value === 'new';
+    const isPaused = value === 'new' || value === 'paused';
+
     setSavingPause(prev => new Set(prev).add(email));
     try {
       const resp = await fetch(`${API_BASE}/api/clients`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, isPaused, currentPath: window.location.pathname })
+        body: JSON.stringify({ email, isPaused, onboardingPhase, currentPath: window.location.pathname })
       });
       if (!resp.ok) throw new Error('Failed to save');
       const data = await resp.json();
       if (data.message || data.updatedClientsTracking) {
         setRows(prev => prev.map(r =>
-          r.email === email ? { ...r, isPaused } : r
+          r.email === email ? { ...r, isPaused, onboardingPhase } : r
         ));
-        toast.success(isPaused ? 'Client paused successfully' : 'Client unpaused successfully');
+        const msg = value === 'new' ? 'Client set to New (onboarding phase)' : value === 'paused' ? 'Client paused' : 'Client unpaused';
+        toast.success(msg);
       }
     } catch (e) {
-      toast.error('Failed to update pause status');
+      toast.error('Failed to update phase/pause status');
     } finally {
       setSavingPause(prev => {
         const next = new Set(prev);
@@ -261,7 +265,7 @@ export default function ClientJobAnalysis() {
                 <tr>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Status</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Pause</th>
+                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Phase / Pause</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Plan</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                     <div className="flex items-center gap-2">
@@ -403,27 +407,34 @@ export default function ClientJobAnalysis() {
                       ) : '-'}
                     </td>
                     <td className="px-2 py-1">
-                      {userRole === 'admin' ? (
-                        <select
-                          value={r.isPaused ? 'paused' : 'unpaused'}
-                          onChange={(e) => handlePauseChange(r.email, e.target.value === 'paused')}
-                          disabled={savingPause.has(r.email)}
-                          className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
-                            r.isPaused ? 'bg-yellow-100 text-yellow-700 border-yellow-300' :
-                            'bg-green-50 text-green-700 border-green-200'
-                          }`}
-                        >
-                          <option value="unpaused">Unpaused</option>
-                          <option value="paused">Paused</option>
-                        </select>
-                      ) : (
-                        <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
-                          r.isPaused ? 'bg-yellow-100 text-yellow-700' :
-                          'bg-green-50 text-green-700'
-                        }`}>
-                          {r.isPaused ? 'Paused' : 'Unpaused'}
-                        </span>
-                      )}
+                      {(() => {
+                        const phaseValue = r.onboardingPhase ? 'new' : r.isPaused ? 'paused' : 'unpaused';
+                        const phaseLabel = phaseValue === 'new' ? 'New' : phaseValue === 'paused' ? 'Paused' : 'Unpaused';
+                        return userRole === 'admin' ? (
+                          <select
+                            value={phaseValue}
+                            onChange={(e) => handlePhasePauseChange(r.email, e.target.value)}
+                            disabled={savingPause.has(r.email)}
+                            className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
+                              phaseValue === 'new' ? 'bg-slate-100 text-slate-700 border-slate-300' :
+                              phaseValue === 'paused' ? 'bg-yellow-100 text-yellow-700 border-yellow-300' :
+                              'bg-green-50 text-green-700 border-green-200'
+                            }`}
+                          >
+                            <option value="new">New</option>
+                            <option value="paused">Paused</option>
+                            <option value="unpaused">Unpaused</option>
+                          </select>
+                        ) : (
+                          <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
+                            phaseValue === 'new' ? 'bg-slate-100 text-slate-700' :
+                            phaseValue === 'paused' ? 'bg-yellow-100 text-yellow-700' :
+                            'bg-green-50 text-green-700'
+                          }`}>
+                            {phaseLabel}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-2 py-1">
                       {r.planType ? (

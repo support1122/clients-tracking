@@ -26,7 +26,8 @@ import {
   ArrowUpDown,
   Search,
   Pencil,
-  CheckCircle
+  CheckCircle,
+  Image
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_BASE || '';
@@ -337,6 +338,9 @@ export default function ClientOnboarding() {
   const [showMoveHistory, setShowMoveHistory] = useState(false);
   const [addingComment, setAddingComment] = useState(false);
   const [resolvingCommentId, setResolvingCommentId] = useState(null);
+  const [commentImages, setCommentImages] = useState([]);
+  const [uploadingCommentImage, setUploadingCommentImage] = useState(false);
+  const commentImageInputRef = useRef(null);
   const [gmailUsername, setGmailUsername] = useState('');
   const [gmailPassword, setGmailPassword] = useState('');
   const [savingGmailCredentials, setSavingGmailCredentials] = useState(false);
@@ -780,6 +784,7 @@ export default function ClientOnboarding() {
     setGmailUsername('');
     setGmailPassword('');
     setShowGmailCredentialsHistory(false);
+    setCommentImages([]);
     // Clear the selected job using store method
     clearSelected();
     // Also set directly to ensure it's cleared immediately
@@ -1324,7 +1329,9 @@ export default function ClientOnboarding() {
   };
 
   const handleAddComment = async () => {
-    if (!selectedJob || !commentText.trim() || addingComment) return;
+    const hasText = commentText.trim().length > 0;
+    const hasImages = commentImages.length > 0;
+    if (!selectedJob || (!hasText && !hasImages) || addingComment) return;
     const { taggedUserIds, taggedNames } = parseMentions(commentText, effectiveMentionableUsers);
     setAddingComment(true);
     try {
@@ -1333,9 +1340,10 @@ export default function ClientOnboarding() {
         headers: AUTH_HEADERS(),
         body: JSON.stringify({
           comment: {
-            body: commentText.trim(),
+            body: commentText.trim() || '(image)',
             taggedUserIds,
-            taggedNames
+            taggedNames,
+            images: commentImages
           }
         })
       });
@@ -1344,7 +1352,7 @@ export default function ClientOnboarding() {
       setSelectedJob(data.job);
       setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
       setCommentText('');
-      // Clear contenteditable
+      setCommentImages([]);
       if (commentInputRef.current) {
         commentInputRef.current.innerHTML = '';
       }
@@ -1358,6 +1366,56 @@ export default function ClientOnboarding() {
     } finally {
       setAddingComment(false);
     }
+  };
+
+  const handleCommentImageSelect = async (e) => {
+    const files = e?.target?.files;
+    if (!files?.length) return;
+    const base = (API_BASE || '').replace(/\/$/, '');
+    if (!base) {
+      toastUtils.error('API URL not configured.');
+      return;
+    }
+    const maxImages = 5;
+    const current = commentImages.length;
+    const toAdd = Math.min(maxImages - current, files.length);
+    if (toAdd <= 0) {
+      toastUtils.error(`Maximum ${maxImages} images per comment.`);
+      e.target.value = '';
+      return;
+    }
+    setUploadingCommentImage(true);
+    try {
+      const token = localStorage.getItem('authToken') || '';
+      const added = [];
+      for (let i = 0; i < toAdd; i++) {
+        const file = files[i];
+        if (!file.type.startsWith('image/')) continue;
+        const form = new FormData();
+        form.append('file', file);
+        const uploadRes = await fetch(`${base}/api/upload/onboarding-attachment`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          body: form
+        });
+        const uploadData = await uploadRes.json().catch(() => ({}));
+        if (!uploadRes.ok || !uploadData.url) {
+          toastUtils.error(uploadData.message || 'Image upload failed');
+          break;
+        }
+        added.push({ url: uploadData.url, filename: uploadData.filename || file.name });
+      }
+      if (added.length) setCommentImages((prev) => [...prev, ...added]);
+    } catch (err) {
+      toastUtils.error(err?.message || 'Upload failed');
+    } finally {
+      setUploadingCommentImage(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleRemoveCommentImage = (index) => {
+    setCommentImages((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleResolve = async (comment) => {
@@ -2749,6 +2807,25 @@ export default function ClientOnboarding() {
                               </span>
                             </div>
                             <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-words">{comment.body}</p>
+                            {(comment.images && comment.images.length > 0) ? (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {comment.images.map((img, idx) => (
+                                  <a
+                                    key={idx}
+                                    href={img.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block rounded-lg overflow-hidden border border-gray-200 hover:border-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                  >
+                                    <img
+                                      src={img.url}
+                                      alt={img.filename || 'Image'}
+                                      className="max-h-40 max-w-[200px] object-cover w-auto h-auto"
+                                    />
+                                  </a>
+                                ))}
+                              </div>
+                            ) : null}
                             {(comment.taggedUserIds && comment.taggedUserIds.length > 0) || (comment.taggedNames && comment.taggedNames.length > 0) || (comment.taggedUsers && comment.taggedUsers.length > 0) ? (
                               <div className="mt-2 pt-2 border-t border-gray-200">
                                 <p className="text-[10px] text-gray-500 font-medium">
@@ -2798,6 +2875,27 @@ export default function ClientOnboarding() {
 
                 {/* Comment Input - Always Visible */}
                 <div className="p-4 bg-gray-50 border-t border-gray-200">
+                  {commentImages.length > 0 && (
+                    <div className="mb-2 flex flex-wrap gap-2">
+                      {commentImages.map((img, idx) => (
+                        <div key={idx} className="relative group">
+                          <img
+                            src={img.url}
+                            alt={img.filename || 'Preview'}
+                            className="h-14 w-14 object-cover rounded-lg border border-gray-200"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveCommentImage(idx)}
+                            className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-90 hover:opacity-100 shadow"
+                            aria-label="Remove image"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="relative">
                     {showMentionDropdown && mentionSuggestions.length > 0 && (
                       <div className="absolute bottom-full left-0 w-full mb-2 bg-white rounded-xl shadow-xl border border-gray-200 overflow-hidden z-20 max-h-[200px] overflow-y-auto">
@@ -2968,10 +3066,28 @@ export default function ClientOnboarding() {
                         );
                       })()}
 
+                      {/* Add image button */}
+                      <input
+                        ref={commentImageInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={handleCommentImageSelect}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => commentImageInputRef.current?.click()}
+                        disabled={uploadingCommentImage || commentImages.length >= 5}
+                        className="absolute right-12 top-1/2 -translate-y-1/2 p-2 text-gray-500 hover:text-primary hover:bg-orange-50 rounded-lg disabled:opacity-50 transition-colors"
+                        title="Add image"
+                      >
+                        {uploadingCommentImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <Image className="w-4 h-4" />}
+                      </button>
                       {/* Send button */}
                       <button
                         onClick={handleAddComment}
-                        disabled={!commentText.trim() || addingComment}
+                        disabled={(!commentText.trim() && commentImages.length === 0) || addingComment}
                         className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-primary text-white rounded-lg disabled:opacity-50 disabled:bg-gray-300 hover:bg-[#c94a28] transition-colors shadow-md disabled:shadow-none flex items-center justify-center"
                         title="Send comment (Enter)"
                       >

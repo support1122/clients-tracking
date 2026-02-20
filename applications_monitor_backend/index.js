@@ -691,6 +691,8 @@ export const createOrUpdateClient = async (req, res) => {
         amountPaidDate: amountPaidDate || " ",
         modeOfPayment: modeOfPayment || "paypal",
         status: status !== undefined && status !== null && status !== '' ? status : "active",
+        isPaused: true,
+        onboardingPhase: true,
         updatedAt: new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
       };
 
@@ -2956,7 +2958,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     const clientInfo = await ClientModel.find({
       email: { $in: allUserIDs }
-    }).select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused').lean();
+    }).select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase').lean();
     const clientMap = new Map(
       clientInfo.map((c) => [
         c.email,
@@ -2969,6 +2971,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
           operationsName: c.operationsName || "",
           dashboardTeamLeadName: c.dashboardTeamLeadName || "",
           isPaused: !!c.isPaused,
+          onboardingPhase: !!c.onboardingPhase,
         },
       ])
     );
@@ -3047,6 +3050,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         jobStatus: client.jobStatus || null,
         operationsName: client.operationsName || '',
         isPaused: client.isPaused ?? false,
+        onboardingPhase: client.onboardingPhase ?? false,
         dashboardTeamLeadName: client.dashboardTeamLeadName || '',
         lastAppliedOperatorName: lastAppliedOperatorMap.get(email.toLowerCase()) || '',
         referrals: referralMeta.referrals || [],
@@ -3675,7 +3679,7 @@ app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobA
 app.post('/api/onboarding/jobs/:id/admin-read', verifyToken, markAdminRead);
 
 // Onboarding attachment upload (R2 or Cloudinary) - R2: onboarding-assets/images|pdf|others
-app.post('/api/upload/onboarding-attachment', fileUpload.single('file'), async (req, res) => {
+app.post('/api/upload/onboarding-attachment', verifyToken, fileUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
     const result = await uploadFile(req.file.buffer, {
@@ -5189,10 +5193,11 @@ async function runJobCardReminder() {
 async function runZeroSavedJobReminder() {
   if (!DISCORD_ZERO_SAVED_WEBHOOK) return;
   try {
-    // Get all active and unpaused clients
+    // Get all active, unpaused, and not in onboarding-phase clients (no reminders for "new" clients)
     const activeUnpausedClients = await ClientModel.find({ 
       status: 'active',
-      isPaused: { $ne: true }
+      isPaused: { $ne: true },
+      onboardingPhase: { $ne: true }
     })
       .select('email name')
       .lean();

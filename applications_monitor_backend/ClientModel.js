@@ -177,6 +177,12 @@ export const ClientSchema = new mongoose.Schema({
     required: false,
     default: false
   },
+  /** True while client is in onboarding (resume, LinkedIn, etc.). No Discord reminders until ticket reaches Applications In Progress. */
+  onboardingPhase: {
+    type: Boolean,
+    required: false,
+    default: false
+  },
   jobStatus: {
     type: String,
     enum: ["still_searching", "job_done"],
