@@ -1,103 +1,49 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-// import App from './App.jsx'
-// import RegisterClient from './components/RegisterClient.jsx'
-// import { createBrowserRouter, RouterProvider } from 'react-router-dom'
-
-// // const routes = createBrowserRouter([
-// //   {
-// //     path: '/clients/new',
-// //     element: <RegisterClient />,
-// //   }
-// // ]);
-
-// createRoot(document.getElementById('root')).render(
-//   <StrictMode>  
-//     {/* <RouterProvider router={routes}>      */}
-//     <App />
-//     {/* </RouterProvider> */}
-//   </StrictMode>,
-// )
-
+import React, { Suspense } from 'react';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
-import App from './App';
-import { AdminLayout, PortalLayout } from './components/Navbar';
-import Monitor from './components/Monitor';
 import ReactDOM from 'react-dom/client';
-import RegisterClient from './components/RegisterClient';
-import AdminDashboard from './components/AdminDashboard.jsx';
-import ManagerDashboard from './components/ManagerDashboard.jsx';
-import OperationsDetails from './components/OperationsDetails.jsx';
-import ClientDashboard from './components/ClientDashboard.jsx';
-import JobAnalytics from './components/JobAnalytics.jsx';
-import ClientJobAnalysis from './components/ClientJobAnalysis.jsx';
-import CallScheduler from './components/CallScheduler.jsx';
-import ClientPreferences from './components/ClientPreferences.jsx';
-import OperatorsPerformanceReport from './components/OperatorsPerformanceReport.jsx';
-import ClientOnboarding from './components/ClientOnboarding.jsx';
+import './index.css';
+import App from './App';
+
+// Lazy-load all route components — only the visited route's JS is downloaded
+const Monitor = React.lazy(() => import('./components/Monitor'));
+const AdminDashboard = React.lazy(() => import('./components/AdminDashboard.jsx'));
+const ManagerDashboard = React.lazy(() => import('./components/ManagerDashboard.jsx'));
+const ClientDashboard = React.lazy(() => import('./components/ClientDashboard.jsx'));
+const JobAnalytics = React.lazy(() => import('./components/JobAnalytics.jsx'));
+const ClientJobAnalysis = React.lazy(() => import('./components/ClientJobAnalysis.jsx'));
+const CallScheduler = React.lazy(() => import('./components/CallScheduler.jsx'));
+const ClientPreferences = React.lazy(() => import('./components/ClientPreferences.jsx'));
+const OperatorsPerformanceReport = React.lazy(() => import('./components/OperatorsPerformanceReport.jsx'));
+const ClientOnboarding = React.lazy(() => import('./components/ClientOnboarding.jsx'));
+
+// Minimal fallback shown while a route chunk loads
+const RouteFallback = () => (
+  <div className="flex items-center justify-center h-64">
+    <div className="w-8 h-8 border-4 border-orange-400 border-t-transparent rounded-full animate-spin" />
+  </div>
+);
+
+const Lazy = ({ children }) => <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
 
 const router = createBrowserRouter([
   {
     path: '/',
     element: <App />,
     children: [
-      {
-        element: <Monitor />,
-        index : true
-      },
-      {
-        path: '/clients/new',
-        element: <Monitor />
-      },
-      {
-        path : '/monitor',
-        element: <Monitor />
-      },
-      {
-        path : '/monitor-clients',
-        element: <Monitor />
-      },
-      {
-        path : '/admin-dashboard',
-        element: <AdminDashboard />
-      },
-      {
-        path : '/manager-dashboard',
-        element: <ManagerDashboard />
-      },
-      {
-        path : '/operations',
-        element: <Monitor />
-      },
-      {
-        path : '/client-dashboard',
-        element: <ClientDashboard />
-      },
-      {
-        path : '/job-analytics',
-        element: <JobAnalytics />
-      }
-      ,{
-        path : '/client-job-analysis',
-        element: <ClientJobAnalysis />
-      },
-      {
-        path: '/call-scheduler',
-        element: <CallScheduler />
-      },
-      {
-        path: '/client-preferences',
-        element: <ClientPreferences />
-      },
-      {
-        path: '/client-onboarding',
-        element: <ClientOnboarding />
-      },
-      {
-        path: '/operators-performance-report',
-        element: <OperatorsPerformanceReport />
-      }
+      { element: <Lazy><Monitor /></Lazy>, index: true },
+      { path: '/clients/new', element: <Lazy><Monitor /></Lazy> },
+      { path: '/monitor', element: <Lazy><Monitor /></Lazy> },
+      { path: '/monitor-clients', element: <Lazy><Monitor /></Lazy> },
+      { path: '/admin-dashboard', element: <Lazy><AdminDashboard /></Lazy> },
+      { path: '/manager-dashboard', element: <Lazy><ManagerDashboard /></Lazy> },
+      { path: '/operations', element: <Lazy><Monitor /></Lazy> },
+      { path: '/client-dashboard', element: <Lazy><ClientDashboard /></Lazy> },
+      { path: '/job-analytics', element: <Lazy><JobAnalytics /></Lazy> },
+      { path: '/client-job-analysis', element: <Lazy><ClientJobAnalysis /></Lazy> },
+      { path: '/call-scheduler', element: <Lazy><CallScheduler /></Lazy> },
+      { path: '/client-preferences', element: <Lazy><ClientPreferences /></Lazy> },
+      { path: '/client-onboarding', element: <Lazy><ClientOnboarding /></Lazy> },
+      { path: '/operators-performance-report', element: <Lazy><OperatorsPerformanceReport /></Lazy> }
     ]
   }
 ]);

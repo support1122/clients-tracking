@@ -413,8 +413,9 @@ const getAllJobs = async (req, res) => {
 // Client management endpoints
 const getAllClients = async (req, res) => {
   try {
-    const clients = await ClientModel.find().lean();
-    // console.log(clients);
+    const clients = await ClientModel.find()
+      .select('email name clientNumber status planType planPrice jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons createdAt updatedAt')
+      .lean();
     res.status(200).json({ clients });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -629,8 +630,10 @@ export const createOrUpdateClient = async (req, res) => {
     };
 
     const existingUser = await NewUserModel.findOne({ email: emailLower });
+    const hasNameForNewUser = name !== undefined && name !== null && String(name).trim() !== '';
 
-    if (!existingUser) {
+    // Only create new user + new client when we have required fields (name). Otherwise treat as client-only update (e.g. Phase/Pause from Client Job Analysis).
+    if (!existingUser && hasNameForNewUser) {
       const newUserData = {
         ...userData,
         planType: capitalizedPlan || "Free Trial",
@@ -691,6 +694,8 @@ export const createOrUpdateClient = async (req, res) => {
         amountPaidDate: amountPaidDate || " ",
         modeOfPayment: modeOfPayment || "paypal",
         status: status !== undefined && status !== null && status !== '' ? status : "active",
+        isPaused: true,
+        onboardingPhase: true,
         updatedAt: new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
       };
 
@@ -714,6 +719,22 @@ export const createOrUpdateClient = async (req, res) => {
       });
     }
 
+    // No existing user and no name in body → client-only update (e.g. Phase/Pause); only update ClientModel
+    if (!existingUser) {
+      const clientUpdate = { ...req.body };
+      delete clientUpdate.currentPath;
+      await ClientModel.updateOne(
+        { email: emailLower },
+        { $set: clientUpdate },
+        { runValidators: false }
+      );
+      const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
+      return res.status(200).json({
+        message: "🔄 Client fields updated successfully",
+        updatedClientsTracking,
+      });
+    }
+
     if (currentPath?.includes("/clients/new")) {
       await NewUserModel.updateOne({ email: emailLower }, { $set: userData });
       await ClientModel.updateOne(
@@ -727,20 +748,32 @@ export const createOrUpdateClient = async (req, res) => {
     }
 
     // ✅ partial update for existing client (any other path)
+    // Only set client fields on ClientModel (exclude currentPath and other non-schema keys if needed)
+    const clientUpdate = { ...req.body };
+    delete clientUpdate.currentPath;
     await ClientModel.updateOne(
       { email: emailLower },
-      { $set: req.body },
+      { $set: clientUpdate },
       { runValidators: false }
     );
-    const updateFields = { name, dashboardManager: dashboardTeamLeadName };
+    // Only update NewUserModel when we have name/dashboard/plan from the request (Phase/Pause only sends email, isPaused, onboardingPhase — no name)
+    const updateFields = {};
+    if (name !== undefined && name !== null && String(name).trim() !== '') {
+      updateFields.name = name;
+    }
+    if (dashboardManager !== undefined && dashboardManager !== null) {
+      updateFields.dashboardManager = dashboardManager;
+    }
     if (capitalizedPlan) {
       updateFields.planType = capitalizedPlan;
     }
-    await NewUserModel.updateOne(
-      { email: emailLower },
-      { $set: updateFields },
-      { runValidators: false }
-    );
+    if (Object.keys(updateFields).length > 0) {
+      await NewUserModel.updateOne(
+        { email: emailLower },
+        { $set: updateFields },
+        { runValidators: false }
+      );
+    }
     const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
 
 
@@ -1298,7 +1331,7 @@ const login = async (req, res) => {
     const { email, password, sessionKey, trustToken } = req.body;
     const emailLower = (email || '').toLowerCase();
 
-    const user = await UserModel.findOne({ email: emailLower });
+    const user = await UserModel.findOne({ email: emailLower }).lean();
     if (!user || !user.isActive) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -1371,7 +1404,7 @@ const createUser = async (req, res) => {
   try {
     const { email, password, role = 'team_lead', name, onboardingSubRole, roles, otpEmail } = req.body;
 
-    const existingUser = await UserModel.findOne({ email: email.toLowerCase() });
+    const existingUser = await UserModel.findOne({ email: email.toLowerCase() }).lean();
     if (existingUser) {
       return res.status(400).json({ error: 'User already exists' });
     }
@@ -1424,7 +1457,7 @@ const generateSessionKey = async (req, res) => {
       email: userEmail.toLowerCase(),
       role: { $in: ['team_lead', 'operations_intern', 'onboarding_team', 'csm'] },
       isActive: true
-    });
+    }).lean();
 
     if (!user) {
       return res.status(404).json({ error: 'User not found or invalid role' });
@@ -1440,7 +1473,7 @@ const generateSessionKey = async (req, res) => {
       sessionKey = `FF${timestamp}${random}`;
       attempts++;
 
-      const existingKey = await SessionKeyModel.findOne({ key: sessionKey });
+      const existingKey = await SessionKeyModel.findOne({ key: sessionKey }).lean();
       if (!existingKey) break;
 
       if (attempts >= maxAttempts) {
@@ -1473,7 +1506,7 @@ const generateSessionKey = async (req, res) => {
 // Get all users (admin only)
 const getAllUsers = async (req, res) => {
   try {
-    const users = await UserModel.find({}, { password: 0 });
+    const users = await UserModel.find({}, { password: 0 }).lean();
     res.status(200).json({ users });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1486,7 +1519,7 @@ const getUserSessionKeys = async (req, res) => {
     const { userEmail } = req.params;
     const sessionKeys = await SessionKeyModel.find({
       userEmail: userEmail.toLowerCase()
-    }).sort({ createdAt: -1 });
+    }).sort({ createdAt: -1 }).lean();
 
     res.status(200).json({ sessionKeys });
   } catch (error) {
@@ -1538,7 +1571,7 @@ const verifyCredentials = async (req, res) => {
     const user = await UserModel.findOne({
       email: email.toLowerCase(),
       isActive: true
-    });
+    }).lean();
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -1773,7 +1806,7 @@ const updateUser = async (req, res) => {
       const isValidStandard = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail);
       const isValidFlashfirehq = /^[^\s@]+@flashfirehq$/.test(newEmail);
       if (!isValidStandard && !isValidFlashfirehq) return res.status(400).json({ error: 'Invalid email format' });
-      const existing = await UserModel.findOne({ email: newEmail });
+      const existing = await UserModel.findOne({ email: newEmail }).lean();
       if (existing && existing._id.toString() !== userId) return res.status(400).json({ error: 'Email already in use' });
       user.email = newEmail;
     }
@@ -1821,7 +1854,7 @@ const changeClientPassword = async (req, res) => {
     }
 
     // Check if client exists in users collection
-    const client = await NewUserModel.findOne({ email: email.toLowerCase() });
+    const client = await NewUserModel.findOne({ email: email.toLowerCase() }).lean();
     if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
@@ -1856,7 +1889,7 @@ const deleteClient = async (req, res) => {
     const emailLower = email.toLowerCase();
 
     // Check if client exists
-    const client = await ClientModel.findOne({ email: emailLower });
+    const client = await ClientModel.findOne({ email: emailLower }).lean();
     if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
@@ -2401,102 +2434,89 @@ const getClientStatistics = async (req, res) => {
   try {
     const { email } = req.params;
     const { startDate, endDate } = req.query;
+    const opEmail = email.toLowerCase();
 
-    // Get managed users for this operator
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() });
-    if (!operation) {
-      return res.status(404).json({ error: 'Operation not found' });
+    const operation = await OperationsModel.findOne({ email: opEmail }).lean();
+    if (!operation) return res.status(404).json({ error: 'Operation not found' });
+
+    const userIds = (operation.managedUsers || []).map(id => id.toString());
+    if (!userIds.length) return res.status(200).json({ clientStats: [] });
+
+    // Batch-fetch all users + fallback clients in parallel (eliminates N+1)
+    const [users, fallbackClients] = await Promise.all([
+      NewUserModel.find({ _id: { $in: userIds } }).select('name email').lean(),
+      ClientModel.find({ userID: { $in: userIds } }).select('name email userID').lean()
+    ]);
+
+    const userMap = new Map(users.map(u => [u._id.toString(), u]));
+    const fallbackMap = new Map(fallbackClients.map(c => [c.userID, { name: c.name, email: c.email || c.userID }]));
+
+    // Resolve user details
+    const resolvedUsers = userIds.map(id => {
+      const u = userMap.get(id) || fallbackMap.get(id);
+      if (!u) return null;
+      return { email: u.email || id, name: u.name || (u.email || id).split('@')[0] };
+    }).filter(Boolean);
+
+    const userEmails = resolvedUsers.map(u => u.email);
+
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+
+      // Single aggregation for all users: applied count + saved count
+      const [appliedAgg, savedAgg] = await Promise.all([
+        JobModel.aggregate([
+          { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ } } },
+          { $addFields: { _dp: { $split: [{ $trim: { input: '$appliedDate' } }, '/'] } } },
+          { $addFields: { _dt: { $dateFromParts: {
+            year: { $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } },
+            month: { $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 1, onNull: 1 } },
+            day: { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 1, onNull: 1 } }
+          }} } },
+          { $match: { _dt: { $gte: start, $lte: end } } },
+          { $group: { _id: '$userID', count: { $sum: 1 } } }
+        ]),
+        JobModel.aggregate([
+          { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: 'saved' } },
+          { $group: { _id: '$userID', count: { $sum: 1 } } }
+        ])
+      ]);
+
+      const appliedMap = new Map(appliedAgg.map(r => [r._id, r.count]));
+      const savedMap = new Map(savedAgg.map(r => [r._id, r.count]));
+
+      const clientStats = resolvedUsers.map(u => ({
+        name: u.name,
+        email: u.email,
+        appliedCount: appliedMap.get(u.email) || 0,
+        savedCount: savedMap.get(u.email) || 0
+      }));
+
+      return res.status(200).json({ clientStats });
     }
 
-    const clientStats = [];
+    // No date range: single aggregation for all users
+    const [allAgg, savedAgg] = await Promise.all([
+      JobModel.aggregate([
+        { $match: { operatorEmail: opEmail, userID: { $in: userEmails } } },
+        { $group: { _id: '$userID', count: { $sum: 1 } } }
+      ]),
+      JobModel.aggregate([
+        { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: 'saved' } },
+        { $group: { _id: '$userID', count: { $sum: 1 } } }
+      ])
+    ]);
 
-    // Get user details for managed users
-    for (const userId of operation.managedUsers || []) {
-      const userIdStr = userId.toString();
+    const allMap = new Map(allAgg.map(r => [r._id, r.count]));
+    const savedMap = new Map(savedAgg.map(r => [r._id, r.count]));
 
-      // Find user details
-      let user = await NewUserModel.findById(userIdStr);
-      if (!user) {
-        // Try ClientModel as fallback
-        const client = await ClientModel.findOne({ userID: userIdStr });
-        if (client) {
-          user = {
-            name: client.name,
-            email: client.email || userIdStr,
-            _id: userIdStr
-          };
-        }
-      }
-
-      if (user) {
-        const userEmail = user.email || userIdStr;
-        const userName = user.name || userEmail.split('@')[0];
-
-        // Count applied jobs in date range
-        let appliedQuery = {
-          operatorEmail: email.toLowerCase(),
-          userID: userEmail
-        };
-
-        if (startDate && endDate) {
-          const start = new Date(startDate);
-          const end = new Date(endDate);
-
-          // Get all jobs for this user and filter by date
-          const allJobs = await JobModel.find({
-            operatorEmail: email.toLowerCase(),
-            userID: userEmail
-          }).lean();
-
-          const appliedCount = allJobs.filter(job => {
-            if (!job.appliedDate) return false;
-
-            const jobDateParts = job.appliedDate.split('/');
-            if (jobDateParts.length !== 3) return false;
-
-            const jobDay = parseInt(jobDateParts[0]);
-            const jobMonth = parseInt(jobDateParts[1]);
-            const jobYear = parseInt(jobDateParts[2]);
-
-            const jobDate = new Date(jobYear, jobMonth - 1, jobDay);
-            return jobDate >= start && jobDate <= end;
-          }).length;
-
-          // Count total saved jobs (no date filter)
-          const savedCount = await JobModel.countDocuments({
-            operatorEmail: email.toLowerCase(),
-            userID: userEmail,
-            currentStatus: 'saved'
-          });
-
-          clientStats.push({
-            name: userName,
-            email: userEmail,
-            appliedCount,
-            savedCount
-          });
-        } else {
-          // No date range - just get total counts
-          const appliedCount = await JobModel.countDocuments({
-            operatorEmail: email.toLowerCase(),
-            userID: userEmail
-          });
-
-          const savedCount = await JobModel.countDocuments({
-            operatorEmail: email.toLowerCase(),
-            userID: userEmail,
-            currentStatus: 'saved'
-          });
-
-          clientStats.push({
-            name: userName,
-            email: userEmail,
-            appliedCount,
-            savedCount
-          });
-        }
-      }
-    }
+    const clientStats = resolvedUsers.map(u => ({
+      name: u.name,
+      email: u.email,
+      appliedCount: allMap.get(u.email) || 0,
+      savedCount: savedMap.get(u.email) || 0
+    }));
 
     res.status(200).json({ clientStats });
   } catch (error) {
@@ -2874,10 +2894,27 @@ const getJobsByDate = async (req, res) => {
 // Add the job analytics route after function definition
 app.post('/api/jobs/by-date', getJobsByDate);
 
+// In-memory TTL cache for client-job-analysis (30s)
+const _analysisCacheStore = new Map();
+const ANALYSIS_CACHE_TTL = 30_000;
+function getAnalysisCache(key) {
+  const e = _analysisCacheStore.get(key);
+  if (!e) return null;
+  if (Date.now() > e.exp) { _analysisCacheStore.delete(key); return null; }
+  return e.val;
+}
+function setAnalysisCache(key, val) { _analysisCacheStore.set(key, { val, exp: Date.now() + ANALYSIS_CACHE_TTL }); }
+function clearAnalysisCache() { _analysisCacheStore.clear(); }
+
 // Client Job Analysis (Recent Activity) - per active client status counts and applied-on-date
 app.post('/api/analytics/client-job-analysis', async (req, res) => {
   try {
     const { date } = req.body || {};
+
+    // Check cache
+    const cacheKey = date || '__all__';
+    const cached = getAnalysisCache(cacheKey);
+    if (cached) return res.status(200).json(cached);
 
     // Build multi-format date regex if provided (for appliedDate)
     let multiFormatDateRegex = null;
@@ -2910,134 +2947,100 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       }
     };
 
-    // Aggregate overall counts per client across ALL jobs (no active filter)
-    const overall = await JobModel.aggregate([
-      { $group: { _id: { userID: "$userID", status: statusCase }, count: { $sum: 1 } } },
-      { $group: { _id: "$_id.userID", statuses: { $push: { k: "$_id.status", v: "$count" } } } },
-      { $project: { _id: 0, userID: "$_id", counts: { $arrayToObject: "$statuses" } } }
-    ]);
-
-    // Aggregate applied-on-date per client if date provided using appliedDate
-    let appliedOnDate = [];
-    if (multiFormatDateRegex) {
-      appliedOnDate = await JobModel.aggregate([
-        { $match: { appliedDate: { $regex: multiFormatDateRegex } } },
-        { $group: { _id: "$userID", count: { $sum: 1 } } },
-        { $project: { _id: 0, userID: "$_id", count: 1 } }
-      ]);
-    }
-
-    // Aggregate removed jobs on selected date (ONLY for removed column)
-    let removedOnDate = [];
-    if (multiFormatDateRegex) {
-      removedOnDate = await JobModel.aggregate([
-        {
-          $match: {
-            $and: [
-              {
-                $or: [
-                  { currentStatus: { $regex: /delete/i } },
-                  { currentStatus: { $regex: /removed/i } }
-                ]
-              },
+    // ── Phase 1: Run ALL aggregations in parallel ──
+    const [overall, appliedOnDate, removedOnDate, lastAppliedAgg] = await Promise.all([
+      // 1) Overall status counts per client
+      JobModel.aggregate([
+        { $group: { _id: { userID: "$userID", status: statusCase }, count: { $sum: 1 } } },
+        { $group: { _id: "$_id.userID", statuses: { $push: { k: "$_id.status", v: "$count" } } } },
+        { $project: { _id: 0, userID: "$_id", counts: { $arrayToObject: "$statuses" } } }
+      ]),
+      // 2) Applied-on-date per client (only if date provided)
+      multiFormatDateRegex
+        ? JobModel.aggregate([
+            { $match: { appliedDate: { $regex: multiFormatDateRegex } } },
+            { $group: { _id: "$userID", count: { $sum: 1 } } },
+            { $project: { _id: 0, userID: "$_id", count: 1 } }
+          ])
+        : Promise.resolve([]),
+      // 3) Removed-on-date per client (only if date provided)
+      multiFormatDateRegex
+        ? JobModel.aggregate([
+            { $match: { $and: [
+              { $or: [{ currentStatus: { $regex: /delete/i } }, { currentStatus: { $regex: /removed/i } }] },
               { updatedAt: { $regex: multiFormatDateRegex } }
-            ]
-          }
-        },
-        { $group: { _id: "$userID", count: { $sum: 1 } } },
-        { $project: { _id: 0, userID: "$_id", count: 1 } }
-      ]);
-    }
+            ]}},
+            { $group: { _id: "$userID", count: { $sum: 1 } } },
+            { $project: { _id: 0, userID: "$_id", count: 1 } }
+          ])
+        : Promise.resolve([]),
+      // 4) Last applied operator per client — server-side aggregation (replaces full-collection scan)
+      JobModel.aggregate([
+        { $match: {
+          operatorName: { $exists: true, $nin: [null, '', 'user'] },
+          appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ }
+        }},
+        { $addFields: { _dp: { $split: [{ $trim: { input: '$appliedDate' } }, '/'] } } },
+        { $addFields: { _sd: { $add: [
+          { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } }, 10000] },
+          { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 0, onNull: 0 } }, 100] },
+          { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 0, onNull: 0 } }
+        ]} } },
+        { $sort: { _sd: -1 } },
+        { $group: { _id: '$userID', operatorName: { $first: '$operatorName' } } },
+        { $project: { _id: 0, userID: '$_id', operatorName: 1 } }
+      ])
+    ]);
 
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const overallMap = new Map(overall.map(r => [r.userID, r.counts]));
+    const lastAppliedOperatorMap = new Map(lastAppliedAgg.map(r => [(r.userID || '').toLowerCase(), r.operatorName]));
     const allUserIDs = Array.from(new Set([...overallMap.keys(), ...appliedMap.keys(), ...removedMap.keys()]));
 
-    const clientInfo = await ClientModel.find({
-      email: { $in: allUserIDs }
-    }).select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused').lean();
-    const clientMap = new Map(
-      clientInfo.map((c) => [
-        c.email,
-        {
-          name: c.name,
-          planType: c.planType,
-          planPrice: c.planPrice,
-          status: c.status,
-          jobStatus: c.jobStatus,
-          operationsName: c.operationsName || "",
-          dashboardTeamLeadName: c.dashboardTeamLeadName || "",
-          isPaused: !!c.isPaused,
-        },
-      ])
-    );
+    // ── Phase 2: Fetch client + referral data in parallel ──
+    const [clientInfo, referralUsers] = await Promise.all([
+      ClientModel.find({ email: { $in: allUserIDs } })
+        .select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons')
+        .lean(),
+      NewUserModel.find({ email: { $in: allUserIDs } }, 'email referrals').lean()
+    ]);
 
-    // Fetch referral data from users collection to align with referral-management dashboard
-    const referralUsers = await NewUserModel.find(
-      { email: { $in: allUserIDs } },
-      "email referrals"
-    ).lean();
+    const clientMap = new Map(clientInfo.map(c => [c.email, {
+      name: c.name,
+      planType: c.planType,
+      planPrice: c.planPrice,
+      status: c.status,
+      jobStatus: c.jobStatus,
+      operationsName: c.operationsName || '',
+      dashboardTeamLeadName: c.dashboardTeamLeadName || '',
+      isPaused: !!c.isPaused,
+      onboardingPhase: !!c.onboardingPhase,
+      addonLimit: (c.addons || []).reduce((sum, a) => {
+        const v = parseInt(a.type || a.addonType || 0, 10);
+        return sum + (isNaN(v) ? 0 : v);
+      }, 0)
+    }]));
 
     const referralMap = new Map();
-
     referralUsers.forEach((user) => {
-      const email = (user.email || "").toLowerCase();
+      const email = (user.email || '').toLowerCase();
       const referralsArray = Array.isArray(user.referrals) ? user.referrals : [];
-
       let referralApplicationsAdded = 0;
       referralsArray.forEach((ref) => {
-        if (ref?.plan === "Professional") {
-          referralApplicationsAdded += 200;
-        } else if (ref?.plan === "Executive") {
-          referralApplicationsAdded += 300;
-        }
+        if (ref?.plan === 'Professional') referralApplicationsAdded += 200;
+        else if (ref?.plan === 'Executive') referralApplicationsAdded += 300;
       });
-
-      const latestReferral =
-        referralsArray.length > 0 ? referralsArray[referralsArray.length - 1] : null;
-
-      referralMap.set(email, {
-        referrals: referralsArray,
-        referralApplicationsAdded,
-        latestReferralName: latestReferral?.name || null,
-      });
+      const latestReferral = referralsArray.length > 0 ? referralsArray[referralsArray.length - 1] : null;
+      referralMap.set(email, { referrals: referralsArray, referralApplicationsAdded, latestReferralName: latestReferral?.name || null });
     });
 
-    const allJobs = await JobModel.find({}).select('userID operatorName appliedDate').lean();
-    const parseDateString = (dateStr) => {
-      if (!dateStr) return null;
-      try {
-        const parts = String(dateStr).split('/');
-        if (parts.length === 3) {
-          const [day, month, year] = parts.map(n => parseInt(n, 10));
-          return new Date(year, month - 1, day);
-        }
-        return new Date(dateStr);
-      } catch {
-        return null;
-      }
-    };
-    const lastAppliedMap = new Map();
-    for (const j of allJobs) {
-      if (!j.operatorName || j.operatorName === 'user' || !j.appliedDate) continue;
-      const email = (j.userID || '').toLowerCase();
-      if (!email) continue;
-      const d = parseDateString(j.appliedDate);
-      if (!d) continue;
-      const cur = lastAppliedMap.get(email);
-      if (!cur || d > cur.date) lastAppliedMap.set(email, { date: d, operatorName: j.operatorName });
-    }
-    const lastAppliedOperatorMap = new Map();
-    lastAppliedMap.forEach((v, k) => lastAppliedOperatorMap.set(k, v.operatorName));
-
+    // ── Build response rows ──
     let rows = allUserIDs.map(email => {
       const counts = overallMap.get(email) || {};
       const client = clientMap.get(email) || {};
       const referralMeta = referralMap.get(email.toLowerCase()) || {};
-      const removedCount = multiFormatDateRegex
-        ? (removedMap.get(email) || 0)
-        : (counts.deleted || 0);
+      const removedCount = multiFormatDateRegex ? (removedMap.get(email) || 0) : (counts.deleted || 0);
       return {
         email,
         name: client.name || email,
@@ -3047,11 +3050,13 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         jobStatus: client.jobStatus || null,
         operationsName: client.operationsName || '',
         isPaused: client.isPaused ?? false,
+        onboardingPhase: client.onboardingPhase ?? false,
         dashboardTeamLeadName: client.dashboardTeamLeadName || '',
         lastAppliedOperatorName: lastAppliedOperatorMap.get(email.toLowerCase()) || '',
         referrals: referralMeta.referrals || [],
         referralApplicationsAdded: referralMeta.referralApplicationsAdded || 0,
         latestReferralName: referralMeta.latestReferralName || null,
+        addonLimit: client.addonLimit || 0,
         saved: counts.saved || 0,
         applied: counts.applied || 0,
         interviewing: counts.interviewing || 0,
@@ -3062,21 +3067,17 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       };
     });
 
-    // Sort: active first, then inactive, then alphabetically by email
     rows.sort((a, b) => {
-      // First, sort by status: active comes before inactive
       const statusOrder = { 'active': 0, 'inactive': 1 };
       const statusA = statusOrder[a.status] ?? 2;
       const statusB = statusOrder[b.status] ?? 2;
-      if (statusA !== statusB) {
-        return statusA - statusB;
-      }
-      // If same status, sort by email alphabetically
+      if (statusA !== statusB) return statusA - statusB;
       return a.email.localeCompare(b.email);
     });
 
-
-    res.status(200).json({ success: true, date: date || null, rows });
+    const result = { success: true, date: date || null, rows };
+    setAnalysisCache(cacheKey, result);
+    res.status(200).json(result);
   } catch (e) {
     console.error('client-job-analysis error', e);
     res.status(500).json({ success: false, error: e.message });
@@ -3486,10 +3487,10 @@ app.post('/api/calls/status', async (req, res) => {
     // Find by Sid if available, otherwise by To number (latest)
     let log = null;
     if (CallSid) {
-      log = await CallLogModel.findOne({ twilioCallSid: CallSid });
+      log = await CallLogModel.findOne({ twilioCallSid: CallSid }).lean();
     }
     if (!log && To) {
-      log = await CallLogModel.findOne({ phoneNumber: To }).sort({ createdAt: -1 });
+      log = await CallLogModel.findOne({ phoneNumber: To }).sort({ createdAt: -1 }).lean();
     }
 
     if (log) {
@@ -3675,7 +3676,7 @@ app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobA
 app.post('/api/onboarding/jobs/:id/admin-read', verifyToken, markAdminRead);
 
 // Onboarding attachment upload (R2 or Cloudinary) - R2: onboarding-assets/images|pdf|others
-app.post('/api/upload/onboarding-attachment', fileUpload.single('file'), async (req, res) => {
+app.post('/api/upload/onboarding-attachment', verifyToken, fileUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
     const result = await uploadFile(req.file.buffer, {
@@ -3735,49 +3736,34 @@ app.post('/api/managers/:id/upload-photo', verifyToken, verifyAdmin, upload.sing
 const getManagedUsers = async (req, res) => {
   try {
     const { email } = req.params;
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() });
+    const operation = await OperationsModel.findOne({ email: email.toLowerCase() }).lean();
 
     if (!operation) {
       return res.status(404).json({ error: 'Operation not found' });
     }
 
-    // Get user details for managed users
-    const managedUsers = [];
-    for (const userId of operation.managedUsers || []) {
-      // Convert ObjectId to string if needed
-      const userIdStr = userId.toString();
+    // Batch-fetch all users + fallback clients in parallel (eliminates N+1)
+    const userIds = (operation.managedUsers || []).map(id => id.toString());
+    const [users, fallbackClients] = await Promise.all([
+      NewUserModel.find({ _id: { $in: userIds } }).select('name email company').lean(),
+      ClientModel.find({ userID: { $in: userIds } }).select('name email userID companyName').lean()
+    ]);
 
-      // First try to find in UserModel (NewUserModel)
-      const user = await NewUserModel.findById(userIdStr);
+    const userMap = new Map(users.map(u => [u._id.toString(), u]));
+    const clientMap = new Map(fallbackClients.map(c => [c.userID, c]));
+
+    const managedUsers = userIds.map(userIdStr => {
+      const user = userMap.get(userIdStr);
       if (user) {
-        managedUsers.push({
-          userID: userIdStr,
-          name: user.name || 'Unknown',
-          email: user.email || userIdStr,
-          company: user.company || 'Unknown'
-        });
-      } else {
-        // If not found in UserModel, try ClientModel
-        const client = await ClientModel.findOne({ userID: userIdStr });
-        if (client) {
-          managedUsers.push({
-            userID: userIdStr,
-            name: client.name,
-            email: client.email || userIdStr,
-            company: client.companyName || 'Unknown'
-          });
-        } else {
-          // If neither found, show the userID
-          const displayName = userIdStr.includes('@') ? userIdStr.split('@')[0] : `User ${userIdStr.substring(0, 8)}`;
-          managedUsers.push({
-            userID: userIdStr,
-            name: displayName,
-            email: userIdStr.includes('@') ? userIdStr : 'Unknown',
-            company: 'Unknown'
-          });
-        }
+        return { userID: userIdStr, name: user.name || 'Unknown', email: user.email || userIdStr, company: user.company || 'Unknown' };
       }
-    }
+      const client = clientMap.get(userIdStr);
+      if (client) {
+        return { userID: userIdStr, name: client.name, email: client.email || userIdStr, company: client.companyName || 'Unknown' };
+      }
+      const displayName = userIdStr.includes('@') ? userIdStr.split('@')[0] : `User ${userIdStr.substring(0, 8)}`;
+      return { userID: userIdStr, name: displayName, email: userIdStr.includes('@') ? userIdStr : 'Unknown', company: 'Unknown' };
+    });
 
     res.status(200).json({ managedUsers });
   } catch (error) {
@@ -3843,7 +3829,7 @@ const assignClientToOperator = async (req, res) => {
     }
 
     // Find the client by email to get their userID
-    const client = await NewUserModel.findOne({ email: clientEmail.toLowerCase() });
+    const client = await NewUserModel.findOne({ email: clientEmail.toLowerCase() }).lean();
     if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
@@ -3884,7 +3870,7 @@ const getAvailableClients = async (req, res) => {
   try {
     const { email } = req.params;
 
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() });
+    const operation = await OperationsModel.findOne({ email: email.toLowerCase() }).lean();
     if (!operation) {
       return res.status(404).json({ error: 'Operation not found' });
     }
@@ -3909,7 +3895,7 @@ const getClientDetails = async (req, res) => {
     const { email } = req.params;
 
     // Find client in dashboardtrackings collection
-    const client = await ClientModel.findOne({ email: email.toLowerCase() });
+    const client = await ClientModel.findOne({ email: email.toLowerCase() }).lean();
 
     if (!client) {
       return res.status(404).json({ error: 'Client not found in dashboardtrackings' });
@@ -4209,7 +4195,7 @@ const deleteOperationUser = async (req, res) => {
     const { email } = req.params;
 
     // Find the operation
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() });
+    const operation = await OperationsModel.findOne({ email: email.toLowerCase() }).lean();
     if (!operation) {
       return res.status(404).json({ error: 'Operation not found' });
     }
@@ -4732,7 +4718,7 @@ app.post('/api/client-todos/check-lock-period', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Client email is required' });
     }
 
-    const clientTodos = await ClientTodosModel.findOne({ clientEmail: clientEmail.toLowerCase() });
+    const clientTodos = await ClientTodosModel.findOne({ clientEmail: clientEmail.toLowerCase() }).lean();
 
     if (!clientTodos || !clientTodos.lockPeriods || clientTodos.lockPeriods.length === 0) {
       return res.status(200).json({ success: true, isLocked: false, message: null });
@@ -4803,7 +4789,7 @@ app.post('/api/client-todos/migrate-defaults', verifyToken, verifyAdmin, async (
     let skipped = 0;
 
     for (const client of allClients) {
-      const existing = await ClientTodosModel.findOne({ clientEmail: client.email.toLowerCase() });
+      const existing = await ClientTodosModel.findOne({ clientEmail: client.email.toLowerCase() }).lean();
 
       if (!existing) {
         await ClientTodosModel.create({
@@ -5189,10 +5175,11 @@ async function runJobCardReminder() {
 async function runZeroSavedJobReminder() {
   if (!DISCORD_ZERO_SAVED_WEBHOOK) return;
   try {
-    // Get all active and unpaused clients
+    // Get all active, unpaused, and not in onboarding-phase clients (no reminders for "new" clients)
     const activeUnpausedClients = await ClientModel.find({ 
       status: 'active',
-      isPaused: { $ne: true }
+      isPaused: { $ne: true },
+      onboardingPhase: { $ne: true }
     })
       .select('email name')
       .lean();

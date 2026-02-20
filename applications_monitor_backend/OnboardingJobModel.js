@@ -19,6 +19,11 @@ const resolvedByTaggedSchema = new mongoose.Schema({
   resolvedAt: { type: Date, default: Date.now }
 }, { _id: false });
 
+const commentImageSchema = new mongoose.Schema({
+  url: { type: String, required: true },
+  filename: { type: String, default: '' }
+}, { _id: false });
+
 const commentSchema = new mongoose.Schema({
   body: { type: String, required: true },
   authorEmail: { type: String, required: true },
@@ -26,6 +31,7 @@ const commentSchema = new mongoose.Schema({
   taggedUserIds: [{ type: String }],
   taggedNames: [{ type: String }],
   resolvedByTagged: [resolvedByTaggedSchema],
+  images: [commentImageSchema],
   createdAt: { type: Date, default: Date.now }
 }, { _id: true });
 

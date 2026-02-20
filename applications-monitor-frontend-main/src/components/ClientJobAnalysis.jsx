@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import Layout from './Layout';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
@@ -20,12 +20,10 @@ export default function ClientJobAnalysis() {
   const [sortDir, setSortDir] = useState('desc');
   const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
   const [savingDashboardManager, setSavingDashboardManager] = useState(new Set());
-  const [clientAddons, setClientAddons] = useState({});
   const [savingStatus, setSavingStatus] = useState(new Set());
   const [savingPause, setSavingPause] = useState(new Set());
   const [userRole, setUserRole] = useState(null);
   const [lastAppliedByFilter, setLastAppliedByFilter] = useState(''); // Filter for "Last applied by" operator name
-  const [dashboardManagerFilter, setDashboardManagerFilter] = useState(''); // Filter for "Dashboard Mgr" name
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -41,50 +39,24 @@ export default function ClientJobAnalysis() {
     return `${d}/${m}/${y}`;
   }, []);
 
-  const fetchClientAddons = useCallback(async () => {
-    try {
-      const resp = await fetch(`${API_BASE}/api/clients?t=${Date.now()}`, { cache: 'no-store' });
-      if (resp.ok) {
-        const data = await resp.json();
-        const addonsMap = {};
-        const clients = data.clients || data.data || [];
-        clients.forEach(client => {
-          if (client.email && client.addons && Array.isArray(client.addons)) {
-            const totalAddon = client.addons.reduce((sum, addon) => {
-              const addonValue = parseInt(addon.type || addon.addonType || '0', 10);
-              return sum + (isNaN(addonValue) ? 0 : addonValue);
-            }, 0);
-            addonsMap[client.email] = totalAddon;
-          }
-        });
-        setClientAddons(addonsMap);
-      }
-    } catch (e) {
-      console.error('Failed to fetch client addons:', e);
-    }
-  }, []);
-
   const fetchAnalysis = useCallback(async (selected) => {
     setLoading(true);
     try {
       const body = selected ? { date: convertToDMY(selected) } : {};
-      const url = `${API_BASE}/api/analytics/client-job-analysis?t=${Date.now()}`;
-      const resp = await fetch(url, {
+      const resp = await fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
         body: JSON.stringify(body)
       });
       if (!resp.ok) throw new Error('Failed');
       const data = await resp.json();
       setRows(data.rows || []);
-      await fetchClientAddons();
     } catch (e) {
       toast.error('Failed to load client job analysis');
     } finally {
       setLoading(false);
     }
-  }, [convertToDMY, fetchClientAddons]);
+  }, [convertToDMY]);
 
   useEffect(() => {
     const fetchDashboardManagerNames = async () => {
@@ -115,11 +87,9 @@ export default function ClientJobAnalysis() {
     }
     try {
       const body = { date: convertToDMY(date) };
-      const url = `${API_BASE}/api/analytics/applied-by-date?t=${Date.now()}`;
-      const resp = await fetch(url, {
+      const resp = await fetch(`${API_BASE}/api/analytics/applied-by-date`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
         body: JSON.stringify(body)
       });
       if (!resp.ok) throw new Error('Failed');
@@ -194,29 +164,33 @@ export default function ClientJobAnalysis() {
     }
   }
 
-  const handlePauseChange = async (email, isPaused) => {
+  /** value: 'new' | 'paused' | 'unpaused'. New = onboarding phase (no reminders); Paused = paused; Unpaused = active reminders. */
+  const handlePhasePauseChange = async (email, value) => {
     if (userRole !== 'admin') {
-      toast.error('Only admins can change client pause status');
+      toast.error('Only admins can change client phase/pause status');
       return;
     }
-    
+    const onboardingPhase = value === 'new';
+    const isPaused = value === 'new' || value === 'paused';
+
     setSavingPause(prev => new Set(prev).add(email));
     try {
       const resp = await fetch(`${API_BASE}/api/clients`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, isPaused, currentPath: window.location.pathname })
+        body: JSON.stringify({ email, isPaused, onboardingPhase, currentPath: window.location.pathname })
       });
       if (!resp.ok) throw new Error('Failed to save');
       const data = await resp.json();
       if (data.message || data.updatedClientsTracking) {
         setRows(prev => prev.map(r =>
-          r.email === email ? { ...r, isPaused } : r
+          r.email === email ? { ...r, isPaused, onboardingPhase } : r
         ));
-        toast.success(isPaused ? 'Client paused successfully' : 'Client unpaused successfully');
+        const msg = value === 'new' ? 'Client set to New (onboarding phase)' : value === 'paused' ? 'Client paused' : 'Client unpaused';
+        toast.success(msg);
       }
     } catch (e) {
-      toast.error('Failed to update pause status');
+      toast.error('Failed to update phase/pause status');
     } finally {
       setSavingPause(prev => {
         const next = new Set(prev);
@@ -225,6 +199,34 @@ export default function ClientJobAnalysis() {
       });
     }
   };
+
+  // Memoize unique operator names for filter dropdown
+  const uniqueOperatorNames = useMemo(
+    () => [...new Set(rows.map(r => r.lastAppliedOperatorName).filter(Boolean))].sort(),
+    [rows]
+  );
+
+  // Memoize filtered + sorted rows (avoids re-computation on every render)
+  const processedRows = useMemo(() => {
+    let filtered = rows;
+    if (lastAppliedByFilter) {
+      const filterLower = lastAppliedByFilter.toLowerCase();
+      filtered = rows.filter(r => (r.lastAppliedOperatorName || '').toLowerCase() === filterLower);
+    }
+    return [...filtered].sort((a, b) => {
+      if (date) {
+        const av = Number(a?.appliedOnDate || 0);
+        const bv = Number(b?.appliedOnDate || 0);
+        const cmp = sortDir === 'asc' ? av - bv : bv - av;
+        if (cmp !== 0) return cmp;
+      }
+      const statusOrder = { 'active': 0, 'inactive': 1 };
+      const statusA = statusOrder[a.status] ?? 2;
+      const statusB = statusOrder[b.status] ?? 2;
+      if (statusA !== statusB) return statusA - statusB;
+      return a.email.localeCompare(b.email);
+    });
+  }, [rows, date, sortDir, lastAppliedByFilter]);
 
   return (
     <Layout>
@@ -262,7 +264,7 @@ export default function ClientJobAnalysis() {
                 <tr>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Status</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Pause</th>
+                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Phase / Pause</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Plan</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                     <div className="flex items-center gap-2">
@@ -275,7 +277,7 @@ export default function ClientJobAnalysis() {
                         title="Filter by operator"
                       >
                         <option value="">All</option>
-                        {[...new Set(rows.map(r => r.lastAppliedOperatorName).filter(Boolean))].sort().map((name) => (
+                        {uniqueOperatorNames.map((name) => (
                           <option key={name} value={name}>
                             {capitalizeOperatorName(name)}
                           </option>
@@ -296,38 +298,7 @@ export default function ClientJobAnalysis() {
                       )}
                     </div>
                   </th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-                    <div className="flex items-center gap-2">
-                      <span>Dashboard Mgr</span>
-                      <select
-                        value={dashboardManagerFilter}
-                        onChange={(e) => setDashboardManagerFilter(e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="px-1.5 py-0.5 text-[10px] border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                        title="Filter by dashboard manager"
-                      >
-                        <option value="">All</option>
-                        {[...new Set(rows.map(r => r.dashboardTeamLeadName).filter(Boolean))].sort().map((name) => (
-                          <option key={name} value={name}>
-                            {name}
-                          </option>
-                        ))}
-                      </select>
-                      {dashboardManagerFilter && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDashboardManagerFilter('');
-                          }}
-                          className="px-1 py-0.5 text-[10px] text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300"
-                          title="Clear filter"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  </th>
+                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Dashboard Mgr</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Total Apps</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Saved</th>
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Applied</th>
@@ -353,49 +324,17 @@ export default function ClientJobAnalysis() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {[...(rows||[])]
-                  .filter((r) => {
-                    // Filter by "Last applied by" operator name
-                    if (lastAppliedByFilter) {
-                      const operatorName = (r.lastAppliedOperatorName || '').toLowerCase();
-                      const filterName = lastAppliedByFilter.toLowerCase();
-                      if (operatorName !== filterName) return false;
-                    }
-                    // Filter by "Dashboard Mgr" name
-                    if (dashboardManagerFilter) {
-                      const managerName = (r.dashboardTeamLeadName || '').toLowerCase();
-                      const filterName = dashboardManagerFilter.toLowerCase();
-                      if (managerName !== filterName) return false;
-                    }
-                    return true;
-                  })
-                  .sort((a,b)=>{
-                  // When date is selected, sort by applied-on-date metric
-                  if (date) {
-                    const av = Number(a?.appliedOnDate || 0);
-                    const bv = Number(b?.appliedOnDate || 0);
-                    const cmp = sortDir === 'asc' ? av - bv : bv - av;
-                    if (cmp !== 0) return cmp;
-                  }
-                  const statusOrder = { 'active': 0, 'inactive': 1 };
-                  const statusA = statusOrder[a.status] ?? 2;
-                  const statusB = statusOrder[b.status] ?? 2;
-                  if (statusA !== statusB) return statusA - statusB;
-                  // Secondary sort: email alphabetically
-                  return a.email.localeCompare(b.email);
-                }).map((r, idx) => {
+                {processedRows.map((r, idx) => {
                   // Total applications = saved + applied + interviewing + offer + rejected (removed is excluded)
                   const totalApplications = (Number(r.saved||0) + Number(r.applied||0) + Number(r.interviewing||0) + Number(r.offer||0) + Number(r.rejected||0));
-                  const plan = String(r.planType || '')
-                    .trim()
-                    .toLowerCase();
+                  const plan = String(r.planType || '').trim().toLowerCase();
                   const isPrime = plan.includes('prime');
                   const isIgnite = plan.includes('ignite');
                   const isProfessional = plan.includes('professional');
                   const isExecutive = plan.includes('executive');
-                  
+
                   const planLimit = isPrime ? 160 : isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1000 : Infinity;
-                  const addonLimit = clientAddons[r.email] || 0;
+                  const addonLimit = Number(r.addonLimit || 0);
                   const referralBonus = Number(r.referralApplicationsAdded || 0);
                   const totalLimit = planLimit + addonLimit + referralBonus;
                   const exceeded = totalLimit !== Infinity && totalApplications > totalLimit;
@@ -441,27 +380,34 @@ export default function ClientJobAnalysis() {
                       ) : '-'}
                     </td>
                     <td className="px-2 py-1">
-                      {userRole === 'admin' ? (
-                        <select
-                          value={r.isPaused ? 'paused' : 'unpaused'}
-                          onChange={(e) => handlePauseChange(r.email, e.target.value === 'paused')}
-                          disabled={savingPause.has(r.email)}
-                          className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
-                            r.isPaused ? 'bg-yellow-100 text-yellow-700 border-yellow-300' :
-                            'bg-green-50 text-green-700 border-green-200'
-                          }`}
-                        >
-                          <option value="unpaused">Unpaused</option>
-                          <option value="paused">Paused</option>
-                        </select>
-                      ) : (
-                        <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
-                          r.isPaused ? 'bg-yellow-100 text-yellow-700' :
-                          'bg-green-50 text-green-700'
-                        }`}>
-                          {r.isPaused ? 'Paused' : 'Unpaused'}
-                        </span>
-                      )}
+                      {(() => {
+                        const phaseValue = r.onboardingPhase ? 'new' : r.isPaused ? 'paused' : 'unpaused';
+                        const phaseLabel = phaseValue === 'new' ? 'New' : phaseValue === 'paused' ? 'Paused' : 'Unpaused';
+                        return userRole === 'admin' ? (
+                          <select
+                            value={phaseValue}
+                            onChange={(e) => handlePhasePauseChange(r.email, e.target.value)}
+                            disabled={savingPause.has(r.email)}
+                            className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
+                              phaseValue === 'new' ? 'bg-slate-100 text-slate-700 border-slate-300' :
+                              phaseValue === 'paused' ? 'bg-yellow-100 text-yellow-700 border-yellow-300' :
+                              'bg-green-50 text-green-700 border-green-200'
+                            }`}
+                          >
+                            <option value="new">New</option>
+                            <option value="paused">Paused</option>
+                            <option value="unpaused">Unpaused</option>
+                          </select>
+                        ) : (
+                          <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
+                            phaseValue === 'new' ? 'bg-slate-100 text-slate-700' :
+                            phaseValue === 'paused' ? 'bg-yellow-100 text-yellow-700' :
+                            'bg-green-50 text-green-700'
+                          }`}>
+                            {phaseLabel}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-2 py-1">
                       {r.planType ? (
@@ -536,24 +482,10 @@ export default function ClientJobAnalysis() {
                     </td>
                   </tr>
                 )})}
-                {rows.filter((r) => {
-                  if (lastAppliedByFilter) {
-                    const operatorName = (r.lastAppliedOperatorName || '').toLowerCase();
-                    const filterName = lastAppliedByFilter.toLowerCase();
-                    if (operatorName !== filterName) return false;
-                  }
-                  if (dashboardManagerFilter) {
-                    const managerName = (r.dashboardTeamLeadName || '').toLowerCase();
-                    const filterName = dashboardManagerFilter.toLowerCase();
-                    if (managerName !== filterName) return false;
-                  }
-                  return true;
-                }).length === 0 && (
+                {processedRows.length === 0 && (
                   <tr>
                     <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">
-                      {lastAppliedByFilter || dashboardManagerFilter 
-                        ? 'No clients found for selected filter' 
-                        : 'No data'}
+                      {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
                     </td>
                   </tr>
                 )}
