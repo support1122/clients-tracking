@@ -5238,10 +5238,10 @@ app.listen(process.env.PORT, () => {
   // Start the automated call sweep job
   startCallSweepJob();
 
-  // Job card reminder: 9:30 PM IST daily (16:00 UTC)
+  // Job card reminder: 8:00 PM IST daily (14:30 UTC)
   if (DISCORD_JOBCARD_REMINDER_WEBHOOK) {
-    cron.schedule('0 16 * * *', runJobCardReminder);
-    console.log('📬 [JobCard Reminder] Cron scheduled for 9:30 PM IST daily');
+    cron.schedule('30 14 * * *', runJobCardReminder);
+    console.log('📬 [JobCard Reminder] Cron scheduled for 8:00 PM IST daily');
   }
 
   // Zero saved jobs reminder: 1 PM IST daily (07:30 UTC)
