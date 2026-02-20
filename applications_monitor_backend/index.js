@@ -2876,10 +2876,27 @@ const getJobsByDate = async (req, res) => {
 // Add the job analytics route after function definition
 app.post('/api/jobs/by-date', getJobsByDate);
 
+// In-memory TTL cache for client-job-analysis (30s)
+const _analysisCacheStore = new Map();
+const ANALYSIS_CACHE_TTL = 30_000;
+function getAnalysisCache(key) {
+  const e = _analysisCacheStore.get(key);
+  if (!e) return null;
+  if (Date.now() > e.exp) { _analysisCacheStore.delete(key); return null; }
+  return e.val;
+}
+function setAnalysisCache(key, val) { _analysisCacheStore.set(key, { val, exp: Date.now() + ANALYSIS_CACHE_TTL }); }
+function clearAnalysisCache() { _analysisCacheStore.clear(); }
+
 // Client Job Analysis (Recent Activity) - per active client status counts and applied-on-date
 app.post('/api/analytics/client-job-analysis', async (req, res) => {
   try {
     const { date } = req.body || {};
+
+    // Check cache
+    const cacheKey = date || '__all__';
+    const cached = getAnalysisCache(cacheKey);
+    if (cached) return res.status(200).json(cached);
 
     // Build multi-format date regex if provided (for appliedDate)
     let multiFormatDateRegex = null;
@@ -2912,135 +2929,100 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       }
     };
 
-    // Aggregate overall counts per client across ALL jobs (no active filter)
-    const overall = await JobModel.aggregate([
-      { $group: { _id: { userID: "$userID", status: statusCase }, count: { $sum: 1 } } },
-      { $group: { _id: "$_id.userID", statuses: { $push: { k: "$_id.status", v: "$count" } } } },
-      { $project: { _id: 0, userID: "$_id", counts: { $arrayToObject: "$statuses" } } }
-    ]);
-
-    // Aggregate applied-on-date per client if date provided using appliedDate
-    let appliedOnDate = [];
-    if (multiFormatDateRegex) {
-      appliedOnDate = await JobModel.aggregate([
-        { $match: { appliedDate: { $regex: multiFormatDateRegex } } },
-        { $group: { _id: "$userID", count: { $sum: 1 } } },
-        { $project: { _id: 0, userID: "$_id", count: 1 } }
-      ]);
-    }
-
-    // Aggregate removed jobs on selected date (ONLY for removed column)
-    let removedOnDate = [];
-    if (multiFormatDateRegex) {
-      removedOnDate = await JobModel.aggregate([
-        {
-          $match: {
-            $and: [
-              {
-                $or: [
-                  { currentStatus: { $regex: /delete/i } },
-                  { currentStatus: { $regex: /removed/i } }
-                ]
-              },
+    // ── Phase 1: Run ALL aggregations in parallel ──
+    const [overall, appliedOnDate, removedOnDate, lastAppliedAgg] = await Promise.all([
+      // 1) Overall status counts per client
+      JobModel.aggregate([
+        { $group: { _id: { userID: "$userID", status: statusCase }, count: { $sum: 1 } } },
+        { $group: { _id: "$_id.userID", statuses: { $push: { k: "$_id.status", v: "$count" } } } },
+        { $project: { _id: 0, userID: "$_id", counts: { $arrayToObject: "$statuses" } } }
+      ]),
+      // 2) Applied-on-date per client (only if date provided)
+      multiFormatDateRegex
+        ? JobModel.aggregate([
+            { $match: { appliedDate: { $regex: multiFormatDateRegex } } },
+            { $group: { _id: "$userID", count: { $sum: 1 } } },
+            { $project: { _id: 0, userID: "$_id", count: 1 } }
+          ])
+        : Promise.resolve([]),
+      // 3) Removed-on-date per client (only if date provided)
+      multiFormatDateRegex
+        ? JobModel.aggregate([
+            { $match: { $and: [
+              { $or: [{ currentStatus: { $regex: /delete/i } }, { currentStatus: { $regex: /removed/i } }] },
               { updatedAt: { $regex: multiFormatDateRegex } }
-            ]
-          }
-        },
-        { $group: { _id: "$userID", count: { $sum: 1 } } },
-        { $project: { _id: 0, userID: "$_id", count: 1 } }
-      ]);
-    }
+            ]}},
+            { $group: { _id: "$userID", count: { $sum: 1 } } },
+            { $project: { _id: 0, userID: "$_id", count: 1 } }
+          ])
+        : Promise.resolve([]),
+      // 4) Last applied operator per client — server-side aggregation (replaces full-collection scan)
+      JobModel.aggregate([
+        { $match: {
+          operatorName: { $exists: true, $nin: [null, '', 'user'] },
+          appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ }
+        }},
+        { $addFields: { _dp: { $split: [{ $trim: { input: '$appliedDate' } }, '/'] } } },
+        { $addFields: { _sd: { $add: [
+          { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } }, 10000] },
+          { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 0, onNull: 0 } }, 100] },
+          { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 0, onNull: 0 } }
+        ]} } },
+        { $sort: { _sd: -1 } },
+        { $group: { _id: '$userID', operatorName: { $first: '$operatorName' } } },
+        { $project: { _id: 0, userID: '$_id', operatorName: 1 } }
+      ])
+    ]);
 
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const overallMap = new Map(overall.map(r => [r.userID, r.counts]));
+    const lastAppliedOperatorMap = new Map(lastAppliedAgg.map(r => [(r.userID || '').toLowerCase(), r.operatorName]));
     const allUserIDs = Array.from(new Set([...overallMap.keys(), ...appliedMap.keys(), ...removedMap.keys()]));
 
-    const clientInfo = await ClientModel.find({
-      email: { $in: allUserIDs }
-    }).select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase').lean();
-    const clientMap = new Map(
-      clientInfo.map((c) => [
-        c.email,
-        {
-          name: c.name,
-          planType: c.planType,
-          planPrice: c.planPrice,
-          status: c.status,
-          jobStatus: c.jobStatus,
-          operationsName: c.operationsName || "",
-          dashboardTeamLeadName: c.dashboardTeamLeadName || "",
-          isPaused: !!c.isPaused,
-          onboardingPhase: !!c.onboardingPhase,
-        },
-      ])
-    );
+    // ── Phase 2: Fetch client + referral data in parallel ──
+    const [clientInfo, referralUsers] = await Promise.all([
+      ClientModel.find({ email: { $in: allUserIDs } })
+        .select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons')
+        .lean(),
+      NewUserModel.find({ email: { $in: allUserIDs } }, 'email referrals').lean()
+    ]);
 
-    // Fetch referral data from users collection to align with referral-management dashboard
-    const referralUsers = await NewUserModel.find(
-      { email: { $in: allUserIDs } },
-      "email referrals"
-    ).lean();
+    const clientMap = new Map(clientInfo.map(c => [c.email, {
+      name: c.name,
+      planType: c.planType,
+      planPrice: c.planPrice,
+      status: c.status,
+      jobStatus: c.jobStatus,
+      operationsName: c.operationsName || '',
+      dashboardTeamLeadName: c.dashboardTeamLeadName || '',
+      isPaused: !!c.isPaused,
+      onboardingPhase: !!c.onboardingPhase,
+      addonLimit: (c.addons || []).reduce((sum, a) => {
+        const v = parseInt(a.type || a.addonType || 0, 10);
+        return sum + (isNaN(v) ? 0 : v);
+      }, 0)
+    }]));
 
     const referralMap = new Map();
-
     referralUsers.forEach((user) => {
-      const email = (user.email || "").toLowerCase();
+      const email = (user.email || '').toLowerCase();
       const referralsArray = Array.isArray(user.referrals) ? user.referrals : [];
-
       let referralApplicationsAdded = 0;
       referralsArray.forEach((ref) => {
-        if (ref?.plan === "Professional") {
-          referralApplicationsAdded += 200;
-        } else if (ref?.plan === "Executive") {
-          referralApplicationsAdded += 300;
-        }
+        if (ref?.plan === 'Professional') referralApplicationsAdded += 200;
+        else if (ref?.plan === 'Executive') referralApplicationsAdded += 300;
       });
-
-      const latestReferral =
-        referralsArray.length > 0 ? referralsArray[referralsArray.length - 1] : null;
-
-      referralMap.set(email, {
-        referrals: referralsArray,
-        referralApplicationsAdded,
-        latestReferralName: latestReferral?.name || null,
-      });
+      const latestReferral = referralsArray.length > 0 ? referralsArray[referralsArray.length - 1] : null;
+      referralMap.set(email, { referrals: referralsArray, referralApplicationsAdded, latestReferralName: latestReferral?.name || null });
     });
 
-    const allJobs = await JobModel.find({}).select('userID operatorName appliedDate').lean();
-    const parseDateString = (dateStr) => {
-      if (!dateStr) return null;
-      try {
-        const parts = String(dateStr).split('/');
-        if (parts.length === 3) {
-          const [day, month, year] = parts.map(n => parseInt(n, 10));
-          return new Date(year, month - 1, day);
-        }
-        return new Date(dateStr);
-      } catch {
-        return null;
-      }
-    };
-    const lastAppliedMap = new Map();
-    for (const j of allJobs) {
-      if (!j.operatorName || j.operatorName === 'user' || !j.appliedDate) continue;
-      const email = (j.userID || '').toLowerCase();
-      if (!email) continue;
-      const d = parseDateString(j.appliedDate);
-      if (!d) continue;
-      const cur = lastAppliedMap.get(email);
-      if (!cur || d > cur.date) lastAppliedMap.set(email, { date: d, operatorName: j.operatorName });
-    }
-    const lastAppliedOperatorMap = new Map();
-    lastAppliedMap.forEach((v, k) => lastAppliedOperatorMap.set(k, v.operatorName));
-
+    // ── Build response rows ──
     let rows = allUserIDs.map(email => {
       const counts = overallMap.get(email) || {};
       const client = clientMap.get(email) || {};
       const referralMeta = referralMap.get(email.toLowerCase()) || {};
-      const removedCount = multiFormatDateRegex
-        ? (removedMap.get(email) || 0)
-        : (counts.deleted || 0);
+      const removedCount = multiFormatDateRegex ? (removedMap.get(email) || 0) : (counts.deleted || 0);
       return {
         email,
         name: client.name || email,
@@ -3056,6 +3038,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         referrals: referralMeta.referrals || [],
         referralApplicationsAdded: referralMeta.referralApplicationsAdded || 0,
         latestReferralName: referralMeta.latestReferralName || null,
+        addonLimit: client.addonLimit || 0,
         saved: counts.saved || 0,
         applied: counts.applied || 0,
         interviewing: counts.interviewing || 0,
@@ -3066,21 +3049,17 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       };
     });
 
-    // Sort: active first, then inactive, then alphabetically by email
     rows.sort((a, b) => {
-      // First, sort by status: active comes before inactive
       const statusOrder = { 'active': 0, 'inactive': 1 };
       const statusA = statusOrder[a.status] ?? 2;
       const statusB = statusOrder[b.status] ?? 2;
-      if (statusA !== statusB) {
-        return statusA - statusB;
-      }
-      // If same status, sort by email alphabetically
+      if (statusA !== statusB) return statusA - statusB;
       return a.email.localeCompare(b.email);
     });
 
-
-    res.status(200).json({ success: true, date: date || null, rows });
+    const result = { success: true, date: date || null, rows };
+    setAnalysisCache(cacheKey, result);
+    res.status(200).json(result);
   } catch (e) {
     console.error('client-job-analysis error', e);
     res.status(500).json({ success: false, error: e.message });

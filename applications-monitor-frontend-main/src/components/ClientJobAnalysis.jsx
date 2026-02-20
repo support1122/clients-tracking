@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import Layout from './Layout';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
@@ -20,7 +20,6 @@ export default function ClientJobAnalysis() {
   const [sortDir, setSortDir] = useState('desc');
   const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
   const [savingDashboardManager, setSavingDashboardManager] = useState(new Set());
-  const [clientAddons, setClientAddons] = useState({});
   const [savingStatus, setSavingStatus] = useState(new Set());
   const [savingPause, setSavingPause] = useState(new Set());
   const [userRole, setUserRole] = useState(null);
@@ -40,50 +39,24 @@ export default function ClientJobAnalysis() {
     return `${d}/${m}/${y}`;
   }, []);
 
-  const fetchClientAddons = useCallback(async () => {
-    try {
-      const resp = await fetch(`${API_BASE}/api/clients?t=${Date.now()}`, { cache: 'no-store' });
-      if (resp.ok) {
-        const data = await resp.json();
-        const addonsMap = {};
-        const clients = data.clients || data.data || [];
-        clients.forEach(client => {
-          if (client.email && client.addons && Array.isArray(client.addons)) {
-            const totalAddon = client.addons.reduce((sum, addon) => {
-              const addonValue = parseInt(addon.type || addon.addonType || '0', 10);
-              return sum + (isNaN(addonValue) ? 0 : addonValue);
-            }, 0);
-            addonsMap[client.email] = totalAddon;
-          }
-        });
-        setClientAddons(addonsMap);
-      }
-    } catch (e) {
-      console.error('Failed to fetch client addons:', e);
-    }
-  }, []);
-
   const fetchAnalysis = useCallback(async (selected) => {
     setLoading(true);
     try {
       const body = selected ? { date: convertToDMY(selected) } : {};
-      const url = `${API_BASE}/api/analytics/client-job-analysis?t=${Date.now()}`;
-      const resp = await fetch(url, {
+      const resp = await fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
         body: JSON.stringify(body)
       });
       if (!resp.ok) throw new Error('Failed');
       const data = await resp.json();
       setRows(data.rows || []);
-      await fetchClientAddons();
     } catch (e) {
       toast.error('Failed to load client job analysis');
     } finally {
       setLoading(false);
     }
-  }, [convertToDMY, fetchClientAddons]);
+  }, [convertToDMY]);
 
   useEffect(() => {
     const fetchDashboardManagerNames = async () => {
@@ -114,11 +87,9 @@ export default function ClientJobAnalysis() {
     }
     try {
       const body = { date: convertToDMY(date) };
-      const url = `${API_BASE}/api/analytics/applied-by-date?t=${Date.now()}`;
-      const resp = await fetch(url, {
+      const resp = await fetch(`${API_BASE}/api/analytics/applied-by-date`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
         body: JSON.stringify(body)
       });
       if (!resp.ok) throw new Error('Failed');
@@ -229,6 +200,34 @@ export default function ClientJobAnalysis() {
     }
   };
 
+  // Memoize unique operator names for filter dropdown
+  const uniqueOperatorNames = useMemo(
+    () => [...new Set(rows.map(r => r.lastAppliedOperatorName).filter(Boolean))].sort(),
+    [rows]
+  );
+
+  // Memoize filtered + sorted rows (avoids re-computation on every render)
+  const processedRows = useMemo(() => {
+    let filtered = rows;
+    if (lastAppliedByFilter) {
+      const filterLower = lastAppliedByFilter.toLowerCase();
+      filtered = rows.filter(r => (r.lastAppliedOperatorName || '').toLowerCase() === filterLower);
+    }
+    return [...filtered].sort((a, b) => {
+      if (date) {
+        const av = Number(a?.appliedOnDate || 0);
+        const bv = Number(b?.appliedOnDate || 0);
+        const cmp = sortDir === 'asc' ? av - bv : bv - av;
+        if (cmp !== 0) return cmp;
+      }
+      const statusOrder = { 'active': 0, 'inactive': 1 };
+      const statusA = statusOrder[a.status] ?? 2;
+      const statusB = statusOrder[b.status] ?? 2;
+      if (statusA !== statusB) return statusA - statusB;
+      return a.email.localeCompare(b.email);
+    });
+  }, [rows, date, sortDir, lastAppliedByFilter]);
+
   return (
     <Layout>
       <div className="p-6 w-full">
@@ -278,7 +277,7 @@ export default function ClientJobAnalysis() {
                         title="Filter by operator"
                       >
                         <option value="">All</option>
-                        {[...new Set(rows.map(r => r.lastAppliedOperatorName).filter(Boolean))].sort().map((name) => (
+                        {uniqueOperatorNames.map((name) => (
                           <option key={name} value={name}>
                             {capitalizeOperatorName(name)}
                           </option>
@@ -325,43 +324,17 @@ export default function ClientJobAnalysis() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {[...(rows||[])]
-                  .filter((r) => {
-                    // Filter by "Last applied by" operator name
-                    if (lastAppliedByFilter) {
-                      const operatorName = (r.lastAppliedOperatorName || '').toLowerCase();
-                      const filterName = lastAppliedByFilter.toLowerCase();
-                      return operatorName === filterName;
-                    }
-                    return true;
-                  })
-                  .sort((a,b)=>{
-                  // When date is selected, sort by applied-on-date metric
-                  if (date) {
-                    const av = Number(a?.appliedOnDate || 0);
-                    const bv = Number(b?.appliedOnDate || 0);
-                    const cmp = sortDir === 'asc' ? av - bv : bv - av;
-                    if (cmp !== 0) return cmp;
-                  }
-                  const statusOrder = { 'active': 0, 'inactive': 1 };
-                  const statusA = statusOrder[a.status] ?? 2;
-                  const statusB = statusOrder[b.status] ?? 2;
-                  if (statusA !== statusB) return statusA - statusB;
-                  // Secondary sort: email alphabetically
-                  return a.email.localeCompare(b.email);
-                }).map((r, idx) => {
+                {processedRows.map((r, idx) => {
                   // Total applications = saved + applied + interviewing + offer + rejected (removed is excluded)
                   const totalApplications = (Number(r.saved||0) + Number(r.applied||0) + Number(r.interviewing||0) + Number(r.offer||0) + Number(r.rejected||0));
-                  const plan = String(r.planType || '')
-                    .trim()
-                    .toLowerCase();
+                  const plan = String(r.planType || '').trim().toLowerCase();
                   const isPrime = plan.includes('prime');
                   const isIgnite = plan.includes('ignite');
                   const isProfessional = plan.includes('professional');
                   const isExecutive = plan.includes('executive');
-                  
+
                   const planLimit = isPrime ? 160 : isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1000 : Infinity;
-                  const addonLimit = clientAddons[r.email] || 0;
+                  const addonLimit = Number(r.addonLimit || 0);
                   const referralBonus = Number(r.referralApplicationsAdded || 0);
                   const totalLimit = planLimit + addonLimit + referralBonus;
                   const exceeded = totalLimit !== Infinity && totalApplications > totalLimit;
@@ -509,14 +482,7 @@ export default function ClientJobAnalysis() {
                     </td>
                   </tr>
                 )})}
-                {rows.filter((r) => {
-                  if (lastAppliedByFilter) {
-                    const operatorName = (r.lastAppliedOperatorName || '').toLowerCase();
-                    const filterName = lastAppliedByFilter.toLowerCase();
-                    return operatorName === filterName;
-                  }
-                  return true;
-                }).length === 0 && (
+                {processedRows.length === 0 && (
                   <tr>
                     <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">
                       {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
