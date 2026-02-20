@@ -93,3 +93,15 @@ export const useOnboardingStore = create((set, get) => ({
   getJobsByStatus: (status) => get().jobs.filter((j) => j.status === status),
   clearSelected: () => set({ selectedJob: null })
 }));
+
+// ── Per-field selectors (prevent unnecessary re-renders) ──
+// Components subscribing via these only re-render when their specific slice changes.
+export const useJobs = () => useOnboardingStore((s) => s.jobs);
+export const useSelectedJob = () => useOnboardingStore((s) => s.selectedJob);
+export const useOnboardingLoading = () => useOnboardingStore((s) => s.loading);
+export const useRoles = () => useOnboardingStore((s) => s.roles);
+export const useSetJobs = () => useOnboardingStore((s) => s.setJobs);
+export const useSetSelectedJob = () => useOnboardingStore((s) => s.setSelectedJob);
+export const useSetLoading = () => useOnboardingStore((s) => s.setLoading);
+export const useSetRoles = () => useOnboardingStore((s) => s.setRoles);
+export const useClearSelected = () => useOnboardingStore((s) => s.clearSelected);

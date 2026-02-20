@@ -48,3 +48,7 @@ managerSchema.pre('findOneAndUpdate', function(next) {
 });
 
 export const ManagerModel = mongoose.model('Manager', managerSchema, 'dashboard_managers');
+
+// Indexes for frequent query patterns
+ManagerModel.collection.createIndex({ "fullName": 1, "isActive": 1 });
+ManagerModel.collection.createIndex({ "isActive": 1 });

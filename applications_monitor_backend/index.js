@@ -413,8 +413,9 @@ const getAllJobs = async (req, res) => {
 // Client management endpoints
 const getAllClients = async (req, res) => {
   try {
-    const clients = await ClientModel.find().lean();
-    // console.log(clients);
+    const clients = await ClientModel.find()
+      .select('email name clientNumber status planType planPrice jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons createdAt updatedAt')
+      .lean();
     res.status(200).json({ clients });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -629,8 +630,10 @@ export const createOrUpdateClient = async (req, res) => {
     };
 
     const existingUser = await NewUserModel.findOne({ email: emailLower });
+    const hasNameForNewUser = name !== undefined && name !== null && String(name).trim() !== '';
 
-    if (!existingUser) {
+    // Only create new user + new client when we have required fields (name). Otherwise treat as client-only update (e.g. Phase/Pause from Client Job Analysis).
+    if (!existingUser && hasNameForNewUser) {
       const newUserData = {
         ...userData,
         planType: capitalizedPlan || "Free Trial",
@@ -716,6 +719,22 @@ export const createOrUpdateClient = async (req, res) => {
       });
     }
 
+    // No existing user and no name in body → client-only update (e.g. Phase/Pause); only update ClientModel
+    if (!existingUser) {
+      const clientUpdate = { ...req.body };
+      delete clientUpdate.currentPath;
+      await ClientModel.updateOne(
+        { email: emailLower },
+        { $set: clientUpdate },
+        { runValidators: false }
+      );
+      const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
+      return res.status(200).json({
+        message: "🔄 Client fields updated successfully",
+        updatedClientsTracking,
+      });
+    }
+
     if (currentPath?.includes("/clients/new")) {
       await NewUserModel.updateOne({ email: emailLower }, { $set: userData });
       await ClientModel.updateOne(
@@ -729,20 +748,32 @@ export const createOrUpdateClient = async (req, res) => {
     }
 
     // ✅ partial update for existing client (any other path)
+    // Only set client fields on ClientModel (exclude currentPath and other non-schema keys if needed)
+    const clientUpdate = { ...req.body };
+    delete clientUpdate.currentPath;
     await ClientModel.updateOne(
       { email: emailLower },
-      { $set: req.body },
+      { $set: clientUpdate },
       { runValidators: false }
     );
-    const updateFields = { name, dashboardManager: dashboardTeamLeadName };
+    // Only update NewUserModel when we have name/dashboard/plan from the request (Phase/Pause only sends email, isPaused, onboardingPhase — no name)
+    const updateFields = {};
+    if (name !== undefined && name !== null && String(name).trim() !== '') {
+      updateFields.name = name;
+    }
+    if (dashboardManager !== undefined && dashboardManager !== null) {
+      updateFields.dashboardManager = dashboardManager;
+    }
     if (capitalizedPlan) {
       updateFields.planType = capitalizedPlan;
     }
-    await NewUserModel.updateOne(
-      { email: emailLower },
-      { $set: updateFields },
-      { runValidators: false }
-    );
+    if (Object.keys(updateFields).length > 0) {
+      await NewUserModel.updateOne(
+        { email: emailLower },
+        { $set: updateFields },
+        { runValidators: false }
+      );
+    }
     const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
 
 
@@ -1300,7 +1331,7 @@ const login = async (req, res) => {
     const { email, password, sessionKey, trustToken } = req.body;
     const emailLower = (email || '').toLowerCase();
 
-    const user = await UserModel.findOne({ email: emailLower });
+    const user = await UserModel.findOne({ email: emailLower }).lean();
     if (!user || !user.isActive) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -1373,7 +1404,7 @@ const createUser = async (req, res) => {
   try {
     const { email, password, role = 'team_lead', name, onboardingSubRole, roles, otpEmail } = req.body;
 
-    const existingUser = await UserModel.findOne({ email: email.toLowerCase() });
+    const existingUser = await UserModel.findOne({ email: email.toLowerCase() }).lean();
     if (existingUser) {
       return res.status(400).json({ error: 'User already exists' });
     }
@@ -1426,7 +1457,7 @@ const generateSessionKey = async (req, res) => {
       email: userEmail.toLowerCase(),
       role: { $in: ['team_lead', 'operations_intern', 'onboarding_team', 'csm'] },
       isActive: true
-    });
+    }).lean();
 
     if (!user) {
       return res.status(404).json({ error: 'User not found or invalid role' });
@@ -1442,7 +1473,7 @@ const generateSessionKey = async (req, res) => {
       sessionKey = `FF${timestamp}${random}`;
       attempts++;
 
-      const existingKey = await SessionKeyModel.findOne({ key: sessionKey });
+      const existingKey = await SessionKeyModel.findOne({ key: sessionKey }).lean();
       if (!existingKey) break;
 
       if (attempts >= maxAttempts) {
@@ -1475,7 +1506,7 @@ const generateSessionKey = async (req, res) => {
 // Get all users (admin only)
 const getAllUsers = async (req, res) => {
   try {
-    const users = await UserModel.find({}, { password: 0 });
+    const users = await UserModel.find({}, { password: 0 }).lean();
     res.status(200).json({ users });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1488,7 +1519,7 @@ const getUserSessionKeys = async (req, res) => {
     const { userEmail } = req.params;
     const sessionKeys = await SessionKeyModel.find({
       userEmail: userEmail.toLowerCase()
-    }).sort({ createdAt: -1 });
+    }).sort({ createdAt: -1 }).lean();
 
     res.status(200).json({ sessionKeys });
   } catch (error) {
@@ -1540,7 +1571,7 @@ const verifyCredentials = async (req, res) => {
     const user = await UserModel.findOne({
       email: email.toLowerCase(),
       isActive: true
-    });
+    }).lean();
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -1775,7 +1806,7 @@ const updateUser = async (req, res) => {
       const isValidStandard = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail);
       const isValidFlashfirehq = /^[^\s@]+@flashfirehq$/.test(newEmail);
       if (!isValidStandard && !isValidFlashfirehq) return res.status(400).json({ error: 'Invalid email format' });
-      const existing = await UserModel.findOne({ email: newEmail });
+      const existing = await UserModel.findOne({ email: newEmail }).lean();
       if (existing && existing._id.toString() !== userId) return res.status(400).json({ error: 'Email already in use' });
       user.email = newEmail;
     }
@@ -1823,7 +1854,7 @@ const changeClientPassword = async (req, res) => {
     }
 
     // Check if client exists in users collection
-    const client = await NewUserModel.findOne({ email: email.toLowerCase() });
+    const client = await NewUserModel.findOne({ email: email.toLowerCase() }).lean();
     if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
@@ -1858,7 +1889,7 @@ const deleteClient = async (req, res) => {
     const emailLower = email.toLowerCase();
 
     // Check if client exists
-    const client = await ClientModel.findOne({ email: emailLower });
+    const client = await ClientModel.findOne({ email: emailLower }).lean();
     if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
@@ -2403,102 +2434,89 @@ const getClientStatistics = async (req, res) => {
   try {
     const { email } = req.params;
     const { startDate, endDate } = req.query;
+    const opEmail = email.toLowerCase();
 
-    // Get managed users for this operator
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() });
-    if (!operation) {
-      return res.status(404).json({ error: 'Operation not found' });
+    const operation = await OperationsModel.findOne({ email: opEmail }).lean();
+    if (!operation) return res.status(404).json({ error: 'Operation not found' });
+
+    const userIds = (operation.managedUsers || []).map(id => id.toString());
+    if (!userIds.length) return res.status(200).json({ clientStats: [] });
+
+    // Batch-fetch all users + fallback clients in parallel (eliminates N+1)
+    const [users, fallbackClients] = await Promise.all([
+      NewUserModel.find({ _id: { $in: userIds } }).select('name email').lean(),
+      ClientModel.find({ userID: { $in: userIds } }).select('name email userID').lean()
+    ]);
+
+    const userMap = new Map(users.map(u => [u._id.toString(), u]));
+    const fallbackMap = new Map(fallbackClients.map(c => [c.userID, { name: c.name, email: c.email || c.userID }]));
+
+    // Resolve user details
+    const resolvedUsers = userIds.map(id => {
+      const u = userMap.get(id) || fallbackMap.get(id);
+      if (!u) return null;
+      return { email: u.email || id, name: u.name || (u.email || id).split('@')[0] };
+    }).filter(Boolean);
+
+    const userEmails = resolvedUsers.map(u => u.email);
+
+    if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+
+      // Single aggregation for all users: applied count + saved count
+      const [appliedAgg, savedAgg] = await Promise.all([
+        JobModel.aggregate([
+          { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ } } },
+          { $addFields: { _dp: { $split: [{ $trim: { input: '$appliedDate' } }, '/'] } } },
+          { $addFields: { _dt: { $dateFromParts: {
+            year: { $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } },
+            month: { $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 1, onNull: 1 } },
+            day: { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 1, onNull: 1 } }
+          }} } },
+          { $match: { _dt: { $gte: start, $lte: end } } },
+          { $group: { _id: '$userID', count: { $sum: 1 } } }
+        ]),
+        JobModel.aggregate([
+          { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: 'saved' } },
+          { $group: { _id: '$userID', count: { $sum: 1 } } }
+        ])
+      ]);
+
+      const appliedMap = new Map(appliedAgg.map(r => [r._id, r.count]));
+      const savedMap = new Map(savedAgg.map(r => [r._id, r.count]));
+
+      const clientStats = resolvedUsers.map(u => ({
+        name: u.name,
+        email: u.email,
+        appliedCount: appliedMap.get(u.email) || 0,
+        savedCount: savedMap.get(u.email) || 0
+      }));
+
+      return res.status(200).json({ clientStats });
     }
 
-    const clientStats = [];
+    // No date range: single aggregation for all users
+    const [allAgg, savedAgg] = await Promise.all([
+      JobModel.aggregate([
+        { $match: { operatorEmail: opEmail, userID: { $in: userEmails } } },
+        { $group: { _id: '$userID', count: { $sum: 1 } } }
+      ]),
+      JobModel.aggregate([
+        { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: 'saved' } },
+        { $group: { _id: '$userID', count: { $sum: 1 } } }
+      ])
+    ]);
 
-    // Get user details for managed users
-    for (const userId of operation.managedUsers || []) {
-      const userIdStr = userId.toString();
+    const allMap = new Map(allAgg.map(r => [r._id, r.count]));
+    const savedMap = new Map(savedAgg.map(r => [r._id, r.count]));
 
-      // Find user details
-      let user = await NewUserModel.findById(userIdStr);
-      if (!user) {
-        // Try ClientModel as fallback
-        const client = await ClientModel.findOne({ userID: userIdStr });
-        if (client) {
-          user = {
-            name: client.name,
-            email: client.email || userIdStr,
-            _id: userIdStr
-          };
-        }
-      }
-
-      if (user) {
-        const userEmail = user.email || userIdStr;
-        const userName = user.name || userEmail.split('@')[0];
-
-        // Count applied jobs in date range
-        let appliedQuery = {
-          operatorEmail: email.toLowerCase(),
-          userID: userEmail
-        };
-
-        if (startDate && endDate) {
-          const start = new Date(startDate);
-          const end = new Date(endDate);
-
-          // Get all jobs for this user and filter by date
-          const allJobs = await JobModel.find({
-            operatorEmail: email.toLowerCase(),
-            userID: userEmail
-          }).lean();
-
-          const appliedCount = allJobs.filter(job => {
-            if (!job.appliedDate) return false;
-
-            const jobDateParts = job.appliedDate.split('/');
-            if (jobDateParts.length !== 3) return false;
-
-            const jobDay = parseInt(jobDateParts[0]);
-            const jobMonth = parseInt(jobDateParts[1]);
-            const jobYear = parseInt(jobDateParts[2]);
-
-            const jobDate = new Date(jobYear, jobMonth - 1, jobDay);
-            return jobDate >= start && jobDate <= end;
-          }).length;
-
-          // Count total saved jobs (no date filter)
-          const savedCount = await JobModel.countDocuments({
-            operatorEmail: email.toLowerCase(),
-            userID: userEmail,
-            currentStatus: 'saved'
-          });
-
-          clientStats.push({
-            name: userName,
-            email: userEmail,
-            appliedCount,
-            savedCount
-          });
-        } else {
-          // No date range - just get total counts
-          const appliedCount = await JobModel.countDocuments({
-            operatorEmail: email.toLowerCase(),
-            userID: userEmail
-          });
-
-          const savedCount = await JobModel.countDocuments({
-            operatorEmail: email.toLowerCase(),
-            userID: userEmail,
-            currentStatus: 'saved'
-          });
-
-          clientStats.push({
-            name: userName,
-            email: userEmail,
-            appliedCount,
-            savedCount
-          });
-        }
-      }
-    }
+    const clientStats = resolvedUsers.map(u => ({
+      name: u.name,
+      email: u.email,
+      appliedCount: allMap.get(u.email) || 0,
+      savedCount: savedMap.get(u.email) || 0
+    }));
 
     res.status(200).json({ clientStats });
   } catch (error) {
@@ -3469,10 +3487,10 @@ app.post('/api/calls/status', async (req, res) => {
     // Find by Sid if available, otherwise by To number (latest)
     let log = null;
     if (CallSid) {
-      log = await CallLogModel.findOne({ twilioCallSid: CallSid });
+      log = await CallLogModel.findOne({ twilioCallSid: CallSid }).lean();
     }
     if (!log && To) {
-      log = await CallLogModel.findOne({ phoneNumber: To }).sort({ createdAt: -1 });
+      log = await CallLogModel.findOne({ phoneNumber: To }).sort({ createdAt: -1 }).lean();
     }
 
     if (log) {
@@ -3718,49 +3736,34 @@ app.post('/api/managers/:id/upload-photo', verifyToken, verifyAdmin, upload.sing
 const getManagedUsers = async (req, res) => {
   try {
     const { email } = req.params;
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() });
+    const operation = await OperationsModel.findOne({ email: email.toLowerCase() }).lean();
 
     if (!operation) {
       return res.status(404).json({ error: 'Operation not found' });
     }
 
-    // Get user details for managed users
-    const managedUsers = [];
-    for (const userId of operation.managedUsers || []) {
-      // Convert ObjectId to string if needed
-      const userIdStr = userId.toString();
+    // Batch-fetch all users + fallback clients in parallel (eliminates N+1)
+    const userIds = (operation.managedUsers || []).map(id => id.toString());
+    const [users, fallbackClients] = await Promise.all([
+      NewUserModel.find({ _id: { $in: userIds } }).select('name email company').lean(),
+      ClientModel.find({ userID: { $in: userIds } }).select('name email userID companyName').lean()
+    ]);
 
-      // First try to find in UserModel (NewUserModel)
-      const user = await NewUserModel.findById(userIdStr);
+    const userMap = new Map(users.map(u => [u._id.toString(), u]));
+    const clientMap = new Map(fallbackClients.map(c => [c.userID, c]));
+
+    const managedUsers = userIds.map(userIdStr => {
+      const user = userMap.get(userIdStr);
       if (user) {
-        managedUsers.push({
-          userID: userIdStr,
-          name: user.name || 'Unknown',
-          email: user.email || userIdStr,
-          company: user.company || 'Unknown'
-        });
-      } else {
-        // If not found in UserModel, try ClientModel
-        const client = await ClientModel.findOne({ userID: userIdStr });
-        if (client) {
-          managedUsers.push({
-            userID: userIdStr,
-            name: client.name,
-            email: client.email || userIdStr,
-            company: client.companyName || 'Unknown'
-          });
-        } else {
-          // If neither found, show the userID
-          const displayName = userIdStr.includes('@') ? userIdStr.split('@')[0] : `User ${userIdStr.substring(0, 8)}`;
-          managedUsers.push({
-            userID: userIdStr,
-            name: displayName,
-            email: userIdStr.includes('@') ? userIdStr : 'Unknown',
-            company: 'Unknown'
-          });
-        }
+        return { userID: userIdStr, name: user.name || 'Unknown', email: user.email || userIdStr, company: user.company || 'Unknown' };
       }
-    }
+      const client = clientMap.get(userIdStr);
+      if (client) {
+        return { userID: userIdStr, name: client.name, email: client.email || userIdStr, company: client.companyName || 'Unknown' };
+      }
+      const displayName = userIdStr.includes('@') ? userIdStr.split('@')[0] : `User ${userIdStr.substring(0, 8)}`;
+      return { userID: userIdStr, name: displayName, email: userIdStr.includes('@') ? userIdStr : 'Unknown', company: 'Unknown' };
+    });
 
     res.status(200).json({ managedUsers });
   } catch (error) {
@@ -3826,7 +3829,7 @@ const assignClientToOperator = async (req, res) => {
     }
 
     // Find the client by email to get their userID
-    const client = await NewUserModel.findOne({ email: clientEmail.toLowerCase() });
+    const client = await NewUserModel.findOne({ email: clientEmail.toLowerCase() }).lean();
     if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
@@ -3867,7 +3870,7 @@ const getAvailableClients = async (req, res) => {
   try {
     const { email } = req.params;
 
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() });
+    const operation = await OperationsModel.findOne({ email: email.toLowerCase() }).lean();
     if (!operation) {
       return res.status(404).json({ error: 'Operation not found' });
     }
@@ -3892,7 +3895,7 @@ const getClientDetails = async (req, res) => {
     const { email } = req.params;
 
     // Find client in dashboardtrackings collection
-    const client = await ClientModel.findOne({ email: email.toLowerCase() });
+    const client = await ClientModel.findOne({ email: email.toLowerCase() }).lean();
 
     if (!client) {
       return res.status(404).json({ error: 'Client not found in dashboardtrackings' });
@@ -4192,7 +4195,7 @@ const deleteOperationUser = async (req, res) => {
     const { email } = req.params;
 
     // Find the operation
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() });
+    const operation = await OperationsModel.findOne({ email: email.toLowerCase() }).lean();
     if (!operation) {
       return res.status(404).json({ error: 'Operation not found' });
     }
@@ -4715,7 +4718,7 @@ app.post('/api/client-todos/check-lock-period', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Client email is required' });
     }
 
-    const clientTodos = await ClientTodosModel.findOne({ clientEmail: clientEmail.toLowerCase() });
+    const clientTodos = await ClientTodosModel.findOne({ clientEmail: clientEmail.toLowerCase() }).lean();
 
     if (!clientTodos || !clientTodos.lockPeriods || clientTodos.lockPeriods.length === 0) {
       return res.status(200).json({ success: true, isLocked: false, message: null });
@@ -4786,7 +4789,7 @@ app.post('/api/client-todos/migrate-defaults', verifyToken, verifyAdmin, async (
     let skipped = 0;
 
     for (const client of allClients) {
-      const existing = await ClientTodosModel.findOne({ clientEmail: client.email.toLowerCase() });
+      const existing = await ClientTodosModel.findOne({ clientEmail: client.email.toLowerCase() }).lean();
 
       if (!existing) {
         await ClientTodosModel.create({

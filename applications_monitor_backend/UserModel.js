@@ -47,3 +47,10 @@ export const UserSchema = new mongoose.Schema({
 });
 
 export const UserModel = mongoose.model('tracking_portal_users', UserSchema);
+
+// Indexes for frequent query patterns
+UserModel.collection.createIndex({ "email": 1 }, { unique: true });
+UserModel.collection.createIndex({ "isActive": 1 });
+UserModel.collection.createIndex({ "isActive": 1, "onboardingSubRole": 1 });
+UserModel.collection.createIndex({ "lastResumeAssignedAt": 1 });
+UserModel.collection.createIndex({ "lastLinkedInAssignedAt": 1 });

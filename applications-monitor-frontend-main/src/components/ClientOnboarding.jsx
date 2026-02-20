@@ -577,9 +577,9 @@ export default function ClientOnboarding() {
   const fetchClientJobAnalysis = useCallback(async (selectedDate) => {
     try {
       const body = selectedDate ? { date: convertToDMY(selectedDate) } : {};
-      const res = await fetch(`${API_BASE}/api/analytics/client-job-analysis?t=${Date.now()}`, {
+      const res = await fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
         method: 'POST',
-        headers: AUTH_HEADERS(),
+        headers: { ...AUTH_HEADERS(), 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
       if (res.ok) {
@@ -643,9 +643,9 @@ export default function ClientOnboarding() {
     }
     try {
       const body = selectedDate ? { date: convertToDMY(selectedDate) } : {};
-      const res = await fetch(`${API_BASE}/api/analytics/client-job-analysis?t=${Date.now()}`, {
+      const res = await fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
         method: 'POST',
-        headers: AUTH_HEADERS(),
+        headers: { ...AUTH_HEADERS(), 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
       if (res.ok) {

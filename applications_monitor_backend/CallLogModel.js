@@ -33,4 +33,10 @@ const CallLogSchema = new mongoose.Schema(
 export const CallLogModel =
   mongoose.models.CallLog || mongoose.model('CallLog', CallLogSchema);
 
+// Indexes for frequent query patterns
+CallLogModel.collection.createIndex({ "status": 1 });
+CallLogModel.collection.createIndex({ "twilioCallSid": 1 });
+CallLogModel.collection.createIndex({ "phoneNumber": 1, "createdAt": -1 });
+CallLogModel.collection.createIndex({ "scheduledFor": 1, "status": 1 });
+
 
