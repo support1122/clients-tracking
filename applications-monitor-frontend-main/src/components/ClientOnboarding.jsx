@@ -225,13 +225,13 @@ const JobCard = React.memo(({
       )}
 
       <div className="flex items-center gap-2 mt-auto pt-3 border-t border-gray-50 flex-wrap">
-        {job.resumeMakerName ? (
-          <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 px-2 py-1 rounded-full border border-gray-100" title="Resume Maker">
+        {job.dashboardManagerName ? (
+          <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 px-2 py-1 rounded-full border border-gray-100" title="Dashboard Manager">
             <User className="w-3 h-3 text-primary" />
-            <span className="font-medium truncate max-w-[100px]">{job.resumeMakerName}</span>
+            <span className="font-medium truncate max-w-[100px]">{job.dashboardManagerName}</span>
           </div>
         ) : (
-          <span className="text-[10px] text-gray-400 italic">Unassigned RM</span>
+          <span className="text-[10px] text-gray-400 italic">Unassigned DM</span>
         )}
         {job.linkedInMemberName && (
           <div className="flex items-center gap-1.5 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded-full border border-purple-100" title="LinkedIn Member">
@@ -279,7 +279,7 @@ const JobCard = React.memo(({
     prevProps.job.clientName === nextProps.job.clientName &&
     prevProps.job.clientNumber === nextProps.job.clientNumber &&
     prevProps.job.status === nextProps.job.status &&
-    prevProps.job.resumeMakerName === nextProps.job.resumeMakerName &&
+    prevProps.job.dashboardManagerName === nextProps.job.dashboardManagerName &&
     prevProps.job.linkedInMemberName === nextProps.job.linkedInMemberName &&
     prevProps.job.planType === nextProps.job.planType &&
     prevProps.job.jobNumber === nextProps.job.jobNumber &&
