@@ -642,7 +642,20 @@ export const createOrUpdateClient = async (req, res) => {
         ...userData,
         planType: capitalizedPlan || "Free Trial",
       };
-      const newUser = await NewUserModel.create(newUserData);
+      let newUser;
+      try {
+        newUser = await NewUserModel.create(newUserData);
+      } catch (userErr) {
+        console.error("❌ Error creating user:", userErr);
+        // Check if it's a duplicate key error
+        if (userErr.code === 11000) {
+          return res.status(400).json({ 
+            error: `User with email ${emailLower} already exists in users collection`,
+            details: userErr.message 
+          });
+        }
+        throw userErr;
+      }
 
       let finalClientNumber;
       const CLIENT_NUMBER_FLOOR = 5809;
@@ -703,7 +716,27 @@ export const createOrUpdateClient = async (req, res) => {
         updatedAt: new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
       };
 
-      const newTracking = await ClientModel.create(fullClientData);
+      let newTracking;
+      try {
+        newTracking = await ClientModel.create(fullClientData);
+      } catch (clientErr) {
+        console.error("❌ Error creating client, rolling back user creation:", clientErr);
+        // Rollback: Delete the user that was created
+        try {
+          await NewUserModel.deleteOne({ email: emailLower });
+          console.log(`✅ Rolled back: Deleted user ${emailLower} from users collection`);
+        } catch (rollbackErr) {
+          console.error("❌ Error during rollback:", rollbackErr);
+        }
+        // Check if it's a duplicate key error
+        if (clientErr.code === 11000) {
+          return res.status(400).json({ 
+            error: `Client with email ${emailLower} already exists in dashboardtrackings collection`,
+            details: clientErr.message 
+          });
+        }
+        throw clientErr;
+      }
       try {
         await createOnboardingJobPayload({
           clientEmail: emailLower,
@@ -4140,13 +4173,87 @@ const getOperationsPerformanceReport = async (req, res) => {
         }
       },
       {
+        $addFields: {
+          _statusLower: { $toLower: { $ifNull: ['$currentStatus', ''] } },
+          _isIncompleteColumn: {
+            $or: [
+              { $regexMatch: { input: { $toLower: { $ifNull: ['$currentStatus', ''] } }, regex: 'applied' } },
+              { $regexMatch: { input: { $toLower: { $ifNull: ['$currentStatus', ''] } }, regex: 'reject' } },
+              { $regexMatch: { input: { $toLower: { $ifNull: ['$currentStatus', ''] } }, regex: 'interview' } },
+              { $regexMatch: { input: { $toLower: { $ifNull: ['$currentStatus', ''] } }, regex: 'offer' } }
+            ]
+          }
+        }
+      },
+      {
         $group: {
           _id: '$operatorEmail',
           appliedCount: { $sum: 1 },
           notDownloadedCount: {
             $sum: {
               $cond: [
-                { $ne: ['$downloaded', true] },
+                {
+                  $and: [
+                    { $ne: ['$downloaded', true] },
+                    '$_isIncompleteColumn'
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          notDownloadedApplied: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ['$downloaded', true] },
+                    { $regexMatch: { input: '$_statusLower', regex: 'applied' } }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          notDownloadedRejected: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ['$downloaded', true] },
+                    { $regexMatch: { input: '$_statusLower', regex: 'reject' } }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          notDownloadedInterviewing: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ['$downloaded', true] },
+                    { $regexMatch: { input: '$_statusLower', regex: 'interview' } }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          notDownloadedOffer: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ['$downloaded', true] },
+                    { $regexMatch: { input: '$_statusLower', regex: 'offer' } }
+                  ]
+                },
                 1,
                 0
               ]
@@ -4159,7 +4266,11 @@ const getOperationsPerformanceReport = async (req, res) => {
           _id: 0,
           operatorEmail: '$_id',
           appliedCount: 1,
-          notDownloadedCount: 1
+          notDownloadedCount: 1,
+          notDownloadedApplied: 1,
+          notDownloadedRejected: 1,
+          notDownloadedInterviewing: 1,
+          notDownloadedOffer: 1
         }
       }
     ];
@@ -4167,9 +4278,17 @@ const getOperationsPerformanceReport = async (req, res) => {
     const results = await JobModel.aggregate(pipeline).allowDiskUse(true);
     const performanceMap = {};
     const notDownloadedMap = {};
+    const notDownloadedByStatusMap = {};
     results.forEach(r => {
-      performanceMap[r.operatorEmail] = r.appliedCount;
-      notDownloadedMap[r.operatorEmail] = r.notDownloadedCount || 0;
+      const emailKey = (r.operatorEmail || '').toLowerCase();
+      performanceMap[emailKey] = r.appliedCount;
+      notDownloadedMap[emailKey] = r.notDownloadedCount || 0;
+      notDownloadedByStatusMap[emailKey] = {
+        applied: r.notDownloadedApplied || 0,
+        rejected: r.notDownloadedRejected || 0,
+        interviewing: r.notDownloadedInterviewing || 0,
+        offer: r.notDownloadedOffer || 0
+      };
     });
 
     const performanceData = allOperations.map(op => {
@@ -4178,7 +4297,8 @@ const getOperationsPerformanceReport = async (req, res) => {
         email: op.email,
         name: op.name || op.email.split('@')[0],
         appliedCount: performanceMap[emailLower] || 0,
-        notDownloadedCount: notDownloadedMap[emailLower] || 0
+        notDownloadedCount: notDownloadedMap[emailLower] || 0,
+        notDownloadedByStatus: notDownloadedByStatusMap[emailLower] || { applied: 0, rejected: 0, interviewing: 0, offer: 0 }
       };
     }).sort((a, b) => b.appliedCount - a.appliedCount);
 
@@ -4191,7 +4311,8 @@ const getOperationsPerformanceReport = async (req, res) => {
       totalApplied,
       operators: performanceData,
       performanceMap,
-      notDownloadedMap
+      notDownloadedMap,
+      notDownloadedByStatusMap
     });
   } catch (error) {
     console.error('Error in getOperationsPerformanceReport:', error);
