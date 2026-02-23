@@ -467,10 +467,12 @@ export default function ClientDashboard() {
 
     setUpgrading(true);
     try {
+      const token = localStorage.getItem('authToken');
       const response = await fetch(`${API_BASE}/api/clients/${clientDetails.email}/upgrade-plan`, {
         method: 'PUT',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           planType: selectedPlan
@@ -503,10 +505,12 @@ export default function ClientDashboard() {
       const addonPrices = { '250': 120, '500': 200, '1000': 350 };
       const addonPrice = addonPrices[selectedAddon] || 0;
 
+      const token = localStorage.getItem('authToken');
       const response = await fetch(`${API_BASE}/api/clients/${clientDetails.email}/add-addon`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           addonType: selectedAddon,
