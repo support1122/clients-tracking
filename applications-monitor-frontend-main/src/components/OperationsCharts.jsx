@@ -504,4 +504,3 @@ export function PerformanceRadarChart({ operations, operationsPerformance }) {
     </div>
   );
 }
-
