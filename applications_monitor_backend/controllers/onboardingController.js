@@ -448,10 +448,13 @@ export async function patchOnboardingJob(req, res) {
         // Send email notifications to tagged users (fire-and-forget)
         cleanTaggedEmails.forEach((userEmail, i) => {
           const taggedUser = taggedUserMap.get(userEmail);
+          if (!taggedUser) {
+            console.warn(`[Tagged] User ${userEmail} not found in tracking_portal_users — sending to primary email`);
+          }
           const toEmail = (taggedUser?.otpEmail || '').trim() || userEmail;
           const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) ? comment.taggedNames[i] : null;
           const emailType = taggedUser?.otpEmail ? 'otpEmail' : 'primary';
-          console.log(`[Tagged] ${authorName} tagged ${userEmail} in job #${job.jobNumber} -> sending email to ${toEmail} (${emailType})`);
+          console.log(`[Tagged] ${authorName} tagged ${userEmail} in job #${job.jobNumber} -> sending to ${toEmail} (${emailType})`);
           sendTagNotificationEmail({
             toEmail,
             recipientName: recipientName || taggedUser?.name,
@@ -692,6 +695,158 @@ export async function resolveOnboardingComment(req, res) {
   } catch (e) {
     console.error('resolveOnboardingComment:', e);
     res.status(500).json({ error: e.message || 'Failed to mark as resolved' });
+  }
+}
+
+/**
+ * GET /api/onboarding/issues/non-resolved
+ * Returns count and list of non-resolved tagged issues for the current user, or for all (admin view).
+ * - For non-admin: comments where the user is in taggedUserIds but not in resolvedByTagged.
+ * - For admin (query ?admin=1): all comments that have at least one tagged user who hasn't resolved.
+ */
+export async function getNonResolvedIssues(req, res) {
+  try {
+    const userEmail = (req.user?.email || '').toLowerCase().trim();
+    if (!userEmail) return res.status(401).json({ error: 'Unauthorized' });
+
+    const isAdmin = req.user?.role === 'admin';
+    const forAdmin = isAdmin && (req.query?.admin === '1' || req.query?.admin === 'true');
+
+    if (forAdmin) {
+      // Admin view: all comments with at least one tagged user who has not resolved
+      const pipeline = [
+        { $match: { 'comments.0': { $exists: true } } },
+        { $unwind: '$comments' },
+        { $match: { $expr: { $gt: [{ $size: { $ifNull: ['$comments.taggedUserIds', []] } }, 0] } } },
+        {
+          $addFields: {
+            resolvedEmails: {
+              $map: {
+                input: { $ifNull: ['$comments.resolvedByTagged', []] },
+                as: 'r',
+                in: { $toLower: '$$r.email' }
+              }
+            },
+            taggedEmails: { $map: { input: { $ifNull: ['$comments.taggedUserIds', []] }, as: 't', in: { $toLower: '$$t' } } }
+          }
+        },
+        {
+          $addFields: {
+            unresolvedTagged: {
+              $filter: {
+                input: '$taggedEmails',
+                as: 'e',
+                cond: { $not: { $in: ['$$e', '$resolvedEmails'] } }
+              }
+            }
+          }
+        },
+        { $match: { $expr: { $gt: [{ $size: '$unresolvedTagged' }, 0] } } },
+        {
+          $project: {
+            jobId: '$_id',
+            jobNumber: 1,
+            clientName: 1,
+            clientNumber: 1,
+            commentId: '$comments._id',
+            snippet: { $substr: [{ $ifNull: ['$comments.body', ''] }, 0, 120] },
+            createdAt: '$comments.createdAt',
+            authorName: '$comments.authorName',
+            unresolvedCount: { $size: '$unresolvedTagged' },
+            unresolvedEmails: '$unresolvedTagged'
+          }
+        },
+        {
+          $facet: {
+            items: [{ $sort: { createdAt: -1 } }, { $limit: 100 }],
+            totalCount: [{ $count: 'count' }]
+          }
+        },
+        { $addFields: { count: { $ifNull: [{ $arrayElemAt: ['$totalCount.count', 0] }, 0] } } },
+        { $project: { items: 1, count: 1 } }
+      ];
+      const result = await OnboardingJobModel.aggregate(pipeline).then((r) => r[0] || { items: [], count: 0 });
+      const items = (result.items || []).map((it) => ({
+        jobId: it.jobId,
+        jobNumber: it.jobNumber,
+        clientName: it.clientName,
+        clientNumber: it.clientNumber,
+        commentId: it.commentId,
+        snippet: it.snippet,
+        createdAt: it.createdAt,
+        authorName: it.authorName,
+        unresolvedCount: it.unresolvedCount,
+        unresolvedEmails: it.unresolvedEmails || []
+      }));
+
+      // Build per-user summary for admin view
+      const userCounts = {};
+      items.forEach(it => {
+        (it.unresolvedEmails || []).forEach(email => {
+          userCounts[email] = (userCounts[email] || 0) + 1;
+        });
+      });
+      const perUser = Object.entries(userCounts)
+        .map(([email, count]) => ({ email, count }))
+        .sort((a, b) => b.count - a.count);
+
+      return res.status(200).json({ count: result.count || 0, items, perUser });
+    }
+
+    // Current user's non-resolved (tagged but not resolved by me)
+    const pipeline = [
+      { $match: { 'comments.0': { $exists: true } } },
+      { $unwind: '$comments' },
+      { $match: { 'comments.taggedUserIds': userEmail } },
+      {
+        $addFields: {
+          resolvedEmails: {
+            $map: {
+              input: { $ifNull: ['$comments.resolvedByTagged', []] },
+              as: 'r',
+              in: { $toLower: '$$r.email' }
+            }
+          }
+        }
+      },
+      { $addFields: { userResolved: { $in: [userEmail, '$resolvedEmails'] } } },
+      { $match: { userResolved: false } },
+      {
+        $project: {
+          jobId: '$_id',
+          jobNumber: 1,
+          clientName: 1,
+          clientNumber: 1,
+          commentId: '$comments._id',
+          snippet: { $substr: [{ $ifNull: ['$comments.body', ''] }, 0, 120] },
+          createdAt: '$comments.createdAt',
+          authorName: '$comments.authorName'
+        }
+      },
+      {
+        $facet: {
+          items: [{ $sort: { createdAt: -1 } }, { $limit: 100 }],
+          totalCount: [{ $count: 'count' }]
+        }
+      },
+      { $addFields: { count: { $ifNull: [{ $arrayElemAt: ['$totalCount.count', 0] }, 0] } } },
+      { $project: { items: 1, count: 1 } }
+    ];
+    const result = await OnboardingJobModel.aggregate(pipeline).then((r) => r[0] || { items: [], count: 0 });
+    const items = (result.items || []).map((it) => ({
+      jobId: it.jobId,
+      jobNumber: it.jobNumber,
+      clientName: it.clientName,
+      clientNumber: it.clientNumber,
+      commentId: it.commentId,
+      snippet: it.snippet,
+      createdAt: it.createdAt,
+      authorName: it.authorName
+    }));
+    res.status(200).json({ count: result.count || 0, items });
+  } catch (e) {
+    console.error('getNonResolvedIssues:', e);
+    res.status(500).json({ error: e.message || 'Failed to get non-resolved issues' });
   }
 }
 

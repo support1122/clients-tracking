@@ -46,7 +46,8 @@ import {
   postOnboardingJobAttachment,
   getOnboardingNotifications,
   markOnboardingNotificationRead,
-  markAdminRead
+  markAdminRead,
+  getNonResolvedIssues
 } from './controllers/onboardingController.js';
 import { ClientCounterModel } from './ClientCounterModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
@@ -3665,6 +3666,7 @@ app.get('/api/managers/names', getDashboardManagerNames);
 
 app.get('/api/onboarding/jobs', verifyToken, listOnboardingJobs);
 app.get('/api/onboarding/jobs/roles', verifyToken, getOnboardingRoles);
+app.get('/api/onboarding/issues/non-resolved', verifyToken, getNonResolvedIssues);
 app.get('/api/onboarding/next-resume-maker', verifyToken, getNextResumeMakerApi);
 app.get('/api/onboarding/notifications', verifyToken, getOnboardingNotifications);
 app.patch('/api/onboarding/notifications/:id/read', verifyToken, markOnboardingNotificationRead);

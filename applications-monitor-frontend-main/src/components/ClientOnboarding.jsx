@@ -310,7 +310,9 @@ export default function ClientOnboarding() {
       return {};
     }
   });
-  const [commentText, setCommentText] = useState('');
+  const commentTextRef = useRef('');
+  const [commentHasContent, setCommentHasContent] = useState(false);
+  const [commentHasTags, setCommentHasTags] = useState(false);
   const [movingStatus, setMovingStatus] = useState(null);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const [assigningCsm, setAssigningCsm] = useState(false);
@@ -330,6 +332,9 @@ export default function ClientOnboarding() {
   const [clientsLoading, setClientsLoading] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
+  const [nonResolvedIssues, setNonResolvedIssues] = useState({ count: 0, items: [], perUser: [] });
+  const [showIssuesPanel, setShowIssuesPanel] = useState(false);
+  const [issuesFilterUser, setIssuesFilterUser] = useState(null);
   const [mentionSuggestions, setMentionSuggestions] = useState([]);
   const [draggedJobId, setDraggedJobId] = useState(null);
   const [dragOverStatus, setDragOverStatus] = useState(null);
@@ -563,6 +568,20 @@ export default function ClientOnboarding() {
     } catch (_) { }
   }, []);
 
+  const fetchNonResolvedIssues = useCallback(async () => {
+    try {
+      const isAdminUser = user?.role === 'admin';
+      const url = isAdminUser
+        ? `${API_BASE}/api/onboarding/issues/non-resolved?admin=1`
+        : `${API_BASE}/api/onboarding/issues/non-resolved`;
+      const res = await fetch(url, { headers: AUTH_HEADERS() });
+      if (res.ok) {
+        const data = await res.json();
+        setNonResolvedIssues({ count: data.count ?? 0, items: data.items ?? [], perUser: data.perUser ?? [] });
+      }
+    } catch (_) { }
+  }, [user?.role]);
+
   // Convert date from YYYY-MM-DD to D/M/YYYY format
   const convertToDMY = useCallback((iso) => {
     if (!iso) return '';
@@ -709,7 +728,8 @@ export default function ClientOnboarding() {
 
   useEffect(() => {
     fetchNotifications();
-  }, [fetchNotifications]);
+    fetchNonResolvedIssues();
+  }, [fetchNotifications, fetchNonResolvedIssues]);
 
   useEffect(() => {
     if (!selectedJob?._id) return;
@@ -769,7 +789,10 @@ export default function ClientOnboarding() {
       e.stopPropagation();
     }
     // Clear comment text
-    setCommentText('');
+    commentTextRef.current = '';
+    setCommentHasContent(false);
+    setCommentHasTags(false);
+    if (commentInputRef.current) commentInputRef.current.innerHTML = '';
     // Clear move options dropdown
     setShowMoveOptions(false);
     // Clear client profile
@@ -789,14 +812,7 @@ export default function ClientOnboarding() {
     clearSelected();
     // Also set directly to ensure it's cleared immediately
     setSelectedJob(null);
-  }, [setSelectedJob, clearSelected, setCommentText]);
-
-  // Sync contenteditable content with commentText when it's cleared externally
-  useEffect(() => {
-    if (!commentText && commentInputRef.current) {
-      commentInputRef.current.innerHTML = '';
-    }
-  }, [commentText]);
+  }, [setSelectedJob, clearSelected]);
 
   // Initialize Gmail credentials when job is selected
   useEffect(() => {
@@ -1158,43 +1174,36 @@ export default function ClientOnboarding() {
   const handleCommentChange = (e) => {
     const element = e.target;
     const text = extractTextFromContentEditable(element);
-    setCommentText(text);
-    
+    commentTextRef.current = text;
+    // Only boolean state updates — React skips re-render when value unchanged
+    setCommentHasContent(text.trim().length > 0);
+    setCommentHasTags(/@[\w.-]+/.test(text));
+
     // Get cursor position
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) {
       setShowMentionDropdown(false);
       return;
     }
-    
+
     const range = selection.getRangeAt(0);
-    
+
     // Get text before cursor
     const textBeforeRange = range.cloneRange();
     textBeforeRange.setStart(element, 0);
     textBeforeRange.setEnd(range.startContainer, range.startOffset);
     const textBefore = textBeforeRange.toString();
-    
+
     const atIndex = textBefore.lastIndexOf('@');
-    const whitespacePattern = new RegExp('\\s');
-    if (atIndex === -1 || whitespacePattern.test(textBefore.slice(atIndex + 1))) {
+    if (atIndex === -1 || /\s/.test(textBefore.slice(atIndex + 1))) {
       setShowMentionDropdown(false);
-      // Still render existing mentions even if dropdown is closed
-      const mentionPattern = new RegExp('@[\\w.-]+');
-      const hasMentions = mentionPattern.test(text);
-      if (hasMentions) {
-        const htmlContent = renderTextWithMentions(text, effectiveMentionableUsers);
-        if (element.innerHTML !== htmlContent) {
-          element.innerHTML = htmlContent;
-        }
-      }
       return;
     }
-    
+
     const filter = textBefore.slice(atIndex + 1).toLowerCase();
     mentionStartRef.current = atIndex;
     mentionEndRef.current = textBefore.length;
-    
+
     const list = effectiveMentionableUsers.filter(
       (u) =>
         (u.name && String(u.name).toLowerCase().includes(filter)) ||
@@ -1203,136 +1212,52 @@ export default function ClientOnboarding() {
     );
     setMentionSuggestions(list);
     setShowMentionDropdown(list.length > 0);
-    
-    // Only render mentions that are NOT currently being typed
-    // Exclude the text from @ to cursor position from mention rendering
-    const mentionPattern = new RegExp('@[\\w.-]+');
-    const hasMentions = mentionPattern.test(text);
-    if (hasMentions) {
-      // Save cursor position
-      const cursorOffset = textBefore.length;
-      // Render mentions but exclude the currently typing part (from @ to cursor)
-      const htmlContent = renderTextWithMentions(text, effectiveMentionableUsers, atIndex, cursorOffset);
-      
-      // Only update if content actually changed
-      if (element.innerHTML !== htmlContent) {
-        element.innerHTML = htmlContent;
-        
-        // Restore cursor position
-        setTimeout(() => {
-          try {
-            const newSelection = window.getSelection();
-            const newRange = document.createRange();
-            
-            // Find text node at cursor position
-            const walker = document.createTreeWalker(
-              element,
-              NodeFilter.SHOW_TEXT,
-              null
-            );
-            
-            let charCount = 0;
-            let textNode = null;
-            let offset = 0;
-            
-            while (walker.nextNode()) {
-              const node = walker.currentNode;
-              const nodeLength = node.textContent.length;
-              if (charCount + nodeLength >= cursorOffset) {
-                textNode = node;
-                offset = cursorOffset - charCount;
-                break;
-              }
-              charCount += nodeLength;
-            }
-            
-            if (textNode) {
-              offset = Math.min(offset, textNode.textContent.length);
-              newRange.setStart(textNode, offset);
-              newRange.setEnd(textNode, offset);
-              newSelection.removeAllRanges();
-              newSelection.addRange(newRange);
-            }
-          } catch (err) {
-            // Fallback: just focus
-            element.focus();
-          }
-        }, 0);
-      }
-    }
   };
 
   const handleSelectMention = (user) => {
     const element = commentInputRef.current;
     if (!element) return;
-    
-    const displayName = user.name || user.email || '';
-    const mentionText = '@' + displayName + ' ';
-    
+
+    // Use email prefix for the text (reliable for parseMentions); chip renders display name
+    const emailPrefix = (user.email || '').split('@')[0] || user.name || '';
+    const mentionText = '@' + emailPrefix + ' ';
+
     // Get current text
     const currentText = extractTextFromContentEditable(element);
     const start = mentionStartRef.current;
     const end = mentionEndRef.current;
-    
+
     // Insert mention
     const newText = currentText.slice(0, start) + mentionText + currentText.slice(end);
-    setCommentText(newText);
-    
-    // Render with mention chips (no exclusion since mention is now complete)
+    commentTextRef.current = newText;
+    setCommentHasContent(true);
+    setCommentHasTags(true);
+
+    // Render with mention chips
     const htmlContent = renderTextWithMentions(newText, effectiveMentionableUsers);
     element.innerHTML = htmlContent;
-    
+
     setShowMentionDropdown(false);
-    
-    // Set cursor after the mention
+
+    // Set cursor after the mention chip
     setTimeout(() => {
       element.focus();
-      const selection = window.getSelection();
-      const range = document.createRange();
-      
-      // Find the position after the mention
-      const walker = document.createTreeWalker(
-        element,
-        NodeFilter.SHOW_TEXT,
-        null
-      );
-      
-      let charCount = 0;
-      const targetPos = start + mentionText.length;
-      let textNode = null;
-      let offset = 0;
-      
-      while (walker.nextNode()) {
-        const node = walker.currentNode;
-        const nodeLength = node.textContent.length;
-        if (charCount + nodeLength >= targetPos) {
-          textNode = node;
-          offset = targetPos - charCount;
-          break;
-        }
-        charCount += nodeLength;
-      }
-      
-      if (textNode) {
-        range.setStart(textNode, Math.min(offset, textNode.textContent.length));
-        range.setEnd(textNode, Math.min(offset, textNode.textContent.length));
-        selection.removeAllRanges();
-        selection.addRange(range);
-      } else {
-        // Fallback: move cursor to end
-        range.selectNodeContents(element);
-        range.collapse(false);
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
+      const sel = window.getSelection();
+      const r = document.createRange();
+      // Place cursor at the end of the content
+      r.selectNodeContents(element);
+      r.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(r);
     }, 0);
   };
 
   const handleAddComment = async () => {
-    const hasText = commentText.trim().length > 0;
+    const text = commentTextRef.current;
+    const hasText = text.trim().length > 0;
     const hasImages = commentImages.length > 0;
     if (!selectedJob || (!hasText && !hasImages) || addingComment) return;
-    const { taggedUserIds, taggedNames } = parseMentions(commentText, effectiveMentionableUsers);
+    const { taggedUserIds, taggedNames } = parseMentions(text, effectiveMentionableUsers);
     setAddingComment(true);
     try {
       const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, {
@@ -1340,7 +1265,7 @@ export default function ClientOnboarding() {
         headers: AUTH_HEADERS(),
         body: JSON.stringify({
           comment: {
-            body: commentText.trim() || '(image)',
+            body: text.trim() || '(image)',
             taggedUserIds,
             taggedNames,
             images: commentImages
@@ -1351,7 +1276,9 @@ export default function ClientOnboarding() {
       const data = await res.json();
       setSelectedJob(data.job);
       setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
-      setCommentText('');
+      commentTextRef.current = '';
+      setCommentHasContent(false);
+      setCommentHasTags(false);
       setCommentImages([]);
       if (commentInputRef.current) {
         commentInputRef.current.innerHTML = '';
@@ -1361,6 +1288,7 @@ export default function ClientOnboarding() {
       } else {
         toastUtils.success('Comment added');
       }
+      fetchNonResolvedIssues();
     } catch (e) {
       toastUtils.error(e.message || 'Failed to add comment');
     } finally {
@@ -1368,31 +1296,23 @@ export default function ClientOnboarding() {
     }
   };
 
-  const handleCommentImageSelect = async (e) => {
-    const files = e?.target?.files;
-    if (!files?.length) return;
+  // Shared image upload helper (used by file picker + Ctrl+V paste)
+  const uploadCommentImages = async (fileList) => {
+    const imageFiles = Array.from(fileList).filter(f => f.type.startsWith('image/'));
+    if (!imageFiles.length) return;
     const base = (API_BASE || '').replace(/\/$/, '');
-    if (!base) {
-      toastUtils.error('API URL not configured.');
-      return;
-    }
+    if (!base) { toastUtils.error('API URL not configured.'); return; }
     const maxImages = 5;
     const current = commentImages.length;
-    const toAdd = Math.min(maxImages - current, files.length);
-    if (toAdd <= 0) {
-      toastUtils.error(`Maximum ${maxImages} images per comment.`);
-      e.target.value = '';
-      return;
-    }
+    const toAdd = Math.min(maxImages - current, imageFiles.length);
+    if (toAdd <= 0) { toastUtils.error(`Maximum ${maxImages} images per comment.`); return; }
     setUploadingCommentImage(true);
     try {
       const token = localStorage.getItem('authToken') || '';
       const added = [];
       for (let i = 0; i < toAdd; i++) {
-        const file = files[i];
-        if (!file.type.startsWith('image/')) continue;
         const form = new FormData();
-        form.append('file', file);
+        form.append('file', imageFiles[i]);
         const uploadRes = await fetch(`${base}/api/upload/onboarding-attachment`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}` },
@@ -1403,15 +1323,21 @@ export default function ClientOnboarding() {
           toastUtils.error(uploadData.message || 'Image upload failed');
           break;
         }
-        added.push({ url: uploadData.url, filename: uploadData.filename || file.name });
+        added.push({ url: uploadData.url, filename: uploadData.filename || imageFiles[i].name });
       }
       if (added.length) setCommentImages((prev) => [...prev, ...added]);
     } catch (err) {
       toastUtils.error(err?.message || 'Upload failed');
     } finally {
       setUploadingCommentImage(false);
-      e.target.value = '';
     }
+  };
+
+  const handleCommentImageSelect = async (e) => {
+    const files = e?.target?.files;
+    if (!files?.length) return;
+    await uploadCommentImages(files);
+    e.target.value = '';
   };
 
   const handleRemoveCommentImage = (index) => {
@@ -1431,6 +1357,7 @@ export default function ClientOnboarding() {
       setSelectedJob(data.job);
       setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
       toastUtils.success('Marked as resolved');
+      fetchNonResolvedIssues();
     } catch (e) {
       toastUtils.error(e.message || 'Failed to mark as resolved');
     } finally {
@@ -1596,12 +1523,15 @@ export default function ClientOnboarding() {
     match.forEach((atTag) => {
       const handle = (atTag || '').slice(1).trim().toLowerCase();
       if (!handle) return;
-      const user = list.find(
-        (u) =>
-          (u.name && String(u.name).toLowerCase().includes(handle)) ||
-          (u.email && String(u.email).toLowerCase().startsWith(handle)) ||
-          (u.email && String(u.email).toLowerCase().split('@')[0].includes(handle))
-      );
+      // Exact email-prefix match first (from extractTextFromContentEditable chips),
+      // then fallback to name/partial match for manually typed mentions
+      const user =
+        list.find((u) => u.email && String(u.email).toLowerCase().split('@')[0] === handle) ||
+        list.find(
+          (u) =>
+            (u.name && String(u.name).toLowerCase() === handle) ||
+            (u.email && String(u.email).toLowerCase().startsWith(handle))
+        );
       if (user && user.email && !seen.has(user.email.toLowerCase())) {
         seen.add(user.email.toLowerCase());
         taggedUserIds.push(user.email);
@@ -1614,26 +1544,29 @@ export default function ClientOnboarding() {
   // Extract plain text from contenteditable div (removes HTML tags)
   const extractTextFromContentEditable = (element) => {
     if (!element) return '';
-    // Clone the element to avoid modifying the original
     const clone = element.cloneNode(true);
-    // Replace mention chips with their text content
+    // Replace mention chips with @emailPrefix for reliable mention parsing
     const chips = clone.querySelectorAll('[data-mention-chip]');
     chips.forEach((chip) => {
-      const text = chip.textContent || '';
-      chip.replaceWith(document.createTextNode(text));
+      const email = chip.getAttribute('data-mention-email');
+      // Use email prefix (e.g. @john.doe) so parseMentions resolves reliably
+      const replacement = email ? `@${email.split('@')[0]} ` : (chip.textContent || '');
+      chip.replaceWith(document.createTextNode(replacement));
     });
     return clone.textContent || clone.innerText || '';
   };
 
-  // Find mention in mentionableUsers list
+  // Find mention in mentionableUsers list (exact email prefix first, then fallback)
   const findMentionUser = (mentionText, mentionableUsers) => {
     const handle = mentionText.replace('@', '').trim().toLowerCase();
     if (!handle) return null;
-    return mentionableUsers.find(
-      (u) =>
-        (u.name && String(u.name).toLowerCase() === handle) ||
-        (u.email && String(u.email).toLowerCase().startsWith(handle)) ||
-        (u.email && String(u.email).toLowerCase().split('@')[0] === handle)
+    return (
+      mentionableUsers.find((u) => u.email && String(u.email).toLowerCase().split('@')[0] === handle) ||
+      mentionableUsers.find(
+        (u) =>
+          (u.name && String(u.name).toLowerCase() === handle) ||
+          (u.email && String(u.email).toLowerCase().startsWith(handle))
+      )
     );
   };
 
@@ -1939,7 +1872,8 @@ export default function ClientOnboarding() {
               >
                 <Bell className="w-6 h-6" />
                 {unreadNotifications.length > 0 && (
-                  <span className="absolute top-2 right-2.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-primary ring-2 ring-white">
+                  <span className="absolute -top-0.5 -right-0.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold px-1 ring-2 ring-white">
+                    {unreadNotifications.length > 99 ? '99+' : unreadNotifications.length}
                   </span>
                 )}
               </button>
@@ -1995,6 +1929,150 @@ export default function ClientOnboarding() {
                         <button disabled={notificationPage >= Math.ceil(notifications.length / notificationsPerPage)} onClick={() => setNotificationPage(p => p + 1)} className="text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-600 disabled:opacity-50 hover:bg-gray-50">Next</button>
                       </div>
                     )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Unresolved issues (tagged) — count + popup, navigates to job on click */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowIssuesPanel((v) => !v)}
+                className="relative flex items-center gap-2 px-3 py-2.5 rounded-xl text-gray-600 hover:bg-gray-100 hover:text-gray-900 border border-gray-200 bg-white text-sm font-medium transition-all focus:outline-none"
+                title={isAdmin ? 'Unresolved tagged issues across all clients' : 'My unresolved tagged issues'}
+              >
+                <AlertCircle className="w-5 h-5 text-amber-500" />
+                <span className="hidden sm:inline">Unresolved</span>
+                {nonResolvedIssues.count > 0 && (
+                  <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold px-1.5">
+                    {nonResolvedIssues.count > 99 ? '99+' : nonResolvedIssues.count}
+                  </span>
+                )}
+              </button>
+
+              {showIssuesPanel && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => { setShowIssuesPanel(false); setIssuesFilterUser(null); }} aria-hidden="true" />
+                  <div className="absolute right-0 top-full z-50 mt-4 w-[420px] rounded-2xl bg-white border border-gray-100 shadow-2xl ring-1 ring-black/5 max-h-[70vh] overflow-hidden flex flex-col">
+                    <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                      <h3 className="font-semibold text-gray-900">
+                        {isAdmin ? 'Unresolved tagged issues' : 'My unresolved issues'}
+                        {nonResolvedIssues.count > 0 && <span className="ml-2 text-xs text-amber-600 font-bold">({nonResolvedIssues.count})</span>}
+                      </h3>
+                      <button type="button" onClick={() => { setShowIssuesPanel(false); setIssuesFilterUser(null); }} className="text-gray-400 hover:text-gray-600 transition-colors">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Admin per-user breakdown */}
+                    {isAdmin && nonResolvedIssues.perUser?.length > 0 && (
+                      <div className="px-4 py-3 border-b border-gray-100 bg-amber-50/30">
+                        <p className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold mb-2">Per team member</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {nonResolvedIssues.perUser.map((u) => {
+                            const emailPrefix = (u.email || '').split('@')[0];
+                            const isActive = issuesFilterUser === u.email;
+                            return (
+                              <button
+                                key={u.email}
+                                type="button"
+                                onClick={() => setIssuesFilterUser(isActive ? null : u.email)}
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all border ${
+                                  isActive
+                                    ? 'bg-amber-500 text-white border-amber-500 shadow-sm'
+                                    : 'bg-white text-gray-700 border-gray-200 hover:border-amber-300 hover:bg-amber-50'
+                                }`}
+                              >
+                                <span className="w-4 h-4 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 text-[9px] font-bold flex-shrink-0">
+                                  {(emailPrefix[0] || 'U').toUpperCase()}
+                                </span>
+                                <span className="truncate max-w-[100px]">{emailPrefix}</span>
+                                <span className={`flex h-4 min-w-[16px] items-center justify-center rounded-full text-[10px] font-bold px-1 ${
+                                  isActive ? 'bg-white/30 text-white' : 'bg-amber-100 text-amber-700'
+                                }`}>
+                                  {u.count}
+                                </span>
+                              </button>
+                            );
+                          })}
+                          {issuesFilterUser && (
+                            <button
+                              type="button"
+                              onClick={() => setIssuesFilterUser(null)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                            >
+                              <X className="w-3 h-3" /> Clear
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    <ul className="overflow-y-auto p-2 flex-1 space-y-1">
+                      {nonResolvedIssues.items.length === 0 ? (
+                        <li className="py-12 text-center">
+                          <div className="mx-auto w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mb-3">
+                            <CheckCircle className="w-6 h-6 text-green-400" />
+                          </div>
+                          <p className="text-sm text-gray-500 font-medium">No unresolved issues</p>
+                        </li>
+                      ) : (
+                        nonResolvedIssues.items
+                          .filter(item => !issuesFilterUser || (item.unresolvedEmails || []).includes(issuesFilterUser))
+                          .map((item, idx) => {
+                          const job = jobs.find((j) => String(j._id) === String(item.jobId));
+                          const displayName = item.clientNumber != null ? `${item.clientNumber} – ${item.clientName || ''}` : (item.clientName || '');
+                          return (
+                            <li key={item.commentId?.toString() || idx}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (job) {
+                                    handleCardClick(job);
+                                    setShowIssuesPanel(false);
+                                    setIssuesFilterUser(null);
+                                  } else {
+                                    fetchJobs().then(() => {
+                                      const state = useOnboardingStore.getState();
+                                      const found = (state.jobs || []).find((j) => String(j._id) === String(item.jobId));
+                                      if (found) handleCardClick(found);
+                                    });
+                                    setShowIssuesPanel(false);
+                                    setIssuesFilterUser(null);
+                                  }
+                                }}
+                                className="w-full text-left px-4 py-3 rounded-xl text-sm transition-all flex gap-3 hover:bg-amber-50/50 group"
+                              >
+                                <div className="mt-1 w-2 h-2 rounded-full flex-shrink-0 bg-amber-500" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-gray-900 font-medium leading-snug">
+                                    <span className="font-bold">#{item.jobNumber}</span> – {displayName}
+                                  </p>
+                                  {item.snippet && (
+                                    <p className="text-xs text-gray-500 mt-1 truncate">"{item.snippet}"</p>
+                                  )}
+                                  {isAdmin && item.unresolvedEmails?.length > 0 && (
+                                    <div className="flex flex-wrap gap-1 mt-1.5">
+                                      {item.unresolvedEmails.map(email => (
+                                        <span key={email} className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-medium">
+                                          {email.split('@')[0]}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <p className="text-[10px] text-gray-400 mt-1.5 font-medium">
+                                    {item.authorName && <span className="text-gray-500">{item.authorName} · </span>}
+                                    {item.createdAt ? `${new Date(item.createdAt).toLocaleDateString()} at ${new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                                  </p>
+                                </div>
+                                <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-primary flex-shrink-0" />
+                              </button>
+                            </li>
+                          );
+                        })
+                      )}
+                    </ul>
                   </div>
                 </>
               )}
@@ -2920,6 +2998,17 @@ export default function ClientOnboarding() {
                         contentEditable
                         onInput={handleCommentChange}
                         onPaste={(e) => {
+                          // Handle pasted images (Ctrl+V screenshot / copied image)
+                          const clipboardFiles = e.clipboardData?.files;
+                          if (clipboardFiles?.length > 0) {
+                            const hasImages = Array.from(clipboardFiles).some(f => f.type.startsWith('image/'));
+                            if (hasImages) {
+                              e.preventDefault();
+                              uploadCommentImages(clipboardFiles);
+                              return;
+                            }
+                          }
+                          // Plain text paste
                           e.preventDefault();
                           const text = e.clipboardData.getData('text/plain');
                           const selection = window.getSelection();
@@ -2932,13 +3021,12 @@ export default function ClientOnboarding() {
                             range.collapse(true);
                             selection.removeAllRanges();
                             selection.addRange(range);
-                            // Trigger input event to update state
                             const event = new Event('input', { bubbles: true });
                             e.target.dispatchEvent(event);
                           }
                         }}
                         data-placeholder="Write a comment... (Type @ to mention someone)"
-                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pr-24 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all min-h-[60px] max-h-[120px] shadow-sm overflow-y-auto"
+                        className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 pr-[8rem] text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all min-h-[60px] max-h-[120px] shadow-sm overflow-y-auto"
                         style={{
                           whiteSpace: 'pre-wrap',
                           wordBreak: 'break-word'
@@ -3002,10 +3090,7 @@ export default function ClientOnboarding() {
 
                       {/* Move icon button - only show when someone is tagged */}
                       {(() => {
-                        const { taggedUserIds } = parseMentions(commentText, effectiveMentionableUsers);
-                        const hasTags = taggedUserIds.length > 0;
-
-                        if (!hasTags || !selectedJob) return null;
+                        if (!commentHasTags || !selectedJob) return null;
 
                         const allowedStatuses = getAllowedStatusesForPlan(selectedJob.planType);
                         const availableStatuses = allowedStatuses.filter(s => {
@@ -3027,7 +3112,7 @@ export default function ClientOnboarding() {
                                 e.stopPropagation();
                                 setShowMoveOptions(!showMoveOptions);
                               }}
-                              className="absolute right-14 top-1/2 -translate-y-1/2 px-2 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors shadow-sm border border-gray-200 flex flex-col items-center justify-center gap-0.5"
+                              className="absolute right-[5.5rem] top-1/2 -translate-y-1/2 px-2 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors shadow-sm border border-gray-200 flex items-center justify-center gap-1"
                               title="Move ticket"
                             >
                               <ArrowUpDown className="w-3.5 h-3.5" />
@@ -3038,7 +3123,7 @@ export default function ClientOnboarding() {
                             {showMoveOptions && (
                               <div
                                 data-move-options
-                                className="absolute bottom-full right-14 mb-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-30 max-h-[300px] overflow-y-auto"
+                                className="absolute bottom-full right-[5.5rem] mb-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-30 max-h-[300px] overflow-y-auto"
                               >
                                 <div className="p-3 border-b border-gray-100">
                                   <p className="text-xs font-semibold text-gray-700">Move ticket to:</p>
@@ -3087,7 +3172,7 @@ export default function ClientOnboarding() {
                       {/* Send button */}
                       <button
                         onClick={handleAddComment}
-                        disabled={(!commentText.trim() && commentImages.length === 0) || addingComment}
+                        disabled={(!commentHasContent && commentImages.length === 0) || addingComment}
                         className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-primary text-white rounded-lg disabled:opacity-50 disabled:bg-gray-300 hover:bg-[#c94a28] transition-colors shadow-md disabled:shadow-none flex items-center justify-center"
                         title="Send comment (Enter)"
                       >
