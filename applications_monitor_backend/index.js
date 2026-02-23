@@ -46,7 +46,11 @@ import {
   postOnboardingJobAttachment,
   getOnboardingNotifications,
   markOnboardingNotificationRead,
-  markAdminRead
+  markAdminRead,
+  getNonResolvedIssues,
+  requestMove,
+  approveMove,
+  rejectMove
 } from './controllers/onboardingController.js';
 import { ClientCounterModel } from './ClientCounterModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
@@ -3665,6 +3669,7 @@ app.get('/api/managers/names', getDashboardManagerNames);
 
 app.get('/api/onboarding/jobs', verifyToken, listOnboardingJobs);
 app.get('/api/onboarding/jobs/roles', verifyToken, getOnboardingRoles);
+app.get('/api/onboarding/issues/non-resolved', verifyToken, getNonResolvedIssues);
 app.get('/api/onboarding/next-resume-maker', verifyToken, getNextResumeMakerApi);
 app.get('/api/onboarding/notifications', verifyToken, getOnboardingNotifications);
 app.patch('/api/onboarding/notifications/:id/read', verifyToken, markOnboardingNotificationRead);
@@ -3674,6 +3679,9 @@ app.patch('/api/onboarding/jobs/:id/comments/:commentId/resolve', verifyToken, r
 app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
 app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
 app.post('/api/onboarding/jobs/:id/admin-read', verifyToken, markAdminRead);
+app.post('/api/onboarding/jobs/:id/request-move', verifyToken, requestMove);
+app.post('/api/onboarding/jobs/:id/approve-move', verifyToken, approveMove);
+app.post('/api/onboarding/jobs/:id/reject-move', verifyToken, rejectMove);
 
 // Onboarding attachment upload (R2 or Cloudinary) - R2: onboarding-assets/images|pdf|others
 app.post('/api/upload/onboarding-attachment', verifyToken, fileUpload.single('file'), async (req, res) => {
@@ -4127,36 +4135,52 @@ const getOperationsPerformanceReport = async (req, res) => {
       {
         $match: {
           operatorEmail: { $in: operatorEmails },
-          appliedDate: { $exists: true, $ne: null, $ne: '' },
+          appliedDate: { $exists: true, $nin: [null, ''] },
           $or: datePatterns.map(pattern => ({ appliedDate: { $regex: pattern } }))
         }
       },
       {
         $group: {
           _id: '$operatorEmail',
-          appliedCount: { $sum: 1 }
+          appliedCount: { $sum: 1 },
+          notDownloadedCount: {
+            $sum: {
+              $cond: [
+                { $ne: ['$downloaded', true] },
+                1,
+                0
+              ]
+            }
+          }
         }
       },
       {
         $project: {
           _id: 0,
           operatorEmail: '$_id',
-          appliedCount: 1
+          appliedCount: 1,
+          notDownloadedCount: 1
         }
       }
     ];
 
     const results = await JobModel.aggregate(pipeline).allowDiskUse(true);
     const performanceMap = {};
+    const notDownloadedMap = {};
     results.forEach(r => {
       performanceMap[r.operatorEmail] = r.appliedCount;
+      notDownloadedMap[r.operatorEmail] = r.notDownloadedCount || 0;
     });
 
-    const performanceData = allOperations.map(op => ({
-      email: op.email,
-      name: op.name || op.email.split('@')[0],
-      appliedCount: performanceMap[op.email.toLowerCase()] || 0
-    })).sort((a, b) => b.appliedCount - a.appliedCount);
+    const performanceData = allOperations.map(op => {
+      const emailLower = op.email.toLowerCase();
+      return {
+        email: op.email,
+        name: op.name || op.email.split('@')[0],
+        appliedCount: performanceMap[emailLower] || 0,
+        notDownloadedCount: notDownloadedMap[emailLower] || 0
+      };
+    }).sort((a, b) => b.appliedCount - a.appliedCount);
 
     const totalApplied = performanceData.reduce((sum, op) => sum + op.appliedCount, 0);
 
@@ -4166,7 +4190,8 @@ const getOperationsPerformanceReport = async (req, res) => {
       endDate,
       totalApplied,
       operators: performanceData,
-      performanceMap
+      performanceMap,
+      notDownloadedMap
     });
   } catch (error) {
     console.error('Error in getOperationsPerformanceReport:', error);

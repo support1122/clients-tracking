@@ -3,7 +3,7 @@ import sgMail from '@sendgrid/mail';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY_1 || process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@flashfirehq.com';
 const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'FlashFire Dashboard';
-const PORTAL_URL = process.env.PORTAL_URL || process.env.CORS_ORIGIN || 'https://portal.flashfirejobs.com';
+const PORTAL_URL = process.env.PORTAL_URL || process.env.CORS_ORIGIN || 'https://hq.flashfirejobs.com';
 
 if (SENDGRID_API_KEY) {
   sgMail.setApiKey(SENDGRID_API_KEY);

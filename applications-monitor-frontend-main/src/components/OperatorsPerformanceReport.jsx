@@ -24,6 +24,7 @@ export default function OperatorsPerformanceReport() {
   const [loading, setLoading] = useState(false);
   const [totalApplied, setTotalApplied] = useState(0);
   const [incentiveStructureExpanded, setIncentiveStructureExpanded] = useState(false);
+  const [notDownloadedMap, setNotDownloadedMap] = useState({});
 
   useEffect(() => {
     fetchOperations();
@@ -60,6 +61,7 @@ export default function OperatorsPerformanceReport() {
         const data = await response.json();
         setOperationsPerformance(data.performanceMap || {});
         setTotalApplied(data.totalApplied || 0);
+        setNotDownloadedMap(data.notDownloadedMap || {});
       } else {
         console.error('Error fetching performance report');
         setOperationsPerformance({});
@@ -166,10 +168,11 @@ export default function OperatorsPerformanceReport() {
     return operations
       .map(op => ({
         ...op,
-        applications: operationsPerformance[op.email] || 0
+        applications: operationsPerformance[op.email] || 0,
+        notDownloaded: notDownloadedMap[op.email] || 0
       }))
       .sort((a, b) => b.applications - a.applications);
-  }, [operations, operationsPerformance]);
+  }, [operations, operationsPerformance, notDownloadedMap]);
 
   // Get tier distribution (only show operators who qualify for tiers - 1,000+)
   const getTierDistribution = useMemo(() => {
@@ -322,13 +325,20 @@ export default function OperatorsPerformanceReport() {
 
           {startDate && endDate && (
             <div className="bg-green-50 border border-green-200 rounded-xl p-4">
-              <div className="flex items-center gap-2 text-green-800">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span className="font-semibold">
-                  Showing jobs applied from {formatDateForDisplay(startDate)} to {formatDateForDisplay(endDate)}
-                </span>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-green-800">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="font-semibold">
+                    Showing jobs applied from {formatDateForDisplay(startDate)} to {formatDateForDisplay(endDate)}
+                  </span>
+                </div>
+                {Object.keys(notDownloadedMap).length > 0 && (
+                  <span className="text-red-600 font-semibold text-sm">
+                    {Object.values(notDownloadedMap).reduce((sum, v) => sum + v, 0).toLocaleString()} applications not processed
+                  </span>
+                )}
               </div>
             </div>
           )}
@@ -346,23 +356,48 @@ export default function OperatorsPerformanceReport() {
         {!loading && startDate && endDate && (
           <>
             <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 mb-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-6 border border-blue-200">
-                  <div className="text-sm font-semibold text-blue-700 mb-2">Total Applications</div>
-                  <div className="text-3xl font-bold text-blue-900">
-                    <AnimatedCounter value={totalApplied} loading={loading} />
+              {(() => {
+                const totalNotDownloaded = Object.values(notDownloadedMap).reduce((sum, v) => sum + v, 0);
+                const teamDlRate = totalApplied > 0 ? Math.round(((totalApplied - totalNotDownloaded) / totalApplied) * 100) : 100;
+                const rateColor = teamDlRate >= 80 ? 'green' : teamDlRate >= 50 ? 'amber' : 'red';
+                const gradients = {
+                  green: { bg: 'from-emerald-50 to-emerald-100', border: 'border-emerald-200', text: 'text-emerald-700', bold: 'text-emerald-900', sub: 'text-emerald-600' },
+                  amber: { bg: 'from-amber-50 to-amber-100', border: 'border-amber-200', text: 'text-amber-700', bold: 'text-amber-900', sub: 'text-amber-600' },
+                  red: { bg: 'from-red-50 to-red-100', border: 'border-red-200', text: 'text-red-700', bold: 'text-red-900', sub: 'text-red-600' }
+                };
+                const g = gradients[rateColor];
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-6 border border-blue-200">
+                      <div className="text-sm font-semibold text-blue-700 mb-2">Total Applications</div>
+                      <div className="text-3xl font-bold text-blue-900">
+                        <AnimatedCounter value={totalApplied} loading={loading} />
+                      </div>
+                      <div className="text-xs text-blue-600 mt-1">In selected date range</div>
+                    </div>
+
+                    <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-6 border border-green-200">
+                      <div className="text-sm font-semibold text-green-700 mb-2">Active Operators</div>
+                      <div className="text-3xl font-bold text-green-900">
+                        {sortedOperators.filter(op => op.applications > 0).length}
+                      </div>
+                      <div className="text-xs text-green-600 mt-1">With applications</div>
+                    </div>
+
+                    <div className={`bg-gradient-to-br ${g.bg} rounded-xl p-6 border ${g.border}`}>
+                      <div className={`text-sm font-semibold ${g.text} mb-2`}>Team Processing Rate</div>
+                      <div className={`text-3xl font-bold ${g.bold}`}>{teamDlRate}%</div>
+                      <div className="w-full bg-white/50 rounded-full h-2 mt-2">
+                        <div
+                          className={`h-2 rounded-full transition-all duration-700 ${rateColor === 'green' ? 'bg-emerald-500' : rateColor === 'amber' ? 'bg-amber-500' : 'bg-red-500'}`}
+                          style={{ width: `${teamDlRate}%` }}
+                        />
+                      </div>
+                      <div className={`text-xs ${g.sub} mt-1`}>{totalNotDownloaded.toLocaleString()} not processed</div>
+                    </div>
                   </div>
-                  <div className="text-xs text-blue-600 mt-1">In selected date range</div>
-                </div>
-                
-                <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-6 border border-green-200">
-                  <div className="text-sm font-semibold text-green-700 mb-2">Active Operators</div>
-                  <div className="text-3xl font-bold text-green-900">
-                    {sortedOperators.filter(op => op.applications > 0).length}
-                  </div>
-                  <div className="text-xs text-green-600 mt-1">With applications</div>
-                </div>
-              </div>
+                );
+              })()}
             </div>
 
             {/* Tier Distribution Summary */}
@@ -401,18 +436,21 @@ export default function OperatorsPerformanceReport() {
                 <TeamPerformanceSummary 
                   operations={operations} 
                   operationsPerformance={operationsPerformance}
+                  notDownloadedMap={notDownloadedMap}
                   loading={loading}
                 />
                 
                 <TopPerformersBarChart 
                   operations={operations} 
                   operationsPerformance={operationsPerformance}
+                  notDownloadedMap={notDownloadedMap}
                   loading={loading}
                 />
                 
-                <MonthlyLeaderboard 
-                  operations={operations} 
+                <MonthlyLeaderboard
+                  operations={operations}
                   operationsPerformance={operationsPerformance}
+                  notDownloadedMap={notDownloadedMap}
                 />
 
                 <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
@@ -425,6 +463,7 @@ export default function OperatorsPerformanceReport() {
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Operator Name</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Email</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-slate-700 uppercase">Applications</th>
+                          <th className="px-4 py-3 text-center text-xs font-semibold text-slate-700 uppercase">Processing Rate</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Current Tier</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Progress to Next Tier</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-slate-700 uppercase">Percentage</th>
@@ -457,6 +496,36 @@ export default function OperatorsPerformanceReport() {
                               <td className="px-4 py-3 text-sm font-bold text-slate-900 text-right">
                                 {operator.applications.toLocaleString()}
                               </td>
+                              {(() => {
+                                const dlRate = operator.applications > 0
+                                  ? Math.round(((operator.applications - operator.notDownloaded) / operator.applications) * 100)
+                                  : 100;
+                                const rateColor = dlRate >= 80 ? 'green' : dlRate >= 50 ? 'yellow' : 'red';
+                                const colorMap = {
+                                  green: { badge: 'bg-green-100 text-green-700 border-green-200', bar: 'bg-green-500' },
+                                  yellow: { badge: 'bg-yellow-100 text-yellow-700 border-yellow-200', bar: 'bg-yellow-500' },
+                                  red: { badge: 'bg-red-100 text-red-700 border-red-200', bar: 'bg-red-500' }
+                                };
+                                const colors = colorMap[rateColor];
+                                return (
+                                  <td className="px-4 py-3">
+                                    <div className="flex flex-col items-center gap-1">
+                                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold border ${colors.badge}`}>
+                                        {dlRate}%
+                                      </span>
+                                      <div className="w-16 bg-slate-200 rounded-full h-1.5">
+                                        <div
+                                          className={`${colors.bar} h-1.5 rounded-full transition-all duration-500`}
+                                          style={{ width: `${dlRate}%` }}
+                                        />
+                                      </div>
+                                      {operator.notDownloaded > 0 && (
+                                        <span className="text-[10px] text-red-400">{operator.notDownloaded} not processed</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                );
+                              })()}
                               <td className="px-4 py-3">
                                 <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-gradient-to-r ${tierInfo.bgColor || 'from-slate-100 to-slate-200'} border ${tierInfo.borderColor || 'border-slate-300'} ${tierInfo.textColor || 'text-slate-700'}`}>
                                   {tierInfo.tier}
