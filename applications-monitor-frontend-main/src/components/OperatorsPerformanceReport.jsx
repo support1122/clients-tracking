@@ -336,7 +336,7 @@ export default function OperatorsPerformanceReport() {
                 </div>
                 {Object.keys(notDownloadedMap).length > 0 && (
                   <span className="text-red-600 font-semibold text-sm">
-                    {Object.values(notDownloadedMap).reduce((sum, v) => sum + v, 0).toLocaleString()} resumes not downloaded
+                    {Object.values(notDownloadedMap).reduce((sum, v) => sum + v, 0).toLocaleString()} applications not processed
                   </span>
                 )}
               </div>
@@ -385,7 +385,7 @@ export default function OperatorsPerformanceReport() {
                     </div>
 
                     <div className={`bg-gradient-to-br ${g.bg} rounded-xl p-6 border ${g.border}`}>
-                      <div className={`text-sm font-semibold ${g.text} mb-2`}>Team Download Rate</div>
+                      <div className={`text-sm font-semibold ${g.text} mb-2`}>Team Processing Rate</div>
                       <div className={`text-3xl font-bold ${g.bold}`}>{teamDlRate}%</div>
                       <div className="w-full bg-white/50 rounded-full h-2 mt-2">
                         <div
@@ -393,7 +393,7 @@ export default function OperatorsPerformanceReport() {
                           style={{ width: `${teamDlRate}%` }}
                         />
                       </div>
-                      <div className={`text-xs ${g.sub} mt-1`}>{totalNotDownloaded.toLocaleString()} resumes pending</div>
+                      <div className={`text-xs ${g.sub} mt-1`}>{totalNotDownloaded.toLocaleString()} not processed</div>
                     </div>
                   </div>
                 );
@@ -463,7 +463,7 @@ export default function OperatorsPerformanceReport() {
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Operator Name</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Email</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-slate-700 uppercase">Applications</th>
-                          <th className="px-4 py-3 text-center text-xs font-semibold text-slate-700 uppercase">Download Rate</th>
+                          <th className="px-4 py-3 text-center text-xs font-semibold text-slate-700 uppercase">Processing Rate</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Current Tier</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Progress to Next Tier</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-slate-700 uppercase">Percentage</th>
@@ -495,9 +495,6 @@ export default function OperatorsPerformanceReport() {
                               </td>
                               <td className="px-4 py-3 text-sm font-bold text-slate-900 text-right">
                                 {operator.applications.toLocaleString()}
-                                {operator.notDownloaded > 0 && (
-                                  <span className="text-red-500 font-semibold ml-1">- {operator.notDownloaded.toLocaleString()}</span>
-                                )}
                               </td>
                               {(() => {
                                 const dlRate = operator.applications > 0
@@ -523,7 +520,7 @@ export default function OperatorsPerformanceReport() {
                                         />
                                       </div>
                                       {operator.notDownloaded > 0 && (
-                                        <span className="text-[10px] text-red-400">{operator.notDownloaded} pending</span>
+                                        <span className="text-[10px] text-red-400">{operator.notDownloaded} not processed</span>
                                       )}
                                     </div>
                                   </td>

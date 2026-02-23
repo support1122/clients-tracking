@@ -47,7 +47,6 @@ export function TopPerformersBarChart({ operations, operationsPerformance, notDo
   const renderApplicationsLabel = ({ x, y, width, height, value, index }) => {
     const entry = chartData[index];
     const total = entry?.applications || 0;
-    const missing = entry?.notDownloaded || 0;
 
     return (
       <text
@@ -55,11 +54,11 @@ export function TopPerformersBarChart({ operations, operationsPerformance, notDo
         y={y + height / 2}
         dominantBaseline="middle"
         textAnchor="start"
+        fill="#0f172a"
         fontSize={12}
         fontWeight={600}
       >
-        <tspan fill="#0f172a">{total.toLocaleString()}</tspan>
-        {missing > 0 && <tspan fill="#ef4444"> - {missing.toLocaleString()}</tspan>}
+        {total.toLocaleString()}
       </text>
     );
   };
@@ -182,7 +181,7 @@ export function MonthlyLeaderboard({ operations, operationsPerformance, notDownl
                   />
                 </div>
                 <span className={`text-xs font-semibold ${dlRate >= 80 ? 'text-green-700' : dlRate >= 50 ? 'text-yellow-700' : 'text-red-700'}`}>
-                  {dlRate}% DL
+                  {dlRate}% done
                 </span>
               </div>
             </div>
@@ -234,7 +233,7 @@ export function TeamPerformanceSummary({ operations, operationsPerformance, notD
     {
       title: 'Top Performer',
       value: stats.topPerformer.name,
-      subtitle: `${stats.topPerformer.applications} - ${stats.topPerformer.notDownloaded} (apps - resumes not downloaded)`,
+      subtitle: `${stats.topPerformer.applications} apps, ${stats.topPerformer.notDownloaded} not processed`,
       Icon: Award,
       color: 'bg-yellow-500'
     }
