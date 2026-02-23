@@ -397,7 +397,7 @@ export default function OperatorsPerformanceReport() {
                     </div>
 
                     <div className={`bg-gradient-to-br ${g.bg} rounded-xl p-6 border ${g.border}`}>
-                      <div className={`text-sm font-semibold ${g.text} mb-2`}>Team Processing Rate</div>
+                      <div className={`text-sm font-semibold ${g.text} mb-2`}>Incomplete Applications Rate</div>
                       <div className={`text-3xl font-bold ${g.bold}`}>{teamDlRate}%</div>
                       <div className="w-full bg-white/50 rounded-full h-2 mt-2">
                         <div
