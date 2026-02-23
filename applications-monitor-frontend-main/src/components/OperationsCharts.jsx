@@ -32,26 +32,22 @@ import {
 import { AnimatedCounter } from './AnimatedCounter';
 
 // Priority 1: Top Performers Bar Chart
-export function TopPerformersBarChart({ operations, operationsPerformance, loading = false }) {
+export function TopPerformersBarChart({ operations, operationsPerformance, notDownloadedMap = {}, loading = false }) {
   const chartData = useMemo(() => {
     return operations
       .map(op => ({
         name: op.name || op.email.split('@')[0],
         applications: operationsPerformance[op.email] || 0,
+        notDownloaded: notDownloadedMap[op.email] || 0,
         email: op.email
       }))
       .sort((a, b) => b.applications - a.applications);
-  }, [operations, operationsPerformance]);
+  }, [operations, operationsPerformance, notDownloadedMap]);
 
-  const renderApplicationsLabel = ({ x, y, width, height, value }) => {
-    const display =
-      typeof value === 'number'
-        ? value.toLocaleString()
-        : value === 0
-          ? '0'
-          : (value ?? '');
-
-    if (display === '') return null;
+  const renderApplicationsLabel = ({ x, y, width, height, value, index }) => {
+    const entry = chartData[index];
+    const total = entry?.applications || 0;
+    const missing = entry?.notDownloaded || 0;
 
     return (
       <text
@@ -59,11 +55,11 @@ export function TopPerformersBarChart({ operations, operationsPerformance, loadi
         y={y + height / 2}
         dominantBaseline="middle"
         textAnchor="start"
-        fill="#0f172a"
         fontSize={12}
         fontWeight={600}
       >
-        {display}
+        <tspan fill="#0f172a">{total.toLocaleString()}</tspan>
+        {missing > 0 && <tspan fill="#ef4444"> - {missing.toLocaleString()}</tspan>}
       </text>
     );
   };
@@ -104,7 +100,7 @@ export function TopPerformersBarChart({ operations, operationsPerformance, loadi
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={Math.max(300, chartData.length * 40)}>
-          <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 70, left: 100, bottom: 5 }}>
+          <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 80, left: 100, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis type="number" />
             <YAxis dataKey="name" type="category" width={120} />
@@ -128,17 +124,18 @@ export function TopPerformersBarChart({ operations, operationsPerformance, loadi
 }
 
 // Priority 1: Monthly Leaderboard Widget
-export function MonthlyLeaderboard({ operations, operationsPerformance }) {
+export function MonthlyLeaderboard({ operations, operationsPerformance, notDownloadedMap = {} }) {
   const topPerformers = useMemo(() => {
     return operations
       .map(op => ({
         name: op.name || op.email.split('@')[0],
         email: op.email,
-        applications: operationsPerformance[op.email] || 0
+        applications: operationsPerformance[op.email] || 0,
+        notDownloaded: notDownloadedMap[op.email] || 0
       }))
       .sort((a, b) => b.applications - a.applications)
       .slice(0, 3);
-  }, [operations, operationsPerformance]);
+  }, [operations, operationsPerformance, notDownloadedMap]);
 
   const totalApplications = useMemo(() => {
     return operations.reduce((sum, op) => sum + (operationsPerformance[op.email] || 0), 0);
@@ -156,10 +153,13 @@ export function MonthlyLeaderboard({ operations, operationsPerformance }) {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {topPerformers.map((performer, index) => {
           const medal = medals[index];
-          const percentage = totalApplications > 0 
+          const percentage = totalApplications > 0
             ? ((performer.applications / totalApplications) * 100).toFixed(1)
             : '0.0';
-          
+          const dlRate = performer.applications > 0
+            ? Math.round(((performer.applications - performer.notDownloaded) / performer.applications) * 100)
+            : 100;
+
           return (
             <div
               key={performer.email}
@@ -174,6 +174,17 @@ export function MonthlyLeaderboard({ operations, operationsPerformance }) {
               <div className={`${medal.textColor} text-2xl font-bold mb-1`}>{performer.applications}</div>
               <div className={`${medal.textColor} text-sm`}>Applications</div>
               <div className={`${medal.textColor} text-xs mt-1`}>{percentage}% of team total</div>
+              <div className="mt-2 flex items-center justify-center gap-1.5">
+                <div className="w-12 bg-white/50 rounded-full h-1.5">
+                  <div
+                    className={`h-1.5 rounded-full ${dlRate >= 80 ? 'bg-green-500' : dlRate >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                    style={{ width: `${dlRate}%` }}
+                  />
+                </div>
+                <span className={`text-xs font-semibold ${dlRate >= 80 ? 'text-green-700' : dlRate >= 50 ? 'text-yellow-700' : 'text-red-700'}`}>
+                  {dlRate}% DL
+                </span>
+              </div>
             </div>
           );
         })}
@@ -183,7 +194,7 @@ export function MonthlyLeaderboard({ operations, operationsPerformance }) {
 }
 
 // Priority 1: Team Performance Summary Cards
-export function TeamPerformanceSummary({ operations, operationsPerformance, loading = false }) {
+export function TeamPerformanceSummary({ operations, operationsPerformance, notDownloadedMap = {}, loading = false }) {
   const stats = useMemo(() => {
     const totalApplications = operations.reduce((sum, op) => sum + (operationsPerformance[op.email] || 0), 0);
     const avgApplications = operations.length > 0 ? (totalApplications / operations.length).toFixed(1) : 0;
@@ -192,14 +203,16 @@ export function TeamPerformanceSummary({ operations, operationsPerformance, load
     const performersWithApplications = operations
       .map(op => ({
         name: op.name || op.email.split('@')[0],
-        applications: operationsPerformance[op.email] || 0
+        email: op.email,
+        applications: operationsPerformance[op.email] || 0,
+        notDownloaded: notDownloadedMap[op.email] || 0
       }))
       .filter(p => p.applications > 0)
       .sort((a, b) => b.applications - a.applications);
     
     const topPerformer = performersWithApplications.length > 0 
       ? performersWithApplications[0] 
-      : { name: 'N/A', applications: 0 };
+      : { name: 'N/A', email: '', applications: 0, notDownloaded: 0 };
     
     const totalClients = new Set(operations.flatMap(op => op.managedUsers || [])).size;
 
@@ -209,7 +222,7 @@ export function TeamPerformanceSummary({ operations, operationsPerformance, load
       topPerformer,
       totalClients
     };
-  }, [operations, operationsPerformance]);
+  }, [operations, operationsPerformance, notDownloadedMap]);
 
   const cards = [
     {
@@ -221,7 +234,7 @@ export function TeamPerformanceSummary({ operations, operationsPerformance, load
     {
       title: 'Top Performer',
       value: stats.topPerformer.name,
-      subtitle: `${stats.topPerformer.applications} applications`,
+      subtitle: `${stats.topPerformer.applications} - ${stats.topPerformer.notDownloaded} (apps - resumes not downloaded)`,
       Icon: Award,
       color: 'bg-yellow-500'
     }
@@ -248,16 +261,7 @@ export function TeamPerformanceSummary({ operations, operationsPerformance, load
             </div>
             {card.subtitle && (
               <div className="text-xs text-slate-500 mt-1">
-                {card.subtitle.includes('applications') ? (
-                  <>
-                    <AnimatedCounter 
-                      value={parseInt(card.subtitle.match(/\d+/)?.[0] || '0')} 
-                      loading={loading} 
-                    /> applications
-                  </>
-                ) : (
-                  card.subtitle
-                )}
+                {card.subtitle}
               </div>
             )}
           </div>

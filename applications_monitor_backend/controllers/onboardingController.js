@@ -145,7 +145,7 @@ export async function createOnboardingJobPayload(payload) {
 // Fields needed for Kanban card display (excludes heavy arrays loaded on card open)
 const LIST_PROJECTION = 'jobNumber clientNumber clientEmail clientName planType status ' +
   'resumeMakerEmail resumeMakerName linkedInMemberEmail linkedInMemberName ' +
-  'csmEmail csmName dashboardManagerName linkedInPhaseStarted adminUnreadCount createdAt updatedAt';
+  'csmEmail csmName dashboardManagerName linkedInPhaseStarted adminUnreadCount pendingMoveRequest createdAt updatedAt';
 
 export async function listOnboardingJobs(req, res) {
   try {
@@ -153,10 +153,31 @@ export async function listOnboardingJobs(req, res) {
     const filter = {};
     if (status && ONBOARDING_STATUSES_LIST.includes(status)) filter.status = status;
 
+    const userRole = req.user?.role || '';
+    const userDisplayName = (req.user?.name || '').trim().toLowerCase();
+    const isTeamLead = userRole === 'team_lead';
+
+    const sendJobsForUser = (jobs) => {
+      let visibleJobs = jobs;
+
+      // Team Leads (Dashboard Managers) should only see tickets assigned to them (by display name, case-insensitive)
+      if (isTeamLead && userDisplayName) {
+        visibleJobs = jobs.filter((job) => {
+          const managerName = (job.dashboardManagerName || '').trim().toLowerCase();
+          return managerName && managerName === userDisplayName;
+        });
+      }
+
+      return res.status(200).json({ jobs: visibleJobs });
+    };
+
     // Serve from cache when available (5 s TTL, invalidated on any write)
     const cacheKey = `jobs:${status || 'all'}`;
     const cached = jobListCache.get(cacheKey);
-    if (cached) return res.status(200).json(cached);
+    if (cached) {
+      const cachedJobs = cached.jobs || [];
+      return sendJobsForUser(cachedJobs);
+    }
 
     // Fetch jobs with lightweight projection — heavy arrays loaded lazily on card open
     const jobs = await OnboardingJobModel.find(filter)
@@ -196,7 +217,7 @@ export async function listOnboardingJobs(req, res) {
 
     const payload = { jobs: enrichedJobs };
     jobListCache.set(cacheKey, payload);
-    res.status(200).json(payload);
+    return sendJobsForUser(enrichedJobs);
   } catch (e) {
     console.error('listOnboardingJobs:', e);
     res.status(500).json({ error: e.message || 'Failed to list onboarding jobs' });
@@ -208,6 +229,17 @@ export async function getOnboardingJobById(req, res) {
     const { id } = req.params;
     const job = await OnboardingJobModel.findById(id).lean();
     if (!job) return res.status(404).json({ error: 'Onboarding job not found' });
+
+    // Restrict Team Leads (Dashboard Managers) to only their own tickets by Dashboard Manager display name (case-insensitive)
+    const userRole = req.user?.role || '';
+    if (userRole === 'team_lead') {
+      const userDisplayName = (req.user?.name || '').trim().toLowerCase();
+      const managerName = (job.dashboardManagerName || '').trim().toLowerCase();
+      if (!userDisplayName || !managerName || managerName !== userDisplayName) {
+        return res.status(403).json({ error: 'Not authorized to view this onboarding job' });
+      }
+    }
+
     const canSeeCredentials = req.user && (req.user.role === 'admin' || req.user.roles?.includes?.('csm'));
     if (!canSeeCredentials && job.dashboardCredentials?.password) {
       job.dashboardCredentials = { ...job.dashboardCredentials, password: '********' };
@@ -790,7 +822,29 @@ export async function getNonResolvedIssues(req, res) {
         .map(([email, count]) => ({ email, count }))
         .sort((a, b) => b.count - a.count);
 
-      return res.status(200).json({ count: result.count || 0, items, perUser });
+      // Also fetch pending move requests for admin
+      const pendingMoves = await OnboardingJobModel.find({ 'pendingMoveRequest.active': true })
+        .select('jobNumber clientName clientNumber pendingMoveRequest')
+        .lean();
+      const pendingMoveItems = pendingMoves.map(j => ({
+        type: 'move_request',
+        jobId: j._id,
+        jobNumber: j.jobNumber,
+        clientName: j.clientName,
+        clientNumber: j.clientNumber,
+        targetStatus: j.pendingMoveRequest?.targetStatus,
+        requestedBy: j.pendingMoveRequest?.requestedBy,
+        requestedByName: j.pendingMoveRequest?.requestedByName,
+        requestedAt: j.pendingMoveRequest?.requestedAt
+      }));
+
+      return res.status(200).json({
+        count: result.count || 0,
+        items,
+        perUser,
+        pendingMoves: pendingMoveItems,
+        pendingMovesCount: pendingMoveItems.length
+      });
     }
 
     // Current user's non-resolved (tagged but not resolved by me)
@@ -843,7 +897,24 @@ export async function getNonResolvedIssues(req, res) {
       createdAt: it.createdAt,
       authorName: it.authorName
     }));
-    res.status(200).json({ count: result.count || 0, items });
+    // User's own pending move requests
+    const myPendingMoves = await OnboardingJobModel.find({
+      'pendingMoveRequest.active': true,
+      'pendingMoveRequest.requestedBy': userEmail
+    }).select('jobNumber clientName clientNumber pendingMoveRequest').lean();
+    const pendingMoveItems = myPendingMoves.map(j => ({
+      type: 'move_request',
+      jobId: j._id,
+      jobNumber: j.jobNumber,
+      clientName: j.clientName,
+      clientNumber: j.clientNumber,
+      targetStatus: j.pendingMoveRequest?.targetStatus,
+      requestedBy: j.pendingMoveRequest?.requestedBy,
+      requestedByName: j.pendingMoveRequest?.requestedByName,
+      requestedAt: j.pendingMoveRequest?.requestedAt
+    }));
+
+    res.status(200).json({ count: result.count || 0, items, pendingMoves: pendingMoveItems, pendingMovesCount: pendingMoveItems.length });
   } catch (e) {
     console.error('getNonResolvedIssues:', e);
     res.status(500).json({ error: e.message || 'Failed to get non-resolved issues' });
@@ -896,5 +967,97 @@ export async function markAdminRead(req, res) {
   } catch (e) {
     console.error('markAdminRead:', e);
     res.status(500).json({ error: e.message || 'Failed to mark as read' });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Move-request approval workflow
+// ---------------------------------------------------------------------------
+
+export async function requestMove(req, res) {
+  try {
+    const { id } = req.params;
+    const { targetStatus } = req.body || {};
+    if (!targetStatus || !ONBOARDING_STATUSES_LIST.includes(targetStatus)) {
+      return res.status(400).json({ error: 'Invalid target status' });
+    }
+    const job = await OnboardingJobModel.findById(id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (job.status === targetStatus) {
+      return res.status(400).json({ error: 'Job is already in this status' });
+    }
+    if (job.pendingMoveRequest?.active) {
+      return res.status(409).json({ error: 'A move request is already pending for this ticket' });
+    }
+    job.pendingMoveRequest = {
+      targetStatus,
+      requestedBy: req.user?.email || '',
+      requestedByName: req.user?.name || req.user?.email || '',
+      requestedAt: new Date(),
+      active: true
+    };
+    job.updatedAt = new Date();
+    await job.save();
+    jobListCache.clear();
+    res.status(200).json({ job: job.toObject() });
+  } catch (e) {
+    console.error('requestMove:', e);
+    res.status(500).json({ error: e.message || 'Failed to request move' });
+  }
+}
+
+export async function approveMove(req, res) {
+  try {
+    const role = req.user?.role;
+    if (role !== 'admin' && role !== 'team_lead') {
+      return res.status(403).json({ error: 'Only admin or team lead can approve moves' });
+    }
+    const { id } = req.params;
+    const job = await OnboardingJobModel.findById(id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (!job.pendingMoveRequest?.active) {
+      return res.status(400).json({ error: 'No pending move request' });
+    }
+    const targetStatus = job.pendingMoveRequest.targetStatus;
+    if (!ONBOARDING_STATUSES_LIST.includes(targetStatus)) {
+      return res.status(400).json({ error: 'Invalid target status in pending request' });
+    }
+    const fromStatus = job.status;
+    job.status = targetStatus;
+    if (!job.moveHistory) job.moveHistory = [];
+    job.moveHistory.push({
+      fromStatus,
+      toStatus: targetStatus,
+      movedBy: req.user?.email || ''
+    });
+    job.pendingMoveRequest = { targetStatus: '', requestedBy: '', requestedByName: '', requestedAt: null, active: false };
+    job.updatedAt = new Date();
+    await job.save();
+    jobListCache.clear();
+    res.status(200).json({ job: job.toObject() });
+  } catch (e) {
+    console.error('approveMove:', e);
+    res.status(500).json({ error: e.message || 'Failed to approve move' });
+  }
+}
+
+export async function rejectMove(req, res) {
+  try {
+    const role = req.user?.role;
+    if (role !== 'admin' && role !== 'team_lead') {
+      return res.status(403).json({ error: 'Only admin or team lead can reject moves' });
+    }
+    const { id } = req.params;
+    const updated = await OnboardingJobModel.findOneAndUpdate(
+      { _id: id, 'pendingMoveRequest.active': true },
+      { $set: { 'pendingMoveRequest.active': false, 'pendingMoveRequest.targetStatus': '', updatedAt: new Date() } },
+      { new: true, lean: false }
+    );
+    if (!updated) return res.status(404).json({ error: 'No pending move request found' });
+    jobListCache.clear();
+    res.status(200).json({ job: updated.toObject() });
+  } catch (e) {
+    console.error('rejectMove:', e);
+    res.status(500).json({ error: e.message || 'Failed to reject move' });
   }
 }

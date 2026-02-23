@@ -152,6 +152,11 @@ const JobCard = React.memo(({
               {job.adminUnreadCount > 99 ? '99+' : job.adminUnreadCount}
             </span>
           )}
+          {job.pendingMoveRequest?.active && (
+            <span className="flex items-center gap-0.5 px-1.5 h-[18px] rounded-full bg-amber-100 text-amber-700 text-[9px] font-bold leading-none" title={`Pending move to ${STATUS_LABELS[job.pendingMoveRequest.targetStatus] || ''}`}>
+              <ArrowUpDown className="w-2.5 h-2.5" /> Move
+            </span>
+          )}
         </div>
         <div className="opacity-0 group-hover:opacity-100 transition-opacity">
           <button type="button" className="text-gray-400 hover:text-primary"><MoreHorizontal className="w-4 h-4" /></button>
@@ -297,7 +302,8 @@ const JobCard = React.memo(({
     prevProps.jobAnalysis?.offer === nextProps.jobAnalysis?.offer &&
     prevProps.jobAnalysis?.rejected === nextProps.jobAnalysis?.rejected &&
     prevProps.jobAnalysis?.removed === nextProps.jobAnalysis?.removed &&
-    prevProps.jobAnalysis?.lastAppliedOperatorName === nextProps.jobAnalysis?.lastAppliedOperatorName
+    prevProps.jobAnalysis?.lastAppliedOperatorName === nextProps.jobAnalysis?.lastAppliedOperatorName &&
+    prevProps.job.pendingMoveRequest?.active === nextProps.job.pendingMoveRequest?.active
   );
 });
 
@@ -332,7 +338,7 @@ export default function ClientOnboarding() {
   const [clientsLoading, setClientsLoading] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
-  const [nonResolvedIssues, setNonResolvedIssues] = useState({ count: 0, items: [], perUser: [] });
+  const [nonResolvedIssues, setNonResolvedIssues] = useState({ count: 0, items: [], perUser: [], pendingMoves: [] });
   const [showIssuesPanel, setShowIssuesPanel] = useState(false);
   const [issuesFilterUser, setIssuesFilterUser] = useState(null);
   const [mentionSuggestions, setMentionSuggestions] = useState([]);
@@ -577,7 +583,7 @@ export default function ClientOnboarding() {
       const res = await fetch(url, { headers: AUTH_HEADERS() });
       if (res.ok) {
         const data = await res.json();
-        setNonResolvedIssues({ count: data.count ?? 0, items: data.items ?? [], perUser: data.perUser ?? [] });
+        setNonResolvedIssues({ count: data.count ?? 0, items: data.items ?? [], perUser: data.perUser ?? [], pendingMoves: data.pendingMoves ?? [] });
       }
     } catch (_) { }
   }, [user?.role]);
@@ -1944,9 +1950,9 @@ export default function ClientOnboarding() {
               >
                 <AlertCircle className="w-5 h-5 text-amber-500" />
                 <span className="hidden sm:inline">Unresolved</span>
-                {nonResolvedIssues.count > 0 && (
+                {(nonResolvedIssues.count + (nonResolvedIssues.pendingMoves?.length || 0)) > 0 && (
                   <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold px-1.5">
-                    {nonResolvedIssues.count > 99 ? '99+' : nonResolvedIssues.count}
+                    {(() => { const total = nonResolvedIssues.count + (nonResolvedIssues.pendingMoves?.length || 0); return total > 99 ? '99+' : total; })()}
                   </span>
                 )}
               </button>
@@ -2010,7 +2016,85 @@ export default function ClientOnboarding() {
                     )}
 
                     <ul className="overflow-y-auto p-2 flex-1 space-y-1">
-                      {nonResolvedIssues.items.length === 0 ? (
+                      {/* Pending move requests */}
+                      {nonResolvedIssues.pendingMoves?.length > 0 && (
+                        <>
+                          <li className="px-3 pt-2 pb-1">
+                            <p className="text-[10px] uppercase tracking-wider text-amber-600 font-semibold">Pending move requests ({nonResolvedIssues.pendingMoves.length})</p>
+                          </li>
+                          {nonResolvedIssues.pendingMoves.map((mv) => {
+                            const job = jobs.find(j => String(j._id) === String(mv.jobId));
+                            const displayName = mv.clientNumber != null ? `${mv.clientNumber} – ${mv.clientName || ''}` : (mv.clientName || '');
+                            return (
+                              <li key={`move-${mv.jobId}`}>
+                                <div className="px-4 py-3 rounded-xl text-sm bg-amber-50/50 border border-amber-100">
+                                  <div className="flex items-start gap-3">
+                                    <ArrowUpDown className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-gray-900 font-medium leading-snug">
+                                        <span className="font-bold">#{mv.jobNumber}</span> – {displayName}
+                                      </p>
+                                      <p className="text-xs text-amber-700 mt-1">
+                                        {mv.requestedByName || mv.requestedBy} wants to move to <strong>{STATUS_LABELS[mv.targetStatus] || mv.targetStatus}</strong>
+                                      </p>
+                                      {mv.requestedAt && (
+                                        <p className="text-[10px] text-gray-400 mt-1">{new Date(mv.requestedAt).toLocaleDateString()} at {new Date(mv.requestedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                      )}
+                                      {(isAdmin || isTeamLead) && (
+                                        <div className="flex gap-2 mt-2">
+                                          <button
+                                            onClick={async () => {
+                                              try {
+                                                const res = await fetch(`${API_BASE}/api/onboarding/jobs/${mv.jobId}/approve-move`, { method: 'POST', headers: AUTH_HEADERS() });
+                                                const data = await res.json();
+                                                if (!res.ok) throw new Error(data.error || 'Failed');
+                                                setJobs(prev => prev.map(j => j._id === String(mv.jobId) ? data.job : j));
+                                                if (selectedJob?._id === String(mv.jobId)) setSelectedJob(data.job);
+                                                toastUtils.success(`Approved move to ${STATUS_LABELS[mv.targetStatus] || mv.targetStatus}`);
+                                                fetchNonResolvedIssues();
+                                              } catch (err) { toastUtils.error(err.message); }
+                                            }}
+                                            className="text-xs px-3 py-1 bg-green-500 text-white rounded-lg hover:bg-green-600 font-medium transition-colors"
+                                          >Approve</button>
+                                          <button
+                                            onClick={async () => {
+                                              try {
+                                                const res = await fetch(`${API_BASE}/api/onboarding/jobs/${mv.jobId}/reject-move`, { method: 'POST', headers: AUTH_HEADERS() });
+                                                const data = await res.json();
+                                                if (!res.ok) throw new Error(data.error || 'Failed');
+                                                setJobs(prev => prev.map(j => j._id === String(mv.jobId) ? data.job : j));
+                                                if (selectedJob?._id === String(mv.jobId)) setSelectedJob(data.job);
+                                                toastUtils.success('Move request rejected');
+                                                fetchNonResolvedIssues();
+                                              } catch (err) { toastUtils.error(err.message); }
+                                            }}
+                                            className="text-xs px-3 py-1 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 font-medium transition-colors"
+                                          >Reject</button>
+                                          <button
+                                            onClick={() => {
+                                              if (job) { handleCardClick(job); setShowIssuesPanel(false); setIssuesFilterUser(null); }
+                                            }}
+                                            className="text-xs px-3 py-1 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 font-medium transition-colors ml-auto"
+                                          >View</button>
+                                        </div>
+                                      )}
+                                      {!isAdmin && !isTeamLead && (
+                                        <p className="text-[10px] text-amber-500 mt-1.5 font-medium">Awaiting approval from team lead or admin</p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </li>
+                            );
+                          })}
+                          {nonResolvedIssues.items.length > 0 && (
+                            <li className="px-3 pt-3 pb-1">
+                              <p className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Unresolved tagged comments ({nonResolvedIssues.count})</p>
+                            </li>
+                          )}
+                        </>
+                      )}
+                      {nonResolvedIssues.items.length === 0 && (!nonResolvedIssues.pendingMoves?.length) ? (
                         <li className="py-12 text-center">
                           <div className="mx-auto w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mb-3">
                             <CheckCircle className="w-6 h-6 text-green-400" />
@@ -3088,23 +3172,17 @@ export default function ClientOnboarding() {
                         }
                       `}</style>
 
-                      {/* Move icon button - only show when someone is tagged */}
+                      {/* Move icon button — always visible */}
                       {(() => {
-                        if (!commentHasTags || !selectedJob) return null;
+                        if (!selectedJob) return null;
+                        const hasPending = selectedJob.pendingMoveRequest?.active;
 
                         const allowedStatuses = getAllowedStatusesForPlan(selectedJob.planType);
-                        const availableStatuses = allowedStatuses.filter(s => {
-                          if (canMoveAny) return true;
-                          return canUserMoveToStatus(s);
-                        });
-
-                        const moveableStatuses = availableStatuses.filter(s => s !== selectedJob.status);
-
+                        const moveableStatuses = allowedStatuses.filter(s => s !== selectedJob.status);
                         if (moveableStatuses.length === 0) return null;
 
                         return (
                           <>
-                            {/* Move icon button */}
                             <button
                               data-move-options
                               onClick={(e) => {
@@ -3112,33 +3190,100 @@ export default function ClientOnboarding() {
                                 e.stopPropagation();
                                 setShowMoveOptions(!showMoveOptions);
                               }}
-                              className="absolute right-[5.5rem] top-1/2 -translate-y-1/2 px-2 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors shadow-sm border border-gray-200 flex items-center justify-center gap-1"
-                              title="Move ticket"
+                              className={`absolute right-[5.5rem] top-1/2 -translate-y-1/2 px-2 py-1.5 rounded-lg transition-colors shadow-sm border flex items-center justify-center gap-1 ${
+                                hasPending
+                                  ? 'bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100'
+                                  : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'
+                              }`}
+                              title={hasPending ? `Pending move to ${STATUS_LABELS[selectedJob.pendingMoveRequest.targetStatus] || selectedJob.pendingMoveRequest.targetStatus}` : 'Request ticket move'}
                             >
                               <ArrowUpDown className="w-3.5 h-3.5" />
-                              <span className="text-[9px] font-medium leading-tight">Move</span>
+                              <span className="text-[9px] font-medium leading-tight">{hasPending ? 'Pending' : 'Move'}</span>
                             </button>
 
-                            {/* Move options dropdown */}
                             {showMoveOptions && (
                               <div
                                 data-move-options
-                                className="absolute bottom-full right-[5.5rem] mb-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-30 max-h-[300px] overflow-y-auto"
+                                className="absolute bottom-full right-[5.5rem] mb-2 w-72 bg-white rounded-xl shadow-xl border border-gray-200 z-30 max-h-[300px] overflow-y-auto"
                               >
+                                {/* Show pending request info if exists */}
+                                {hasPending && (
+                                  <div className="p-3 border-b border-amber-100 bg-amber-50/50">
+                                    <p className="text-xs font-semibold text-amber-700 mb-1">Pending move request</p>
+                                    <p className="text-[11px] text-amber-600">
+                                      {selectedJob.pendingMoveRequest.requestedByName || selectedJob.pendingMoveRequest.requestedBy} requested move to <strong>{STATUS_LABELS[selectedJob.pendingMoveRequest.targetStatus] || selectedJob.pendingMoveRequest.targetStatus}</strong>
+                                    </p>
+                                    {(isAdmin || isTeamLead) && (
+                                      <div className="flex gap-2 mt-2">
+                                        <button
+                                          onClick={async (e) => {
+                                            e.preventDefault(); e.stopPropagation();
+                                            try {
+                                              const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}/approve-move`, { method: 'POST', headers: AUTH_HEADERS() });
+                                              const data = await res.json();
+                                              if (!res.ok) throw new Error(data.error || 'Failed');
+                                              setSelectedJob(data.job);
+                                              setJobs(prev => prev.map(j => j._id === selectedJob._id ? data.job : j));
+                                              toastUtils.success(`Approved! Ticket moved.`);
+                                              setShowMoveOptions(false);
+                                              fetchNonResolvedIssues();
+                                            } catch (err) { toastUtils.error(err.message); }
+                                          }}
+                                          className="flex-1 text-xs px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 font-medium"
+                                        >Approve</button>
+                                        <button
+                                          onClick={async (e) => {
+                                            e.preventDefault(); e.stopPropagation();
+                                            try {
+                                              const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}/reject-move`, { method: 'POST', headers: AUTH_HEADERS() });
+                                              const data = await res.json();
+                                              if (!res.ok) throw new Error(data.error || 'Failed');
+                                              setSelectedJob(data.job);
+                                              setJobs(prev => prev.map(j => j._id === selectedJob._id ? data.job : j));
+                                              toastUtils.success('Move request rejected');
+                                              setShowMoveOptions(false);
+                                              fetchNonResolvedIssues();
+                                            } catch (err) { toastUtils.error(err.message); }
+                                          }}
+                                          className="flex-1 text-xs px-3 py-1.5 bg-red-500 text-white rounded-lg hover:bg-red-600 font-medium"
+                                        >Reject</button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                                 <div className="p-3 border-b border-gray-100">
-                                  <p className="text-xs font-semibold text-gray-700">Move ticket to:</p>
+                                  <p className="text-xs font-semibold text-gray-700">
+                                    {canMoveAny ? 'Move ticket to:' : 'Request move to:'}
+                                  </p>
                                 </div>
                                 <div className="p-2 flex flex-col gap-1">
                                   {moveableStatuses.map((status) => (
                                     <button
                                       key={status}
-                                      onClick={(e) => {
+                                      onClick={async (e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        handleMove(selectedJob._id, status, canMoveAny);
+                                        if (canMoveAny) {
+                                          handleMove(selectedJob._id, status, true);
+                                        } else {
+                                          // Request move (needs approval)
+                                          try {
+                                            const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}/request-move`, {
+                                              method: 'POST',
+                                              headers: AUTH_HEADERS(),
+                                              body: JSON.stringify({ targetStatus: status })
+                                            });
+                                            const data = await res.json();
+                                            if (!res.ok) throw new Error(data.error || 'Failed');
+                                            setSelectedJob(data.job);
+                                            setJobs(prev => prev.map(j => j._id === selectedJob._id ? data.job : j));
+                                            toastUtils.success(`Move request sent — awaiting approval`);
+                                            fetchNonResolvedIssues();
+                                          } catch (err) { toastUtils.error(err.message); }
+                                        }
                                         setShowMoveOptions(false);
                                       }}
-                                      disabled={movingStatus === selectedJob._id}
+                                      disabled={movingStatus === selectedJob._id || (hasPending && !canMoveAny)}
                                       className="text-left text-xs px-3 py-2 bg-primary/5 text-primary rounded-lg hover:bg-primary/10 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed border border-primary/10 hover:border-primary/30"
                                     >
                                       {STATUS_LABELS[status] || status}

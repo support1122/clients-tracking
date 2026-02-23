@@ -90,6 +90,14 @@ const onboardingJobSchema = new mongoose.Schema({
   // Pre-computed counter: incremented when a non-admin posts a comment, zeroed when any admin reads the job.
   // Stored on the document so it costs zero extra DB queries on the list endpoint.
   adminUnreadCount: { type: Number, default: 0, min: 0 },
+  // Move approval workflow: non-privileged users request a move; team_lead/admin approves or rejects.
+  pendingMoveRequest: {
+    targetStatus: { type: String, default: '' },
+    requestedBy: { type: String, default: '' },
+    requestedByName: { type: String, default: '' },
+    requestedAt: { type: Date, default: null },
+    active: { type: Boolean, default: false }
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
