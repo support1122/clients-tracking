@@ -233,7 +233,7 @@ export function TeamPerformanceSummary({ operations, operationsPerformance, notD
     {
       title: 'Top Performer',
       value: stats.topPerformer.name,
-      subtitle: `${stats.topPerformer.applications} apps, ${stats.topPerformer.notDownloaded} not processed`,
+      subtitle: `${stats.topPerformer.applications} apps, ${stats.topPerformer.notDownloaded} Incomplete Applications`,
       Icon: Award,
       color: 'bg-yellow-500'
     }
