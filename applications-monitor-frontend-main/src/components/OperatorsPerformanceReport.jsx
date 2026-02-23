@@ -25,6 +25,7 @@ export default function OperatorsPerformanceReport() {
   const [totalApplied, setTotalApplied] = useState(0);
   const [incentiveStructureExpanded, setIncentiveStructureExpanded] = useState(false);
   const [notDownloadedMap, setNotDownloadedMap] = useState({});
+  const [notDownloadedByStatusMap, setNotDownloadedByStatusMap] = useState({});
 
   useEffect(() => {
     fetchOperations();
@@ -62,15 +63,18 @@ export default function OperatorsPerformanceReport() {
         setOperationsPerformance(data.performanceMap || {});
         setTotalApplied(data.totalApplied || 0);
         setNotDownloadedMap(data.notDownloadedMap || {});
+        setNotDownloadedByStatusMap(data.notDownloadedByStatusMap || {});
       } else {
         console.error('Error fetching performance report');
         setOperationsPerformance({});
         setTotalApplied(0);
+        setNotDownloadedByStatusMap({});
       }
     } catch (error) {
       console.error('Error fetching performance report:', error);
       setOperationsPerformance({});
       setTotalApplied(0);
+      setNotDownloadedByStatusMap({});
     } finally {
       setLoading(false);
     }
@@ -169,10 +173,11 @@ export default function OperatorsPerformanceReport() {
       .map(op => ({
         ...op,
         applications: operationsPerformance[op.email] || 0,
-        notDownloaded: notDownloadedMap[op.email] || 0
+        notDownloaded: notDownloadedMap[op.email] || 0,
+        notDownloadedByStatus: notDownloadedByStatusMap[op.email?.toLowerCase()] || { applied: 0, rejected: 0, interviewing: 0, offer: 0 }
       }))
       .sort((a, b) => b.applications - a.applications);
-  }, [operations, operationsPerformance, notDownloadedMap]);
+  }, [operations, operationsPerformance, notDownloadedMap, notDownloadedByStatusMap]);
 
   // Get tier distribution (only show operators who qualify for tiers - 1,000+)
   const getTierDistribution = useMemo(() => {
@@ -334,11 +339,18 @@ export default function OperatorsPerformanceReport() {
                     Showing jobs applied from {formatDateForDisplay(startDate)} to {formatDateForDisplay(endDate)}
                   </span>
                 </div>
-                {Object.keys(notDownloadedMap).length > 0 && (
-                  <span className="text-red-600 font-semibold text-sm">
-                    {Object.values(notDownloadedMap).reduce((sum, v) => sum + v, 0).toLocaleString()} Incomplete Applications
-                  </span>
-                )}
+                {Object.keys(notDownloadedByStatusMap).length > 0 && (() => {
+                  const totalIncomplete = Object.values(notDownloadedByStatusMap).reduce(
+                    (sum, s) => sum + (s.applied || 0) + (s.rejected || 0) + (s.interviewing || 0) + (s.offer || 0),
+                    0
+                  );
+                  if (totalIncomplete === 0) return null;
+                  return (
+                    <span className="text-red-600 font-semibold text-sm">
+                      {totalIncomplete.toLocaleString()} Incomplete Applications
+                    </span>
+                  );
+                })()}
               </div>
             </div>
           )}
@@ -393,7 +405,9 @@ export default function OperatorsPerformanceReport() {
                           style={{ width: `${teamDlRate}%` }}
                         />
                       </div>
-                      <div className={`text-xs ${g.sub} mt-1`}>{totalNotDownloaded.toLocaleString()} Incomplete Applications</div>
+                      <div className={`text-xs ${g.sub} mt-1`}>
+                        {Object.values(notDownloadedByStatusMap).reduce((sum, s) => sum + (s.applied || 0) + (s.rejected || 0) + (s.interviewing || 0) + (s.offer || 0), 0).toLocaleString()} Incomplete Applications
+                      </div>
                     </div>
                   </div>
                 );
@@ -519,9 +533,12 @@ export default function OperatorsPerformanceReport() {
                                           style={{ width: `${dlRate}%` }}
                                         />
                                       </div>
-                                      {operator.notDownloaded > 0 && (
-                                        <span className="text-[10px] text-red-400">{operator.notDownloaded} Incomplete Applications</span>
-                                      )}
+                                      {(() => {
+                                        const operatorIncomplete = (operator.notDownloadedByStatus?.applied || 0) + (operator.notDownloadedByStatus?.rejected || 0) + (operator.notDownloadedByStatus?.interviewing || 0) + (operator.notDownloadedByStatus?.offer || 0);
+                                        return operatorIncomplete > 0 && (
+                                          <span className="text-[10px] text-red-400">{operatorIncomplete} Incomplete Applications</span>
+                                        );
+                                      })()}
                                     </div>
                                   </td>
                                 );
