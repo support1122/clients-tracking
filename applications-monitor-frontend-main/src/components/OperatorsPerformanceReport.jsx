@@ -336,7 +336,7 @@ export default function OperatorsPerformanceReport() {
                 </div>
                 {Object.keys(notDownloadedMap).length > 0 && (
                   <span className="text-red-600 font-semibold text-sm">
-                    {Object.values(notDownloadedMap).reduce((sum, v) => sum + v, 0).toLocaleString()} applications not processed
+                    {Object.values(notDownloadedMap).reduce((sum, v) => sum + v, 0).toLocaleString()} Incomplete Applications
                   </span>
                 )}
               </div>
@@ -393,7 +393,7 @@ export default function OperatorsPerformanceReport() {
                           style={{ width: `${teamDlRate}%` }}
                         />
                       </div>
-                      <div className={`text-xs ${g.sub} mt-1`}>{totalNotDownloaded.toLocaleString()} not processed</div>
+                      <div className={`text-xs ${g.sub} mt-1`}>{totalNotDownloaded.toLocaleString()} Incomplete Applications</div>
                     </div>
                   </div>
                 );
@@ -520,7 +520,7 @@ export default function OperatorsPerformanceReport() {
                                         />
                                       </div>
                                       {operator.notDownloaded > 0 && (
-                                        <span className="text-[10px] text-red-400">{operator.notDownloaded} not processed</span>
+                                        <span className="text-[10px] text-red-400">{operator.notDownloaded} Incomplete Applications</span>
                                       )}
                                     </div>
                                   </td>
