@@ -115,7 +115,7 @@ export default function ClientJobAnalysis() {
       const data = await resp.json();
       if (data.success) {
         // Update the row in state
-        setRows(prev => prev.map(r => 
+        setRows(prev => prev.map(r =>
           r.email === email ? { ...r, dashboardTeamLeadName } : r
         ));
         toast.success('Dashboard Manager updated successfully');
@@ -136,7 +136,7 @@ export default function ClientJobAnalysis() {
       toast.error('Only admins can change client status');
       return;
     }
-    
+
     setSavingStatus(prev => new Set(prev).add(email));
     try {
       const resp = await fetch(`${API_BASE}/api/clients`, {
@@ -148,7 +148,7 @@ export default function ClientJobAnalysis() {
       const data = await resp.json();
       if (data.message || data.updatedClientsTracking) {
         // Update the row in state
-        setRows(prev => prev.map(r => 
+        setRows(prev => prev.map(r =>
           r.email === email ? { ...r, status } : r
         ));
         toast.success('Client status updated successfully');
@@ -228,130 +228,132 @@ export default function ClientJobAnalysis() {
     });
   }, [rows, date, sortDir, lastAppliedByFilter]);
 
+  console.log('Processed rows count:', processedRows.length, 'Rows include newtest?', processedRows.some(r => r.email === 'newtest@gmail.com'));
+
   return (
     <Layout>
       <div className="p-6 w-full">
-        
-          <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-3 flex-wrap">
-            <h1 className="text-xl font-semibold text-gray-900">Client Job Analysis</h1>
-            <div className="ml-auto flex items-center gap-2 flex-wrap">
-              <label className="text-xs text-gray-700">Select Date:</label>
-              <input
-                type="date"
-                value={date}
-                onChange={(e)=>setDate(e.target.value)}
-                className="px-2 py-1 text-xs border border-gray-300 rounded-md"
-              />
-              <button
-                onClick={findAppliedOnDate}
-                className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
-              >
-                Find Applied
-              </button>
-              <button
-                onClick={onRefresh}
-                disabled={loading}
-                className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-              >
-                {loading? 'Loading...' : 'Refresh'}
-              </button>
-              {/* <Link to="/call-scheduler" className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">Call Scheduler</Link> */}
-            </div>
+
+        <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-3 flex-wrap">
+          <h1 className="text-xl font-semibold text-gray-900">Client Job Analysis</h1>
+          <div className="ml-auto flex items-center gap-2 flex-wrap">
+            <label className="text-xs text-gray-700">Select Date:</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="px-2 py-1 text-xs border border-gray-300 rounded-md"
+            />
+            <button
+              onClick={findAppliedOnDate}
+              className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
+            >
+              Find Applied
+            </button>
+            <button
+              onClick={onRefresh}
+              disabled={loading}
+              className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+            >
+              {loading ? 'Loading...' : 'Refresh'}
+            </button>
+            {/* <Link to="/call-scheduler" className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">Call Scheduler</Link> */}
           </div>
-          <div className="px-4 py-3 overflow-x-auto">
-            <table className="w-full divide-y divide-gray-200 text-xs">
-              <thead className="bg-slate-50">
-                <tr>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Status</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Phase / Pause</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Plan</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-                    <div className="flex items-center gap-2">
-                      <span>Last applied by</span>
-                      <select
-                        value={lastAppliedByFilter}
-                        onChange={(e) => setLastAppliedByFilter(e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="px-1.5 py-0.5 text-[10px] border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                        title="Filter by operator"
-                      >
-                        <option value="">All</option>
-                        {uniqueOperatorNames.map((name) => (
-                          <option key={name} value={name}>
-                            {capitalizeOperatorName(name)}
-                          </option>
-                        ))}
-                      </select>
-                      {lastAppliedByFilter && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setLastAppliedByFilter('');
-                          }}
-                          className="px-1 py-0.5 text-[10px] text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300"
-                          title="Clear filter"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  </th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Dashboard Mgr</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Total Apps</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Saved</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Applied</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Interview</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Offer</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Rejected</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Removed</th>
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold">
-                        {date ? `Applied on ${convertToDMY(date)}` : 'Applied on Date'}
-                      </span>
+        </div>
+        <div className="px-4 py-3 overflow-x-auto">
+          <table className="w-full divide-y divide-gray-200 text-xs">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Status</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Pause/Unpause/New</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Plan</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                  <div className="flex items-center gap-2">
+                    <span>Last applied by</span>
+                    <select
+                      value={lastAppliedByFilter}
+                      onChange={(e) => setLastAppliedByFilter(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="px-1.5 py-0.5 text-[10px] border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      title="Filter by operator"
+                    >
+                      <option value="">All</option>
+                      {uniqueOperatorNames.map((name) => (
+                        <option key={name} value={name}>
+                          {capitalizeOperatorName(name)}
+                        </option>
+                      ))}
+                    </select>
+                    {lastAppliedByFilter && (
                       <button
                         type="button"
-                        onClick={() => setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'))}
-                        title={`Sort ${sortDir === 'asc' ? 'descending' : 'ascending'}`}
-                        className="px-1.5 py-0.5 text-[10px] border border-gray-300 rounded-md bg-white hover:bg-gray-50"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLastAppliedByFilter('');
+                        }}
+                        className="px-1 py-0.5 text-[10px] text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300"
+                        title="Clear filter"
                       >
-                        {sortDir === 'asc' ? '▲' : '▼'}
+                        ✕
                       </button>
-                    </div>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {processedRows.map((r, idx) => {
-                  // Total applications = saved + applied + interviewing + offer + rejected (removed is excluded)
-                  const totalApplications = (Number(r.saved||0) + Number(r.applied||0) + Number(r.interviewing||0) + Number(r.offer||0) + Number(r.rejected||0));
-                  const plan = String(r.planType || '').trim().toLowerCase();
-                  const isPrime = plan.includes('prime');
-                  const isIgnite = plan.includes('ignite');
-                  const isProfessional = plan.includes('professional');
-                  const isExecutive = plan.includes('executive');
+                    )}
+                  </div>
+                </th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Dashboard Mgr</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Total Apps</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Saved</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Applied</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Interview</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Offer</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Rejected</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Removed</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold">
+                      {date ? `Applied on ${convertToDMY(date)}` : 'Applied on Date'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'))}
+                      title={`Sort ${sortDir === 'asc' ? 'descending' : 'ascending'}`}
+                      className="px-1.5 py-0.5 text-[10px] border border-gray-300 rounded-md bg-white hover:bg-gray-50"
+                    >
+                      {sortDir === 'asc' ? '▲' : '▼'}
+                    </button>
+                  </div>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {processedRows.map((r, idx) => {
+                // Total applications = saved + applied + interviewing + offer + rejected (removed is excluded)
+                const totalApplications = (Number(r.saved || 0) + Number(r.applied || 0) + Number(r.interviewing || 0) + Number(r.offer || 0) + Number(r.rejected || 0));
+                const plan = String(r.planType || '').trim().toLowerCase();
+                const isPrime = plan.includes('prime');
+                const isIgnite = plan.includes('ignite');
+                const isProfessional = plan.includes('professional');
+                const isExecutive = plan.includes('executive');
 
-                  const planLimit = isPrime ? 160 : isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1000 : Infinity;
-                  const addonLimit = Number(r.addonLimit || 0);
-                  const referralBonus = Number(r.referralApplicationsAdded || 0);
-                  const totalLimit = planLimit + addonLimit + referralBonus;
-                  const exceeded = totalLimit !== Infinity && totalApplications > totalLimit;
-                  
-                  const isActiveWithNoSaved = r.status === 'active' && Number(r.saved || 0) === 0;
-                  
-                  let rowColor;
-                  if (exceeded) {
-                    rowColor = 'bg-red-100';
-                  } else if (isActiveWithNoSaved) {
-                    rowColor = 'bg-orange-100';
-                  } else {
-                    rowColor = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
-                  }
-                  
-                  return (
-                  <tr key={r.email+idx} className={rowColor}>
+                const planLimit = isPrime ? 160 : isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1000 : Infinity;
+                const addonLimit = Number(r.addonLimit || 0);
+                const referralBonus = Number(r.referralApplicationsAdded || 0);
+                const totalLimit = planLimit + addonLimit + referralBonus;
+                const exceeded = totalLimit !== Infinity && totalApplications > totalLimit;
+
+                const isActiveWithNoSaved = r.status === 'active' && Number(r.saved || 0) === 0;
+
+                let rowColor;
+                if (exceeded) {
+                  rowColor = 'bg-red-100';
+                } else if (isActiveWithNoSaved) {
+                  rowColor = 'bg-orange-100';
+                } else {
+                  rowColor = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                }
+
+                return (
+                  <tr key={r.email + idx} className={rowColor}>
                     <td className="px-2 py-1">
                       <div className="text-gray-900 font-medium truncate max-w-[160px]">{r.name || r.email}</div>
                       <div className="text-gray-500 text-[10px] truncate max-w-[180px]">{r.email}</div>
@@ -362,19 +364,17 @@ export default function ClientJobAnalysis() {
                           value={r.status || 'active'}
                           onChange={(e) => handleStatusChange(r.email, e.target.value)}
                           disabled={savingStatus.has(r.email)}
-                          className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
-                            r.status === 'active' ? 'bg-green-100 text-green-700 border-green-300' :
+                          className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${r.status === 'active' ? 'bg-green-100 text-green-700 border-green-300' :
                             'bg-red-100 text-red-700 border-red-300'
-                          }`}
+                            }`}
                         >
                           <option value="active">Active</option>
                           <option value="inactive">Inactive</option>
                         </select>
                       ) : r.status ? (
-                        <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
-                          r.status === 'active' ? 'bg-green-100 text-green-700' :
+                        <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${r.status === 'active' ? 'bg-green-100 text-green-700' :
                           'bg-red-100 text-red-700'
-                        }`}>
+                          }`}>
                           {r.status.charAt(0).toUpperCase() + r.status.slice(1)}
                         </span>
                       ) : '-'}
@@ -388,22 +388,20 @@ export default function ClientJobAnalysis() {
                             value={phaseValue}
                             onChange={(e) => handlePhasePauseChange(r.email, e.target.value)}
                             disabled={savingPause.has(r.email)}
-                            className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
-                              phaseValue === 'new' ? 'bg-slate-100 text-slate-700 border-slate-300' :
+                            className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${phaseValue === 'new' ? 'bg-slate-100 text-slate-700 border-slate-300' :
                               phaseValue === 'paused' ? 'bg-yellow-100 text-yellow-700 border-yellow-300' :
-                              'bg-green-50 text-green-700 border-green-200'
-                            }`}
+                                'bg-green-50 text-green-700 border-green-200'
+                              }`}
                           >
                             <option value="new">New</option>
                             <option value="paused">Paused</option>
                             <option value="unpaused">Unpaused</option>
                           </select>
                         ) : (
-                          <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
-                            phaseValue === 'new' ? 'bg-slate-100 text-slate-700' :
+                          <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${phaseValue === 'new' ? 'bg-slate-100 text-slate-700' :
                             phaseValue === 'paused' ? 'bg-yellow-100 text-yellow-700' :
-                            'bg-green-50 text-green-700'
-                          }`}>
+                              'bg-green-50 text-green-700'
+                            }`}>
                             {phaseLabel}
                           </span>
                         );
@@ -412,13 +410,12 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1">
                       {r.planType ? (
                         <div className="flex flex-col gap-1">
-                          <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${
-                            r.planType.toLowerCase() === 'executive' ? 'bg-purple-100 text-purple-700' :
+                          <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${r.planType.toLowerCase() === 'executive' ? 'bg-purple-100 text-purple-700' :
                             r.planType.toLowerCase() === 'professional' ? 'bg-blue-100 text-blue-700' :
-                            r.planType.toLowerCase() === 'ignite' ? 'bg-orange-100 text-orange-700' :
-                            r.planType.toLowerCase() === 'prime' ? 'bg-green-100 text-green-700' :
-                            'bg-gray-100 text-gray-700'
-                          }`}>
+                              r.planType.toLowerCase() === 'ignite' ? 'bg-orange-100 text-orange-700' :
+                                r.planType.toLowerCase() === 'prime' ? 'bg-green-100 text-green-700' :
+                                  'bg-gray-100 text-gray-700'
+                            }`}>
                             {r.planType.charAt(0).toUpperCase() + r.planType.slice(1)}
                           </span>
                           <div className="flex flex-col gap-0.5">
@@ -481,19 +478,20 @@ export default function ClientJobAnalysis() {
                       )}
                     </td>
                   </tr>
-                )})}
-                {processedRows.length === 0 && (
-                  <tr>
-                    <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">
-                      {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                )
+              })}
+              {processedRows.length === 0 && (
+                <tr>
+                  <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">
+                    {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
-      
+      </div>
+
     </Layout>
   );
 }

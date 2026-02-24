@@ -614,14 +614,14 @@ export const createOrUpdateClient = async (req, res) => {
 
     const capitalizedPlan = planType && planType.trim()
       ? (planType.trim().toLowerCase() === "ignite"
-          ? "Ignite"
-          : planType.trim().toLowerCase() === "professional"
-            ? "Professional"
-            : planType.trim().toLowerCase() === "executive"
-              ? "Executive"
-              : planType.trim().toLowerCase() === "prime"
-                ? "Prime"
-                : null)
+        ? "Ignite"
+        : planType.trim().toLowerCase() === "professional"
+          ? "Professional"
+          : planType.trim().toLowerCase() === "executive"
+            ? "Executive"
+            : planType.trim().toLowerCase() === "prime"
+              ? "Prime"
+              : null)
       : null;
 
     const userData = {
@@ -889,11 +889,11 @@ const upgradeClientPlan = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid plan type' });
     }
 
-    const capitalizedPlan = planTypeLower === 'ignite' 
-      ? 'Ignite' 
-      : planTypeLower === 'professional' 
-        ? 'Professional' 
-        : planTypeLower === 'executive' 
+    const capitalizedPlan = planTypeLower === 'ignite'
+      ? 'Ignite'
+      : planTypeLower === 'professional'
+        ? 'Professional'
+        : planTypeLower === 'executive'
           ? 'Executive'
           : planTypeLower === 'prime'
             ? 'Prime'
@@ -1354,7 +1354,7 @@ const login = async (req, res) => {
           if (decoded.purpose === 'otp-trust' && decoded.email === emailLower) {
             secondStepOk = true;
           }
-        } catch (_) {}
+        } catch (_) { }
       }
       if (!secondStepOk && sessionKey) {
         const sessionKeyDoc = await SessionKeyModel.findOne({
@@ -2473,11 +2473,17 @@ const getClientStatistics = async (req, res) => {
         JobModel.aggregate([
           { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ } } },
           { $addFields: { _dp: { $split: [{ $trim: { input: '$appliedDate' } }, '/'] } } },
-          { $addFields: { _dt: { $dateFromParts: {
-            year: { $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } },
-            month: { $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 1, onNull: 1 } },
-            day: { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 1, onNull: 1 } }
-          }} } },
+          {
+            $addFields: {
+              _dt: {
+                $dateFromParts: {
+                  year: { $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } },
+                  month: { $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 1, onNull: 1 } },
+                  day: { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 1, onNull: 1 } }
+                }
+              }
+            }
+          },
           { $match: { _dt: { $gte: start, $lte: end } } },
           { $group: { _id: '$userID', count: { $sum: 1 } } }
         ]),
@@ -2962,34 +2968,46 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       // 2) Applied-on-date per client (only if date provided)
       multiFormatDateRegex
         ? JobModel.aggregate([
-            { $match: { appliedDate: { $regex: multiFormatDateRegex } } },
-            { $group: { _id: "$userID", count: { $sum: 1 } } },
-            { $project: { _id: 0, userID: "$_id", count: 1 } }
-          ])
+          { $match: { appliedDate: { $regex: multiFormatDateRegex } } },
+          { $group: { _id: "$userID", count: { $sum: 1 } } },
+          { $project: { _id: 0, userID: "$_id", count: 1 } }
+        ])
         : Promise.resolve([]),
       // 3) Removed-on-date per client (only if date provided)
       multiFormatDateRegex
         ? JobModel.aggregate([
-            { $match: { $and: [
-              { $or: [{ currentStatus: { $regex: /delete/i } }, { currentStatus: { $regex: /removed/i } }] },
-              { updatedAt: { $regex: multiFormatDateRegex } }
-            ]}},
-            { $group: { _id: "$userID", count: { $sum: 1 } } },
-            { $project: { _id: 0, userID: "$_id", count: 1 } }
-          ])
+          {
+            $match: {
+              $and: [
+                { $or: [{ currentStatus: { $regex: /delete/i } }, { currentStatus: { $regex: /removed/i } }] },
+                { updatedAt: { $regex: multiFormatDateRegex } }
+              ]
+            }
+          },
+          { $group: { _id: "$userID", count: { $sum: 1 } } },
+          { $project: { _id: 0, userID: "$_id", count: 1 } }
+        ])
         : Promise.resolve([]),
       // 4) Last applied operator per client — server-side aggregation (replaces full-collection scan)
       JobModel.aggregate([
-        { $match: {
-          operatorName: { $exists: true, $nin: [null, '', 'user'] },
-          appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ }
-        }},
+        {
+          $match: {
+            operatorName: { $exists: true, $nin: [null, '', 'user'] },
+            appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ }
+          }
+        },
         { $addFields: { _dp: { $split: [{ $trim: { input: '$appliedDate' } }, '/'] } } },
-        { $addFields: { _sd: { $add: [
-          { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } }, 10000] },
-          { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 0, onNull: 0 } }, 100] },
-          { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 0, onNull: 0 } }
-        ]} } },
+        {
+          $addFields: {
+            _sd: {
+              $add: [
+                { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } }, 10000] },
+                { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 0, onNull: 0 } }, 100] },
+                { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 0, onNull: 0 } }
+              ]
+            }
+          }
+        },
         { $sort: { _sd: -1 } },
         { $group: { _id: '$userID', operatorName: { $first: '$operatorName' } } },
         { $project: { _id: 0, userID: '$_id', operatorName: 1 } }
@@ -3000,15 +3018,16 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const overallMap = new Map(overall.map(r => [r.userID, r.counts]));
     const lastAppliedOperatorMap = new Map(lastAppliedAgg.map(r => [(r.userID || '').toLowerCase(), r.operatorName]));
-    const allUserIDs = Array.from(new Set([...overallMap.keys(), ...appliedMap.keys(), ...removedMap.keys()]));
+    const jobUserIDs = Array.from(new Set([...overallMap.keys(), ...appliedMap.keys(), ...removedMap.keys()]));
 
     // ── Phase 2: Fetch client + referral data in parallel ──
-    const [clientInfo, referralUsers] = await Promise.all([
-      ClientModel.find({ email: { $in: allUserIDs } })
-        .select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons')
-        .lean(),
-      NewUserModel.find({ email: { $in: allUserIDs } }, 'email referrals').lean()
-    ]);
+    const clientInfo = await ClientModel.find({})
+      .select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons')
+      .lean();
+
+    const allUserIDs = Array.from(new Set([...jobUserIDs, ...clientInfo.map(c => c.email)]));
+
+    const referralUsers = await NewUserModel.find({ email: { $in: allUserIDs } }, 'email referrals').lean();
 
     const clientMap = new Map(clientInfo.map(c => [c.email, {
       name: c.name,
@@ -3587,23 +3606,23 @@ const getRevenueStats = async (req, res) => {
     // Get all clients from ClientModel to calculate real revenue from amountPaid
     const allClients = await ClientModel.find({}).lean();
 
-        // Sum up all amountPaid values (parsing strings to numbers)
-        let totalRevenue = 0;
+    // Sum up all amountPaid values (parsing strings to numbers)
+    let totalRevenue = 0;
 
-        allClients.forEach(client => {
-            let amountPaid = client.amountPaid || 0;
-            
-            // If amountPaid is a string, parse it to a number
-            if (typeof amountPaid === 'string') {
-                // Remove currency symbols ($, ₹) and any whitespace
-                amountPaid = amountPaid.replace(/[$₹,\s]/g, '').trim();
-                // Convert to number, default to 0 if invalid
-                amountPaid = parseFloat(amountPaid) || 0;
-            }
-            
-            // Ensure it's a number before adding
-            totalRevenue += Number(amountPaid) || 0;
-        });
+    allClients.forEach(client => {
+      let amountPaid = client.amountPaid || 0;
+
+      // If amountPaid is a string, parse it to a number
+      if (typeof amountPaid === 'string') {
+        // Remove currency symbols ($, ₹) and any whitespace
+        amountPaid = amountPaid.replace(/[$₹,\s]/g, '').trim();
+        // Convert to number, default to 0 if invalid
+        amountPaid = parseFloat(amountPaid) || 0;
+      }
+
+      // Ensure it's a number before adding
+      totalRevenue += Number(amountPaid) || 0;
+    });
 
     res.status(200).json({
       success: true,
@@ -4096,7 +4115,7 @@ const syncManagerAssignments = async (req, res) => {
 const getOperationsPerformanceReport = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    
+
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
     }
@@ -4257,12 +4276,12 @@ const getCurrentISTTime = () => new Date().toLocaleString('en-IN', { timeZone: '
 // Helper function to merge TODOs from both models, keeping the most recent version
 const mergeTodos = (todos1, todos2) => {
   const todoMap = new Map();
-  
+
   // Add all TODOs from first array
   todos1.forEach(todo => {
     todoMap.set(todo.id, todo);
   });
-  
+
   // Merge TODOs from second array, keeping the one with the latest updatedAt
   todos2.forEach(todo => {
     const existing = todoMap.get(todo.id);
@@ -4271,49 +4290,49 @@ const mergeTodos = (todos1, todos2) => {
     } else {
       // Compare updatedAt timestamps and keep the most recent
       // Handle both string dates and Date objects
-      const existingTime = existing.updatedAt 
+      const existingTime = existing.updatedAt
         ? (typeof existing.updatedAt === 'string' ? new Date(existing.updatedAt) : existing.updatedAt)
         : (existing.createdAt ? (typeof existing.createdAt === 'string' ? new Date(existing.createdAt) : existing.createdAt) : new Date(0));
-      const newTime = todo.updatedAt 
+      const newTime = todo.updatedAt
         ? (typeof todo.updatedAt === 'string' ? new Date(todo.updatedAt) : todo.updatedAt)
         : (todo.createdAt ? (typeof todo.createdAt === 'string' ? new Date(todo.createdAt) : todo.createdAt) : new Date(0));
-      
+
       if (newTime > existingTime || isNaN(existingTime.getTime())) {
         todoMap.set(todo.id, todo);
       }
     }
   });
-  
+
   return Array.from(todoMap.values());
 };
 
 // Helper function to merge lock periods from both models
 const mergeLockPeriods = (periods1, periods2) => {
   const periodMap = new Map();
-  
+
   periods1.forEach(period => {
     periodMap.set(period.id, period);
   });
-  
+
   periods2.forEach(period => {
     const existing = periodMap.get(period.id);
     if (!existing) {
       periodMap.set(period.id, period);
     } else {
       // Keep the most recent one
-      const existingTime = existing.createdAt 
+      const existingTime = existing.createdAt
         ? (typeof existing.createdAt === 'string' ? new Date(existing.createdAt) : existing.createdAt)
         : new Date(0);
-      const newTime = period.createdAt 
+      const newTime = period.createdAt
         ? (typeof period.createdAt === 'string' ? new Date(period.createdAt) : period.createdAt)
         : new Date(0);
-      
+
       if (newTime > existingTime || isNaN(existingTime.getTime())) {
         periodMap.set(period.id, period);
       }
     }
   });
-  
+
   return Array.from(periodMap.values());
 };
 
@@ -4416,7 +4435,7 @@ app.get('/api/client-todos/all', async (req, res) => {
     allClientOps.forEach(opsData => {
       const email = opsData.clientEmail.toLowerCase();
       const existing = mergedDataMap.get(email);
-      
+
       if (existing) {
         existing.todos = mergeTodos(existing.todos, opsData.todos || []);
         existing.lockPeriods = mergeLockPeriods(existing.lockPeriods, opsData.lockPeriods || []);
@@ -4467,7 +4486,7 @@ app.get('/api/client-todos/all', async (req, res) => {
     });
 
     const clientEmailList = Array.from(clientEmails);
-    
+
     const jobAnalysisPipeline = [
       {
         $match: {
@@ -4522,7 +4541,7 @@ app.get('/api/client-todos/all', async (req, res) => {
       const emailLower = job.userID.toLowerCase();
       const existing = jobsByUser.get(emailLower);
       const jobDate = parseDateString(job.appliedDate);
-      
+
       if (!existing || !existing.date || (jobDate && jobDate > existing.date)) {
         jobsByUser.set(emailLower, {
           companyName: job.companyName,
@@ -4585,7 +4604,7 @@ app.get('/api/client-todos/:email', async (req, res) => {
   try {
     const { email } = req.params;
     const emailLower = email.toLowerCase();
-    
+
     // Fetch from both models
     let clientTodos = await ClientTodosModel.findOne({ clientEmail: emailLower });
     let clientOps = await ClientOperationsModel.findOne({ clientEmail: emailLower });
@@ -4603,7 +4622,7 @@ app.get('/api/client-todos/:email', async (req, res) => {
 
       clientTodos = new ClientTodosModel(defaultData);
       clientOps = new ClientOperationsModel(defaultData);
-      
+
       await Promise.all([
         clientTodos.save(),
         clientOps.save()
@@ -4623,7 +4642,7 @@ app.get('/api/client-todos/:email', async (req, res) => {
       const defaultTodoTitles = ['Create optimized resume', 'LinkedIn Optimization', 'Cover letter Optimization'];
       const existingTitles = mergedTodos.map(t => t.title);
       const missingDefaults = defaultTodoTitles.filter(title => !existingTitles.includes(title));
-      
+
       if (missingDefaults.length > 0 || mergedTodos.length === 0) {
         // Add missing default TODOs
         const defaultTodos = getDefaultTodos();
@@ -4893,9 +4912,9 @@ app.post('/api/client-optimizations/upload', fileUpload.single('file'), async (r
     }
 
     if (!documentType || !['resume', 'coverLetter'].includes(documentType)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: "documentType must be 'resume' or 'coverLetter'" 
+      return res.status(400).json({
+        success: false,
+        error: "documentType must be 'resume' or 'coverLetter'"
       });
     }
 
@@ -4928,7 +4947,7 @@ app.post('/api/client-optimizations/upload', fileUpload.single('file'), async (r
 
     let data;
     const contentType = response.headers.get('content-type');
-    
+
     if (contentType && contentType.includes('application/json')) {
       data = await response.json();
     } else {
@@ -4960,8 +4979,8 @@ app.post('/api/client-optimizations/upload', fileUpload.single('file'), async (r
       name: error.name,
       cause: error.cause
     });
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       error: error.message || 'Failed to upload file to dashboard',
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
@@ -4985,7 +5004,7 @@ app.get('/api/client-optimizations/documents/:email', async (req, res) => {
 
     let data;
     const contentType = response.headers.get('content-type');
-    
+
     if (contentType && contentType.includes('application/json')) {
       data = await response.json();
     } else {
@@ -5002,8 +5021,8 @@ app.get('/api/client-optimizations/documents/:email', async (req, res) => {
       throw new Error(errorMessage);
     }
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       documents: data.documents,
       resumeUrl: data.documents?.resumeUrl,
       coverLetterUrl: data.documents?.coverLetterUrl,
@@ -5018,8 +5037,8 @@ app.get('/api/client-optimizations/documents/:email', async (req, res) => {
       name: error.name,
       cause: error.cause
     });
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       error: error.message || 'Failed to fetch documents',
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
@@ -5058,7 +5077,7 @@ app.post('/api/client-optimizations/sync-to-dashboard', async (req, res) => {
 
     let data;
     const contentType = response.headers.get('content-type');
-    
+
     if (contentType && contentType.includes('application/json')) {
       data = await response.json();
     } else {
@@ -5083,8 +5102,8 @@ app.post('/api/client-optimizations/sync-to-dashboard', async (req, res) => {
       name: error.name,
       cause: error.cause
     });
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       error: error.message || 'Failed to sync to dashboard',
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
@@ -5201,31 +5220,31 @@ async function runZeroSavedJobReminder() {
   if (!DISCORD_ZERO_SAVED_WEBHOOK) return;
   try {
     // Get all active, unpaused, and not in onboarding-phase clients (no reminders for "new" clients)
-    const activeUnpausedClients = await ClientModel.find({ 
+    const activeUnpausedClients = await ClientModel.find({
       status: 'active',
       isPaused: { $ne: true },
       onboardingPhase: { $ne: true }
     })
       .select('email name')
       .lean();
-    
+
     if (activeUnpausedClients.length === 0) {
       console.log('📬 [Zero Saved Reminder] No active and unpaused clients found');
       return;
     }
 
     const clientEmails = activeUnpausedClients.map((c) => (c.email || '').toLowerCase()).filter(Boolean);
-    
+
     const savedByUser = await JobModel.aggregate([
-      { 
-        $match: { 
+      {
+        $match: {
           userID: { $in: clientEmails },
-          currentStatus: { $regex: /save/i } 
-        } 
+          currentStatus: { $regex: /save/i }
+        }
       },
       { $group: { _id: '$userID', saved: { $sum: 1 } } }
     ]);
-    
+
     const savedMap = new Map((savedByUser || []).map((r) => [r._id.toLowerCase(), r.saved || 0]));
     const clientNameMap = new Map((activeUnpausedClients || []).map((c) => [c.email.toLowerCase(), c.name || c.email]));
 
@@ -5233,14 +5252,14 @@ async function runZeroSavedJobReminder() {
     for (const client of activeUnpausedClients || []) {
       const email = (client.email || '').toLowerCase();
       if (!email) continue;
-      
+
       const saved = savedMap.get(email) || 0;
       // Only send message if saved count is 0
       if (saved !== 0) continue;
-      
+
       const clientName = clientNameMap.get(email) || email;
       const message = `${clientName} have zero jobs in their dashboard please add jobs`;
-      
+
       await fetch(DISCORD_ZERO_SAVED_WEBHOOK, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -5248,7 +5267,7 @@ async function runZeroSavedJobReminder() {
       });
       sentCount += 1;
     }
-    
+
     console.log(`📬 [Zero Saved Reminder] Sent Discord reminders for ${sentCount} client(s) with zero saved jobs`);
   } catch (err) {
     console.error('❌ [Zero Saved Reminder] Error:', err);
