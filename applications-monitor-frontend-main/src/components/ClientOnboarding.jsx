@@ -384,6 +384,8 @@ export default function ClientOnboarding() {
   const [fetchingAppliedOnDate, setFetchingAppliedOnDate] = useState(false); // Loading state for find applied
   const [loadingJobDetails, setLoadingJobDetails] = useState(false); // Loading state for full job details (lazy-loaded on card open)
   const [showAdminTicketSummary, setShowAdminTicketSummary] = useState(true); // Admin ticket count panel
+  const notificationSoundRef = useRef(null);  // Audio object for notification sound
+  const prevUnreadCountRef = useRef(-1);       // -1 = first load (don't play sound on mount)
   const prefetchCacheRef = useRef(new Map()); // jobId → full job data (populated on hover)
   const hoverTimerRef   = useRef(null);       // setTimeout handle for hover delay
   const attachmentNameInputRef = useRef(null);
@@ -590,7 +592,21 @@ export default function ClientOnboarding() {
       const res = await fetch(`${API_BASE}/api/onboarding/notifications`, { headers: AUTH_HEADERS() });
       if (res.ok) {
         const data = await res.json();
-        setNotifications(data.notifications || []);
+        const notifs = data.notifications || [];
+        const unreadCount = notifs.filter(n => !n.read).length;
+        // Play sound when unread count increases (skip the initial load)
+        if (prevUnreadCountRef.current >= 0 && unreadCount > prevUnreadCountRef.current) {
+          try {
+            if (!notificationSoundRef.current) {
+              notificationSoundRef.current = new Audio('/discord-notification.mp3');
+              notificationSoundRef.current.volume = 0.5;
+            }
+            notificationSoundRef.current.currentTime = 0;
+            notificationSoundRef.current.play().catch(() => {});
+          } catch (_) { }
+        }
+        prevUnreadCountRef.current = unreadCount;
+        setNotifications(notifs);
       }
     } catch (_) { }
   }, []);
@@ -757,6 +773,24 @@ export default function ClientOnboarding() {
     fetchNotifications();
     fetchNonResolvedIssues();
   }, [fetchNotifications, fetchNonResolvedIssues]);
+
+  // Poll for new notifications every 30 seconds (plays sound when new ones arrive)
+  useEffect(() => {
+    const id = setInterval(() => {
+      fetchNotifications();
+      fetchNonResolvedIssues();
+    }, 30000);
+    return () => clearInterval(id);
+  }, [fetchNotifications, fetchNonResolvedIssues]);
+
+  // Cleanup all timers on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+      if (scrollLoopRef.current) cancelAnimationFrame(scrollLoopRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!selectedJob?._id) return;
@@ -1787,10 +1821,10 @@ export default function ClientOnboarding() {
     handleImportAllClients();
   }, [handleImportAllClients]);
 
-  const existingClientEmails = (jobs || []).map((j) => (j.clientEmail || '').toLowerCase());
-  const availableClients = (clientsList || []).filter(
-    (c) => c.email && !existingClientEmails.includes((c.email || '').toLowerCase())
-  );
+  const availableClients = useMemo(() => {
+    const existing = new Set((jobs || []).map((j) => (j.clientEmail || '').toLowerCase()));
+    return (clientsList || []).filter((c) => c.email && !existing.has((c.email || '').toLowerCase()));
+  }, [jobs, clientsList]);
 
   const handleAddSubmit = async () => {
     let clientEmail = '';
@@ -1863,7 +1897,7 @@ export default function ClientOnboarding() {
     );
   }
 
-  const unreadNotifications = (notifications || []).filter((n) => !n.read);
+  const unreadNotifications = useMemo(() => (notifications || []).filter((n) => !n.read), [notifications]);
   const handleNotificationClick = (notification) => {
     const job = jobs.find((j) => j._id === notification.jobId);
     if (job) handleCardClick(job);
