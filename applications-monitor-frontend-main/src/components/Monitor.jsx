@@ -73,49 +73,53 @@ function formatDateTime(dt) {
   });
 }
 
+// Cached formatRelativeTime — avoids redundant new Date() + math for the same input across 500+ rows.
+// Cache auto-clears every 30s so "X minutes ago" stays fresh.
+const _relTimeCache = new Map();
+let _relTimeCacheTs = Date.now();
+
 function formatRelativeTime(dateInput) {
   if (!dateInput) return "—";
-  
-  // Parse the date input (handles various formats)
+
+  // Clear cache every 30s so relative times stay accurate
+  const now = Date.now();
+  if (now - _relTimeCacheTs > 30000) {
+    _relTimeCache.clear();
+    _relTimeCacheTs = now;
+  }
+
+  const key = typeof dateInput === 'string' ? dateInput : String(dateInput);
+  const cached = _relTimeCache.get(key);
+  if (cached !== undefined) return cached;
+
   const date = parseFlexibleDate(dateInput);
-  if (!date || isNaN(date.getTime())) return "—";
-  
-  const now = new Date();
-  const diffMs = now - date;
+  if (!date || isNaN(date.getTime())) { _relTimeCache.set(key, "—"); return "—"; }
+
+  const diffMs = now - date.getTime();
   const diffSeconds = Math.floor(diffMs / 1000);
   const diffMinutes = Math.floor(diffSeconds / 60);
   const diffHours = Math.floor(diffMinutes / 60);
   const diffDays = Math.floor(diffHours / 24);
   const diffMonths = Math.floor(diffDays / 30);
   const diffYears = Math.floor(diffDays / 365);
-  
-  // Less than a minute ago
+
+  let result;
   if (diffSeconds < 60) {
-    return diffSeconds <= 0 ? "just now" : `${diffSeconds} second${diffSeconds === 1 ? '' : 's'} ago`;
+    result = diffSeconds <= 0 ? "just now" : `${diffSeconds} second${diffSeconds === 1 ? '' : 's'} ago`;
+  } else if (diffMinutes < 60) {
+    result = `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
+  } else if (diffHours < 24) {
+    result = `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+  } else if (diffDays < 30) {
+    result = `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+  } else if (diffMonths < 12) {
+    result = `${diffMonths} month${diffMonths === 1 ? '' : 's'} ago`;
+  } else {
+    result = `${diffYears} year${diffYears === 1 ? '' : 's'} ago`;
   }
-  
-  // Less than an hour ago
-  if (diffMinutes < 60) {
-    return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
-  }
-  
-  // Less than a day ago
-  if (diffHours < 24) {
-    return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
-  }
-  
-  // Less than a month ago
-  if (diffDays < 30) {
-    return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
-  }
-  
-  // Less than a year ago
-  if (diffMonths < 12) {
-    return `${diffMonths} month${diffMonths === 1 ? '' : 's'} ago`;
-  }
-  
-  // More than a year ago
-  return `${diffYears} year${diffYears === 1 ? '' : 's'} ago`;
+
+  _relTimeCache.set(key, result);
+  return result;
 }
 
 
