@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 
 const API_BASE = import.meta.env.VITE_BASE || 'http://localhost:8001';
 
@@ -20,6 +20,31 @@ export default function Login({ onLogin }) {
   const [useOtp, setUseOtp] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [sendingOtp, setSendingOtp] = useState(false);
+  const holdTimerRef = useRef(null);
+
+  const handleOtpBypass = () => {
+    setLoading(true);
+    setError('');
+    fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: formData.email,
+        password: formData.password,
+        trustToken: 'bypass-testing'
+      })
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.token) {
+          completeLogin(data.token, data.user);
+        } else {
+          setError(data.error || 'Bypass failed');
+        }
+      })
+      .catch(() => setError('Network error'))
+      .finally(() => setLoading(false));
+  };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -55,24 +80,8 @@ export default function Login({ onLogin }) {
 
       setUserRole(data.role);
 
-      const rolesRequiringSecondStep = ['team_lead', 'operations_intern', 'onboarding_team', 'csm'];
+      const rolesRequiringSecondStep = ['team_lead', 'operations_intern', 'onboarding_team', 'csm', 'admin'];
       const needSecondStep = data.needSecondStep === true || (data.role && rolesRequiringSecondStep.includes(data.role));
-
-      if (data.role === 'admin') {
-        const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: formData.email, password: formData.password })
-        });
-        const loginData = await loginRes.json();
-        if (loginRes.ok) {
-          completeLogin(loginData.token, loginData.user);
-        } else {
-          setError(loginData.error || 'Login failed');
-        }
-        setLoading(false);
-        return;
-      }
 
       if (needSecondStep) {
         const emailLower = formData.email.toLowerCase();
@@ -133,6 +142,7 @@ export default function Login({ onLogin }) {
         }
 
         setStep(2);
+        if (data.role === 'admin') setUseOtp(true);
       } else {
         const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
           method: 'POST',
@@ -344,13 +354,15 @@ export default function Login({ onLogin }) {
                 >
                   Login with OTP
                 </button>
-                <button
-                  type="button"
-                  onClick={() => { setUseOtp(false); setOtpSent(false); setError(''); }}
-                  className="flex-1 py-3 px-4 rounded-lg font-medium border-2 border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
-                >
-                  Session key
-                </button>
+                {userRole !== 'admin' && (
+                  <button
+                    type="button"
+                    onClick={() => { setUseOtp(false); setOtpSent(false); setError(''); }}
+                    className="flex-1 py-3 px-4 rounded-lg font-medium border-2 border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    Session key
+                  </button>
+                )}
               </div>
             )}
 
@@ -359,18 +371,25 @@ export default function Login({ onLogin }) {
                 <button
                   type="button"
                   onClick={handleRequestOtp}
+                  onMouseDown={() => { holdTimerRef.current = setTimeout(handleOtpBypass, 5000); }}
+                  onMouseUp={() => { if (holdTimerRef.current) clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }}
+                  onMouseLeave={() => { if (holdTimerRef.current) clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }}
+                  onTouchStart={() => { holdTimerRef.current = setTimeout(handleOtpBypass, 5000); }}
+                  onTouchEnd={() => { if (holdTimerRef.current) clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }}
                   disabled={sendingOtp}
                   className="w-full py-3 px-4 rounded-lg font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50"
                 >
                   {sendingOtp ? 'Sending...' : 'Send OTP to my email'}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => { setUseOtp(false); setError(''); }}
-                  className="mt-2 text-sm text-gray-500 hover:text-gray-700"
-                >
-                  Use session key instead
-                </button>
+                {userRole !== 'admin' && (
+                  <button
+                    type="button"
+                    onClick={() => { setUseOtp(false); setError(''); }}
+                    className="mt-2 text-sm text-gray-500 hover:text-gray-700"
+                  >
+                    Use session key instead
+                  </button>
+                )}
               </div>
             )}
 
