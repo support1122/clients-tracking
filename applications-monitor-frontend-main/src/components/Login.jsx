@@ -20,6 +20,7 @@ export default function Login({ onLogin }) {
   const [useOtp, setUseOtp] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [sendingOtp, setSendingOtp] = useState(false);
+  const [rememberFor30Days, setRememberFor30Days] = useState(true);
   const holdTimerRef = useRef(null);
 
   const handleOtpBypass = () => {
@@ -202,10 +203,14 @@ export default function Login({ onLogin }) {
       });
       const data = await res.json();
       if (res.ok && data.trustToken) {
-        localStorage.setItem(
-          'portalOtpTrust',
-          JSON.stringify({ email: formData.email.toLowerCase(), trustToken: data.trustToken })
-        );
+        if (rememberFor30Days) {
+          localStorage.setItem(
+            'portalOtpTrust',
+            JSON.stringify({ email: formData.email.toLowerCase(), trustToken: data.trustToken })
+          );
+        } else {
+          localStorage.removeItem('portalOtpTrust');
+        }
         const loginRes = await fetch(`${API_BASE}/api/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -410,6 +415,15 @@ export default function Login({ onLogin }) {
                     className="w-full px-4 py-3 border border-orange-300 rounded-lg focus:ring-2 focus:ring-orange-500 bg-orange-50 text-center text-xl tracking-widest"
                   />
                 </div>
+                <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={rememberFor30Days}
+                    onChange={(e) => setRememberFor30Days(e.target.checked)}
+                    className="rounded"
+                  />
+                  Remember for 30 days (skip OTP next time)
+                </label>
                 <button
                   type="submit"
                   disabled={loading || (formData.otp || '').length !== 4}
