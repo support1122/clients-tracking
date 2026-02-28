@@ -11,6 +11,7 @@ export default function AdminLogin() {
   const [me, setMe] = useState(null);
   const [otpStep, setOtpStep] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
+  const [rememberFor30Days, setRememberFor30Days] = useState(true);
   const holdTimerRef = useRef(null);
 
   function handleOtpBypass() {
@@ -94,6 +95,18 @@ export default function AdminLogin() {
         setLoading(false);
         return;
       }
+      if (rememberFor30Days) {
+        localStorage.setItem(
+          "adminOtpTrust",
+          JSON.stringify({
+            email: form.email.toLowerCase(),
+            trustToken: verifyData.trustToken,
+            verifiedAt: Date.now(),
+          })
+        );
+      } else {
+        localStorage.removeItem("adminOtpTrust");
+      }
       const loginRes = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -126,6 +139,38 @@ export default function AdminLogin() {
     setError("");
     setLoading(true);
     try {
+      const emailLower = form.email.trim().toLowerCase();
+      const storedTrust = localStorage.getItem("adminOtpTrust");
+      if (storedTrust) {
+        try {
+          const { trustToken, email } = JSON.parse(storedTrust);
+          if (email === emailLower && trustToken) {
+            const validRes = await fetch(`${API_BASE_URL}/api/auth/validate-otp-trust`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email: emailLower, trustToken }),
+            });
+            const validData = await validRes.json();
+            if (validData.valid) {
+              const loginRes = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: form.email, password: form.password, trustToken }),
+              });
+              const loginData = await loginRes.json();
+              if (loginRes.ok) {
+                localStorage.setItem("ff_admin_jwt", loginData.token);
+                localStorage.setItem("authToken", loginData.token);
+                localStorage.setItem("user", JSON.stringify(loginData.user));
+                setMe(loginData.user);
+                setLoading(false);
+                return;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
       const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -198,6 +243,14 @@ export default function AdminLogin() {
                 required
                 style={{ padding: 10, fontSize: 18, textAlign: "center", letterSpacing: 4 }}
               />
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 14 }}>
+                <input
+                  type="checkbox"
+                  checked={rememberFor30Days}
+                  onChange={(e) => setRememberFor30Days(e.target.checked)}
+                />
+                Remember for 30 days (skip OTP next time)
+              </label>
               <button disabled={loading} type="submit">
                 {loading ? "Verifying..." : "Verify OTP & Sign In"}
               </button>
