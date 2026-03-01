@@ -450,6 +450,34 @@ export default function ClientOnboarding() {
     return baseJobs;
   }, []);
 
+  // Helper function to extract sorting number from clientNumber or clientName
+  const getSortingNumber = (job) => {
+    // First, try to use clientNumber if it exists
+    if (job.clientNumber != null) {
+      return job.clientNumber;
+    }
+    
+    // Otherwise, extract number starting with 5 from clientName
+    const clientName = job.clientName || '';
+    // Match number starting with 5 (e.g., "5762 - Kushal Agarwal" -> 5762)
+    const match = clientName.match(/^(\d{4,})/);
+    if (match && match[1]) {
+      const num = parseInt(match[1], 10);
+      // Check if it starts with 5
+      if (num >= 5000 && num < 6000) {
+        return num;
+      }
+    }
+    
+    // Fallback: try to extract any number from the beginning of clientName
+    const fallbackMatch = clientName.match(/^(\d+)/);
+    if (fallbackMatch && fallbackMatch[1]) {
+      return parseInt(fallbackMatch[1], 10);
+    }
+    
+    return 0; // Default if no number found
+  };
+
   // Get unique clients list for sidebar (excluding completed status) - admin only
   const clientsListForSidebar = useMemo(() => {
     if (!isAdmin) return [];
@@ -478,10 +506,11 @@ export default function ClientOnboarding() {
     
     return Array.from(clientMap.values())
       .sort((a, b) => {
-        // Sort by jobNumber in ascending order (lowest to highest)
-        const jobNumA = a.jobNumber != null ? a.jobNumber : 0;
-        const jobNumB = b.jobNumber != null ? b.jobNumber : 0;
-        return jobNumA - jobNumB; // Ascending order (lowest to highest)
+        // Get sorting number from clientNumber or extract from clientName
+        const numA = getSortingNumber(a);
+        const numB = getSortingNumber(b);
+        // Sort in descending order (highest to lowest)
+        return numB - numA;
       });
   }, [jobs, isAdmin]);
 
