@@ -478,10 +478,10 @@ export default function ClientOnboarding() {
     
     return Array.from(clientMap.values())
       .sort((a, b) => {
-        // Sort by jobNumber in descending order (highest to lowest)
+        // Sort by jobNumber in ascending order (lowest to highest)
         const jobNumA = a.jobNumber != null ? a.jobNumber : 0;
         const jobNumB = b.jobNumber != null ? b.jobNumber : 0;
-        return jobNumB - jobNumA; // Descending order
+        return jobNumA - jobNumB; // Ascending order (lowest to highest)
       });
   }, [jobs, isAdmin]);
 
