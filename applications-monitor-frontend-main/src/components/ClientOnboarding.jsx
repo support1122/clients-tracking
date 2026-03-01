@@ -384,6 +384,7 @@ export default function ClientOnboarding() {
   const [fetchingAppliedOnDate, setFetchingAppliedOnDate] = useState(false); // Loading state for find applied
   const [loadingJobDetails, setLoadingJobDetails] = useState(false); // Loading state for full job details (lazy-loaded on card open)
   const [showAdminTicketSummary, setShowAdminTicketSummary] = useState(true); // Admin ticket count panel
+  const [filteredClientEmail, setFilteredClientEmail] = useState(null); // Filter by client (admin only)
   const notificationSoundRef = useRef(null);  // Audio object for notification sound
   const prevUnreadCountRef = useRef(-1);       // -1 = first load (don't play sound on mount)
   const prefetchCacheRef = useRef(new Map()); // jobId → full job data (populated on hover)
@@ -449,6 +450,42 @@ export default function ClientOnboarding() {
     return baseJobs;
   }, []);
 
+  // Get unique clients list for sidebar (excluding completed status) - admin only
+  const clientsListForSidebar = useMemo(() => {
+    if (!isAdmin) return [];
+    const jobsList = Array.isArray(jobs) ? jobs : [];
+    const clientMap = new Map();
+    
+    jobsList.forEach((job) => {
+      // Exclude clients with completed status
+      if (job.status === 'completed') return;
+      
+      const email = (job.clientEmail || '').toLowerCase();
+      if (!email) return;
+      
+      // Use the most recent job data for each client (by updatedAt or createdAt)
+      if (!clientMap.has(email)) {
+        clientMap.set(email, job);
+      } else {
+        const existing = clientMap.get(email);
+        const existingDate = existing.updatedAt ? new Date(existing.updatedAt) : (existing.createdAt ? new Date(existing.createdAt) : new Date(0));
+        const newDate = job.updatedAt ? new Date(job.updatedAt) : (job.createdAt ? new Date(job.createdAt) : new Date(0));
+        if (newDate > existingDate) {
+          clientMap.set(email, job);
+        }
+      }
+    });
+    
+    return Array.from(clientMap.values())
+      .sort((a, b) => {
+        // Sort by clientNumber if available, otherwise by name
+        const numA = a.clientNumber != null ? a.clientNumber : 0;
+        const numB = b.clientNumber != null ? b.clientNumber : 0;
+        if (numA !== numB) return numB - numA; // Descending order
+        return ((a.clientName || '').localeCompare(b.clientName || ''));
+      });
+  }, [jobs, isAdmin]);
+
   const jobsByColumn = useMemo(() => {
     const uniqueJobsMap = new Map();
     const jobsList = Array.isArray(jobs) ? jobs : [];
@@ -458,6 +495,15 @@ export default function ClientOnboarding() {
       }
     });
     let deduplicatedJobs = Array.from(uniqueJobsMap.values());
+    
+    // Filter by selected client (admin only)
+    if (isAdmin && filteredClientEmail) {
+      const emailLower = filteredClientEmail.toLowerCase();
+      deduplicatedJobs = deduplicatedJobs.filter((job) => {
+        return (job.clientEmail || '').toLowerCase() === emailLower;
+      });
+    }
+    
     const q = (searchQuery || '').trim().toLowerCase();
     if (q) {
       deduplicatedJobs = deduplicatedJobs.filter((job) => {
@@ -472,7 +518,7 @@ export default function ClientOnboarding() {
       map[status] = computeJobsForStatus(status, deduplicatedJobs);
     });
     return map;
-  }, [jobs, visibleColumns, computeJobsForStatus, searchQuery]);
+  }, [jobs, visibleColumns, computeJobsForStatus, searchQuery, filteredClientEmail, isAdmin]);
 
   // Admin: ticket count per dashboard manager (statuses up to applications_in_progress, excluding completed)
   const adminTicketSummary = useMemo(() => {
@@ -2321,19 +2367,71 @@ export default function ClientOnboarding() {
         </div>
       )}
 
-      {/* Main Content / Kanban - scrollable; drag card near edge for smooth auto-scroll */}
-      <div
-        ref={boardRef}
-        className="overflow-x-auto overflow-y-hidden h-[calc(100vh-80px)] pb-6 scroll-smooth"
-        onDragOver={handleDragOverBoard}
-        style={{ WebkitOverflowScrolling: 'touch' }}
-      >
-        {loading ? (
-          <div className="flex h-full w-full items-center justify-center">
-            <Loader2 className="w-10 h-10 animate-spin text-primary" />
+      {/* Main Content Area - Sidebar + Kanban */}
+      <div className="flex gap-0 h-[calc(100vh-80px)]">
+        {/* Left Sidebar - Client List (Admin Only) */}
+        {isAdmin && (
+          <div className="w-64 flex-shrink-0 bg-white border-r border-gray-200 flex flex-col h-full">
+            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+              <h2 className="text-sm font-semibold text-gray-900">Clients</h2>
+              {filteredClientEmail && (
+                <button
+                  onClick={() => setFilteredClientEmail(null)}
+                  className="mt-2 text-xs text-primary hover:text-primary-hover font-medium flex items-center gap-1"
+                >
+                  <X className="w-3 h-3" />
+                  Clear filter
+                </button>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {clientsListForSidebar.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm text-gray-500">
+                  No clients found
+                </div>
+              ) : (
+                <ul className="py-2">
+                  {clientsListForSidebar.map((job) => {
+                    const email = (job.clientEmail || '').toLowerCase();
+                    const isSelected = filteredClientEmail && filteredClientEmail.toLowerCase() === email;
+                    const displayName = clientDisplayName(job);
+                    return (
+                      <li key={email}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFilteredClientEmail(isSelected ? null : job.clientEmail);
+                          }}
+                          className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors hover:bg-gray-50 ${
+                            isSelected 
+                              ? 'bg-primary/10 text-primary border-l-4 border-primary' 
+                              : 'text-gray-700 hover:text-gray-900'
+                          }`}
+                        >
+                          <span className="block truncate">{displayName}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
           </div>
-        ) : (
-          <div className="flex gap-6 p-6 min-w-max h-full">
+        )}
+
+        {/* Main Content / Kanban - scrollable; drag card near edge for smooth auto-scroll */}
+        <div
+          ref={boardRef}
+          className={`flex-1 overflow-x-auto overflow-y-hidden pb-6 scroll-smooth ${isAdmin ? '' : 'h-full'}`}
+          onDragOver={handleDragOverBoard}
+          style={{ WebkitOverflowScrolling: 'touch' }}
+        >
+          {loading ? (
+            <div className="flex h-full w-full items-center justify-center">
+              <Loader2 className="w-10 h-10 animate-spin text-primary" />
+            </div>
+          ) : (
+            <div className="flex gap-6 p-6 min-w-max h-full">
             {visibleColumns.map((status) => {
               const columnJobs = jobsByColumn[status] || [];
               return (
@@ -2392,6 +2490,7 @@ export default function ClientOnboarding() {
             })}
           </div>
         )}
+        </div>
       </div>
 
       {/* Move to sheet (long-press 3.5s on a card) - mobile-style */}
