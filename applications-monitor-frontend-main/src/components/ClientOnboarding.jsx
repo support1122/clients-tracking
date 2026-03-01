@@ -478,11 +478,10 @@ export default function ClientOnboarding() {
     
     return Array.from(clientMap.values())
       .sort((a, b) => {
-        // Sort by clientNumber if available, otherwise by name
-        const numA = a.clientNumber != null ? a.clientNumber : 0;
-        const numB = b.clientNumber != null ? b.clientNumber : 0;
-        if (numA !== numB) return numB - numA; // Descending order
-        return ((a.clientName || '').localeCompare(b.clientName || ''));
+        // Sort by jobNumber in descending order (highest to lowest)
+        const jobNumA = a.jobNumber != null ? a.jobNumber : 0;
+        const jobNumB = b.jobNumber != null ? b.jobNumber : 0;
+        return jobNumB - jobNumA; // Descending order
       });
   }, [jobs, isAdmin]);
 
