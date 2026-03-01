@@ -2395,6 +2395,8 @@ export default function ClientOnboarding() {
                     const email = (job.clientEmail || '').toLowerCase();
                     const isSelected = filteredClientEmail && filteredClientEmail.toLowerCase() === email;
                     const displayName = clientDisplayName(job);
+                    const planType = (job.planType || 'Professional').toLowerCase();
+                    const fullDisplayName = `${displayName} - ${planType}`;
                     return (
                       <li key={email}>
                         <button
@@ -2408,7 +2410,7 @@ export default function ClientOnboarding() {
                               : 'text-gray-700 hover:text-gray-900'
                           }`}
                         >
-                          <span className="block truncate">{displayName}</span>
+                          <span className="block truncate">{fullDisplayName}</span>
                         </button>
                       </li>
                     );
