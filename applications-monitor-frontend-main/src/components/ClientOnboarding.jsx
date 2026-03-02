@@ -385,6 +385,7 @@ export default function ClientOnboarding() {
   const [loadingJobDetails, setLoadingJobDetails] = useState(false); // Loading state for full job details (lazy-loaded on card open)
   const [showAdminTicketSummary, setShowAdminTicketSummary] = useState(true); // Admin ticket count panel
   const [filteredClientEmail, setFilteredClientEmail] = useState(null); // Filter by client (admin only)
+  const [clientSidebarSearch, setClientSidebarSearch] = useState(''); // Search in client list (name or number)
   const notificationSoundRef = useRef(null);  // Audio object for notification sound
   const prevUnreadCountRef = useRef(-1);       // -1 = first load (don't play sound on mount)
   const prefetchCacheRef = useRef(new Map()); // jobId → full job data (populated on hover)
@@ -482,6 +483,7 @@ export default function ClientOnboarding() {
   const clientsListForSidebar = useMemo(() => {
     if (!isAdmin) return [];
     const jobsList = Array.isArray(jobs) ? jobs : [];
+    const clientsListArr = Array.isArray(clientsList) ? clientsList : [];
     const clientMap = new Map();
     
     jobsList.forEach((job) => {
@@ -505,24 +507,49 @@ export default function ClientOnboarding() {
     });
     
     return Array.from(clientMap.values())
+      .map((job) => {
+        // Enrich with clientNumber from clientsList when job lacks it (e.g. old clients added via addnumbers API)
+        const email = (job.clientEmail || '').toLowerCase();
+        const clientNum = job.clientNumber ?? clientsListArr.find((c) => (c.email || '').toLowerCase() === email)?.clientNumber;
+        return clientNum != null ? { ...job, clientNumber: clientNum } : job;
+      })
       .sort((a, b) => {
         // Get sorting number from clientNumber or extract from clientName
         const numA = getSortingNumber(a);
         const numB = getSortingNumber(b);
-        // Sort in descending order (highest to lowest)
-        return numB - numA;
+        // Sort in ascending order (lowest/oldest first)
+        return numA - numB;
       });
-  }, [jobs, isAdmin]);
+  }, [jobs, isAdmin, clientsList]);
+
+  // Filter sidebar clients by search (name or client number)
+  const filteredClientsForSidebar = useMemo(() => {
+    const list = clientsListForSidebar;
+    const q = (clientSidebarSearch || '').trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((job) => {
+      const name = (job.clientName || '').toLowerCase();
+      const num = String(job.clientNumber ?? '').toLowerCase();
+      const display = `${job.clientNumber ?? ''} ${name}`.toLowerCase();
+      return name.includes(q) || num.includes(q) || display.includes(q);
+    });
+  }, [clientsListForSidebar, clientSidebarSearch]);
 
   const jobsByColumn = useMemo(() => {
     const uniqueJobsMap = new Map();
     const jobsList = Array.isArray(jobs) ? jobs : [];
+    const clientsListArr = Array.isArray(clientsList) ? clientsList : [];
     jobsList.forEach((job) => {
       if (job._id && !uniqueJobsMap.has(job._id)) {
         uniqueJobsMap.set(job._id, job);
       }
     });
     let deduplicatedJobs = Array.from(uniqueJobsMap.values());
+    // Enrich jobs with clientNumber from clientsList when job lacks it (e.g. old clients added via addnumbers API)
+    deduplicatedJobs = deduplicatedJobs.map((job) => {
+      const clientNum = job.clientNumber ?? clientsListArr.find((c) => (c.email || '').toLowerCase() === (job.clientEmail || '').toLowerCase())?.clientNumber;
+      return clientNum != null ? { ...job, clientNumber: clientNum } : job;
+    });
     
     // Filter by selected client (admin only)
     if (isAdmin && filteredClientEmail) {
@@ -546,7 +573,7 @@ export default function ClientOnboarding() {
       map[status] = computeJobsForStatus(status, deduplicatedJobs);
     });
     return map;
-  }, [jobs, visibleColumns, computeJobsForStatus, searchQuery, filteredClientEmail, isAdmin]);
+  }, [jobs, visibleColumns, computeJobsForStatus, searchQuery, filteredClientEmail, isAdmin, clientsList]);
 
   // Admin: ticket count per dashboard manager (statuses up to applications_in_progress, excluding completed)
   const adminTicketSummary = useMemo(() => {
@@ -739,6 +766,15 @@ export default function ClientOnboarding() {
     }
   }, [convertToDMY]);
 
+  const fetchClients = useCallback(() => {
+    setClientsLoading(true);
+    fetch(`${API_BASE}/api/clients`, { headers: AUTH_HEADERS() })
+      .then((r) => r.ok ? r.json() : { clients: [] })
+      .then((data) => setClientsList(data.clients || []))
+      .catch(() => setClientsList([]))
+      .finally(() => setClientsLoading(false));
+  }, []);
+
   const markNotificationRead = useCallback(async (id) => {
     try {
       const res = await fetch(`${API_BASE}/api/onboarding/notifications/${id}/read`, {
@@ -753,7 +789,8 @@ export default function ClientOnboarding() {
     fetchJobs();
     fetchRoles();
     fetchClientJobAnalysis(''); // Fetch all-time data for card previews
-  }, [fetchJobs, fetchRoles, fetchClientJobAnalysis]);
+    fetchClients(); // Load clients for clientNumber display in sidebar/Kanban
+  }, [fetchJobs, fetchRoles, fetchClientJobAnalysis, fetchClients]);
 
   // Update card job analysis when card opens or date filter changes
   useEffect(() => {
@@ -849,6 +886,20 @@ export default function ClientOnboarding() {
   }, [fetchNotifications, fetchNonResolvedIssues]);
 
   // Poll for new notifications every 30 seconds (plays sound when new ones arrive)
+  // Auto-scroll to client's ticket when a client is selected in sidebar
+  useEffect(() => {
+    if (!filteredClientEmail || loading) return;
+    const email = filteredClientEmail.toLowerCase();
+    const timer = setTimeout(() => {
+      const candidates = document.querySelectorAll('[data-client-email]');
+      const el = Array.from(candidates).find((n) => (n.getAttribute('data-client-email') || '').toLowerCase() === email);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [filteredClientEmail, loading]);
+
   useEffect(() => {
     const id = setInterval(() => {
       fetchNotifications();
@@ -1804,14 +1855,8 @@ export default function ClientOnboarding() {
     setNewBachelorsStartDate('');
     setNewMastersEndDate('');
     setAddMode('existing');
-    setClientsLoading(true);
-    setClientsList([]);
-    fetch(`${API_BASE}/api/clients`, { headers: AUTH_HEADERS() })
-      .then((r) => r.ok ? r.json() : { clients: [] })
-      .then((data) => setClientsList(data.clients || []))
-      .catch(() => setClientsList([]))
-      .finally(() => setClientsLoading(false));
-  }, []);
+    fetchClients();
+  }, [fetchClients]);
 
   const handleImportAllClients = useCallback(async () => {
     // Check if roles exist
@@ -2402,6 +2447,16 @@ export default function ClientOnboarding() {
           <div className="w-80 flex-shrink-0 bg-white border-r border-gray-200 flex flex-col h-full">
             <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
               <h2 className="text-sm font-semibold text-gray-900">Clients</h2>
+              <div className="mt-2 relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search by name or number..."
+                  value={clientSidebarSearch}
+                  onChange={(e) => setClientSidebarSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                />
+              </div>
               {filteredClientEmail && (
                 <button
                   onClick={() => setFilteredClientEmail(null)}
@@ -2413,13 +2468,13 @@ export default function ClientOnboarding() {
               )}
             </div>
             <div className="flex-1 overflow-y-auto">
-              {clientsListForSidebar.length === 0 ? (
+              {filteredClientsForSidebar.length === 0 ? (
                 <div className="px-4 py-8 text-center text-sm text-gray-500">
-                  No clients found
+                  {clientsListForSidebar.length === 0 ? 'No clients found' : 'No matches for your search'}
                 </div>
               ) : (
                 <ul className="py-2">
-                  {clientsListForSidebar.map((job) => {
+                  {filteredClientsForSidebar.map((job) => {
                     const email = (job.clientEmail || '').toLowerCase();
                     const isSelected = filteredClientEmail && filteredClientEmail.toLowerCase() === email;
                     const displayName = clientDisplayName(job);
@@ -2454,7 +2509,7 @@ export default function ClientOnboarding() {
           ref={boardRef}
           className={`flex-1 overflow-x-auto overflow-y-hidden pb-6 scroll-smooth ${isAdmin ? '' : 'h-full'}`}
           onDragOver={handleDragOverBoard}
-          style={{ WebkitOverflowScrolling: 'touch' }}
+          style={{ WebkitOverflowScrolling: 'touch', scrollPaddingLeft: 16, scrollPaddingRight: 16 }}
         >
           {loading ? (
             <div className="flex h-full w-full items-center justify-center">
@@ -2487,6 +2542,7 @@ export default function ClientOnboarding() {
                       const analysis = showAnalysis ? clientJobAnalysis[clientEmail] : null;
                       
                       return (
+                        <div key={job._id} data-client-email={clientEmail} data-job-id={job._id} className="scroll-ml-6 scroll-mt-3">
                         <JobCard
                           key={job._id}
                           job={job}
@@ -2512,6 +2568,7 @@ export default function ClientOnboarding() {
                           showJobAnalysis={showAnalysis}
                           jobAnalysis={analysis}
                         />
+                        </div>
                       );
                     })}
                   </div>

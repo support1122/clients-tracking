@@ -450,6 +450,68 @@ const getClientByEmail = async (req, res) => {
   }
 }
 
+/**
+ * POST /api/clients/addnumbers
+ * Retroactively assign client numbers to clients ordered by creation date.
+ * Body: { startNumber: number } - the number to assign to the first (oldest) client.
+ * Subsequent clients get startNumber+1, startNumber+2, etc.
+ * Also updates ClientCounter so future auto-generated numbers don't conflict.
+ */
+const addNumbersToClients = async (req, res) => {
+  try {
+    const { startNumber } = req.body;
+    if (startNumber === undefined || startNumber === null) {
+      return res.status(400).json({ error: 'startNumber is required in request body' });
+    }
+    const num = parseInt(String(startNumber).trim(), 10);
+    if (isNaN(num) || num < 1) {
+      return res.status(400).json({ error: 'startNumber must be a positive integer' });
+    }
+
+    // Get all clients ordered by creation (MongoDB _id is time-ordered)
+    const clients = await ClientModel.find({})
+      .sort({ _id: 1 })
+      .select('_id email name clientNumber')
+      .lean();
+
+    if (clients.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'No clients to update',
+        updated: 0,
+      });
+    }
+
+    const CLIENT_NUMBER_FLOOR = 5809;
+    const bulkOps = clients.map((client, index) => ({
+      updateOne: {
+        filter: { _id: client._id },
+        update: { $set: { clientNumber: num + index } },
+      },
+    }));
+
+    await ClientModel.bulkWrite(bulkOps);
+
+    const lastAssigned = num + clients.length - 1;
+    // Ensure counter doesn't go backwards; future auto-gen uses max(lastNumber+1, FLOOR)
+    await ClientCounterModel.findOneAndUpdate(
+      { _id: 'client_number' },
+      { $max: { lastNumber: Math.max(lastAssigned, CLIENT_NUMBER_FLOOR - 1) } },
+      { upsert: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Assigned numbers ${num} to ${lastAssigned} to ${clients.length} clients (ordered by creation)`,
+      updated: clients.length,
+      range: { from: num, to: lastAssigned },
+    });
+  } catch (error) {
+    console.error('addNumbersToClients error:', error);
+    res.status(500).json({ error: error.message || 'Failed to add numbers to clients' });
+  }
+};
+
 // Get client onboarding statistics grouped by month
 const getClientStats = async (req, res) => {
   try {
@@ -3085,7 +3147,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     // ── Phase 2: Fetch client + referral data in parallel ──
     const clientInfo = await ClientModel.find({})
-      .select('email name planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons')
+      .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons')
       .lean();
 
     const allUserIDs = Array.from(new Set([...jobUserIDs, ...clientInfo.map(c => c.email)]));
@@ -3094,6 +3156,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     const clientMap = new Map(clientInfo.map(c => [c.email, {
       name: c.name,
+      clientNumber: c.clientNumber,
       planType: c.planType,
       planPrice: c.planPrice,
       status: c.status,
@@ -3130,6 +3193,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return {
         email,
         name: client.name || email,
+        clientNumber: client.clientNumber ?? null,
         planType: client.planType || null,
         planPrice: client.planPrice || null,
         status: client.status || null,
@@ -3153,12 +3217,24 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       };
     });
 
+    // Sort: active first, then by clientNumber ascending (same as Client Onboarding)
+    const getSortingNumber = (r) => {
+      if (r.clientNumber != null) return Number(r.clientNumber);
+      const name = r.name || '';
+      const m = name.match(/^(\d{4,})/);
+      if (m) return parseInt(m[1], 10);
+      const m2 = name.match(/^(\d+)/);
+      if (m2) return parseInt(m2[1], 10);
+      return 0;
+    };
     rows.sort((a, b) => {
       const statusOrder = { 'active': 0, 'inactive': 1 };
       const statusA = statusOrder[a.status] ?? 2;
       const statusB = statusOrder[b.status] ?? 2;
       if (statusA !== statusB) return statusA - statusB;
-      return a.email.localeCompare(b.email);
+      const numA = getSortingNumber(a);
+      const numB = getSortingNumber(b);
+      return numA - numB;
     });
 
     const result = { success: true, date: date || null, rows };
@@ -3740,6 +3816,7 @@ app.get('/api/clients/all', async (req, res) => {
 });
 
 app.post('/api/clients', createOrUpdateClient);
+app.post('/api/clients/addnumbers', addNumbersToClients);
 app.post('/api/clients/sync-from-jobs', syncClientsFromJobs);
 app.delete('/api/clients/delete/:email', deleteClient);
 app.put('/api/clients/:email/change-password', verifyToken, verifyAdmin, changeClientPassword);
