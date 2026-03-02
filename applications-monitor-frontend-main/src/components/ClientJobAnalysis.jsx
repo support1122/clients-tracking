@@ -13,6 +13,18 @@ function capitalizeOperatorName(name) {
   return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
 }
 
+/** Format client display as number-name-plan (e.g. 5711-akrati-executive). Optimal: single pass, handles missing fields. */
+function formatClientLabel(row) {
+  const num = row.clientNumber != null && row.clientNumber !== '' ? String(row.clientNumber) : '';
+  const nameRaw = row.name || row.email || '';
+  const nameSlug = (nameRaw.split(/\s+/)[0] || nameRaw.split('@')[0] || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '') || 'unknown';
+  const plan = (row.planType || '').toLowerCase().replace(/\s+/g, '') || 'unknown';
+  const parts = num ? [num, nameSlug, plan] : [nameSlug, plan];
+  return parts.join('-') || nameRaw || row.email || '-';
+}
+
 export default function ClientJobAnalysis() {
   const [date, setDate] = useState('');
   const [rows, setRows] = useState([]);
@@ -206,7 +218,18 @@ export default function ClientJobAnalysis() {
     [rows]
   );
 
-  // Memoize filtered + sorted rows (avoids re-computation on every render)
+  // Get sorting number (same logic as Client Onboarding)
+  const getSortingNumber = useCallback((r) => {
+    if (r.clientNumber != null) return Number(r.clientNumber);
+    const name = r.name || '';
+    const m = name.match(/^(\d{4,})/);
+    if (m) return parseInt(m[1], 10);
+    const m2 = name.match(/^(\d+)/);
+    if (m2) return parseInt(m2[1], 10);
+    return 0;
+  }, []);
+
+  // Memoize filtered + sorted rows: active first, then by clientNumber ascending (same as Client Onboarding)
   const processedRows = useMemo(() => {
     let filtered = rows;
     if (lastAppliedByFilter) {
@@ -224,9 +247,11 @@ export default function ClientJobAnalysis() {
       const statusA = statusOrder[a.status] ?? 2;
       const statusB = statusOrder[b.status] ?? 2;
       if (statusA !== statusB) return statusA - statusB;
-      return a.email.localeCompare(b.email);
+      const numA = getSortingNumber(a);
+      const numB = getSortingNumber(b);
+      return numA - numB;
     });
-  }, [rows, date, sortDir, lastAppliedByFilter]);
+  }, [rows, date, sortDir, lastAppliedByFilter, getSortingNumber]);
 
   console.log('Processed rows count:', processedRows.length, 'Rows include newtest?', processedRows.some(r => r.email === 'newtest@gmail.com'));
 
@@ -355,7 +380,9 @@ export default function ClientJobAnalysis() {
                 return (
                   <tr key={r.email + idx} className={rowColor}>
                     <td className="px-2 py-1">
-                      <div className="text-gray-900 font-medium truncate max-w-[160px]">{r.name || r.email}</div>
+                      <div className="text-gray-900 font-medium truncate max-w-[180px]" title={r.email}>
+                        {formatClientLabel(r)}
+                      </div>
                       <div className="text-gray-500 text-[10px] truncate max-w-[180px]">{r.email}</div>
                     </td>
                     <td className="px-2 py-1">
