@@ -23,7 +23,8 @@ export default function AdminDashboard() {
   const [passwordError, setPasswordError] = useState('');
   const [changingPassword, setChangingPassword] = useState(false);
   const [editUserModal, setEditUserModal] = useState(null);
-  const [editUserForm, setEditUserForm] = useState({ email: '', otpEmail: '', name: '' });
+  const [editUserForm, setEditUserForm] = useState({ email: '', otpEmail: '', name: '', linkedDashboardManagerName: '' });
+  const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
   const [editUserError, setEditUserError] = useState('');
   const [savingUser, setSavingUser] = useState(false);
 
@@ -228,14 +229,15 @@ export default function AdminDashboard() {
     setEditUserForm({
       email: u.email || '',
       otpEmail: u.otpEmail || '',
-      name: u.name || ''
+      name: u.name || '',
+      linkedDashboardManagerName: u.linkedDashboardManagerName || ''
     });
     setEditUserError('');
   };
 
   const closeEditUserModal = () => {
     setEditUserModal(null);
-    setEditUserForm({ email: '', otpEmail: '', name: '' });
+    setEditUserForm({ email: '', otpEmail: '', name: '', linkedDashboardManagerName: '' });
     setEditUserError('');
   };
 
@@ -254,7 +256,8 @@ export default function AdminDashboard() {
         body: JSON.stringify({
           email: editUserForm.email.trim() || undefined,
           otpEmail: editUserForm.otpEmail.trim() || '',
-          name: editUserForm.name.trim() || undefined
+          name: editUserForm.name.trim() || undefined,
+          linkedDashboardManagerName: editUserForm.linkedDashboardManagerName?.trim() || ''
         })
       });
       const data = await res.json();
@@ -273,6 +276,13 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchUsers();
+  }, []);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/managers/names`)
+      .then((r) => r.ok ? r.json() : { success: false, names: [] })
+      .then((data) => { if (data.success) setDashboardManagerNames(data.names || []); })
+      .catch(() => {});
   }, []);
 
   const handleLogout = () => {
@@ -736,6 +746,23 @@ export default function AdminDashboard() {
                   placeholder="Display name"
                 />
               </div>
+
+              {['team_lead', 'csm'].includes(editUserModal?.role) && (
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Link to Dashboard Manager</label>
+                  <p className="text-xs text-gray-500 mb-1">Job cards assigned to this manager will show when this user logs in.</p>
+                  <select
+                    value={editUserForm.linkedDashboardManagerName || ''}
+                    onChange={(e) => setEditUserForm({ ...editUserForm, linkedDashboardManagerName: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value="">— Not linked —</option>
+                    {dashboardManagerNames.map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="flex justify-end gap-3">
                 <button

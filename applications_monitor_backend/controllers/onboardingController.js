@@ -154,17 +154,26 @@ export async function listOnboardingJobs(req, res) {
     if (status && ONBOARDING_STATUSES_LIST.includes(status)) filter.status = status;
 
     const userRole = req.user?.role || '';
-    const userDisplayName = (req.user?.name || '').trim().toLowerCase();
     const isTeamLead = userRole === 'team_lead';
+
+    // For team leads: resolve effective manager name (linked dashboard manager or user name)
+    let effectiveManagerName = '';
+    if (isTeamLead) {
+      const userEmail = (req.user?.email || '').toLowerCase().trim();
+      if (userEmail) {
+        const dbUser = await UserModel.findOne({ email: userEmail }).select('linkedDashboardManagerName name').lean();
+        effectiveManagerName = ((dbUser?.linkedDashboardManagerName || dbUser?.name || req.user?.name || '').trim()).toLowerCase();
+      }
+    }
 
     const sendJobsForUser = (jobs) => {
       let visibleJobs = jobs;
 
-      // Team Leads (Dashboard Managers) should only see tickets assigned to them (by display name, case-insensitive)
-      if (isTeamLead && userDisplayName) {
+      // Team Leads see only tickets assigned to their linked dashboard manager
+      if (isTeamLead && effectiveManagerName) {
         visibleJobs = jobs.filter((job) => {
           const managerName = (job.dashboardManagerName || '').trim().toLowerCase();
-          return managerName && managerName === userDisplayName;
+          return managerName && managerName === effectiveManagerName;
         });
       }
 
@@ -233,12 +242,17 @@ export async function getOnboardingJobById(req, res) {
     const job = await OnboardingJobModel.findById(id).lean();
     if (!job) return res.status(404).json({ error: 'Onboarding job not found' });
 
-    // Restrict Team Leads (Dashboard Managers) to only their own tickets by Dashboard Manager display name (case-insensitive)
+    // Restrict Team Leads to only tickets assigned to their linked dashboard manager
     const userRole = req.user?.role || '';
     if (userRole === 'team_lead') {
-      const userDisplayName = (req.user?.name || '').trim().toLowerCase();
+      const userEmail = (req.user?.email || '').toLowerCase().trim();
+      let effectiveManagerName = '';
+      if (userEmail) {
+        const dbUser = await UserModel.findOne({ email: userEmail }).select('linkedDashboardManagerName name').lean();
+        effectiveManagerName = ((dbUser?.linkedDashboardManagerName || dbUser?.name || req.user?.name || '').trim()).toLowerCase();
+      }
       const managerName = (job.dashboardManagerName || '').trim().toLowerCase();
-      if (!userDisplayName || !managerName || managerName !== userDisplayName) {
+      if (!effectiveManagerName || !managerName || managerName !== effectiveManagerName) {
         return res.status(403).json({ error: 'Not authorized to view this onboarding job' });
       }
     }
