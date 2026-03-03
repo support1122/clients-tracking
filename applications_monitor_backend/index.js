@@ -1935,7 +1935,7 @@ const resetPasswordByEmail = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { email, otpEmail, name } = req.body;
+    const { email, otpEmail, name, linkedDashboardManagerName } = req.body;
 
     const user = await UserModel.findById(userId);
     if (!user) {
@@ -1960,6 +1960,9 @@ const updateUser = async (req, res) => {
     if (name !== undefined && typeof name === 'string') {
       user.name = name.trim();
     }
+    if (linkedDashboardManagerName !== undefined && typeof linkedDashboardManagerName === 'string') {
+      user.linkedDashboardManagerName = linkedDashboardManagerName.trim();
+    }
 
     user.updatedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
     await user.save();
@@ -1970,6 +1973,7 @@ const updateUser = async (req, res) => {
         email: user.email,
         name: user.name,
         otpEmail: user.otpEmail || '',
+        linkedDashboardManagerName: user.linkedDashboardManagerName || '',
         role: user.role,
         onboardingSubRole: user.onboardingSubRole,
         roles: user.roles
