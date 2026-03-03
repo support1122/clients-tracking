@@ -501,10 +501,14 @@ const addNumbersToClients = async (req, res) => {
       { upsert: true }
     );
 
+    // Sync clientNumber to OnboardingJob documents so both views stay in sync
+    const synced = await syncClientNumbersToOnboardingJobs().catch(() => 0);
+
     res.status(200).json({
       success: true,
       message: `Assigned numbers ${num} to ${lastAssigned} to ${clients.length} clients (ordered by creation)`,
       updated: clients.length,
+      syncedOnboardingJobs: synced,
       range: { from: num, to: lastAssigned },
     });
   } catch (error) {
@@ -3827,6 +3831,14 @@ app.get('/api/clients/all', async (req, res) => {
 
 app.post('/api/clients', createOrUpdateClient);
 app.post('/api/clients/addnumbers', addNumbersToClients);
+app.post('/api/clients/sync-client-numbers', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const synced = await syncClientNumbersToOnboardingJobs();
+    res.status(200).json({ success: true, synced, message: `Synced ${synced} onboarding job(s) with clientNumber from Client model` });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || 'Sync failed' });
+  }
+});
 app.post('/api/clients/sync-from-jobs', syncClientsFromJobs);
 app.delete('/api/clients/delete/:email', deleteClient);
 app.put('/api/clients/:email/change-password', verifyToken, verifyAdmin, changeClientPassword);
@@ -5512,10 +5524,28 @@ async function runZeroSavedJobReminder() {
   }
 }
 
+// Sync clientNumber from Client model to OnboardingJob (Client is source of truth)
+const syncClientNumbersToOnboardingJobs = async () => {
+  const clients = await ClientModel.find({ clientNumber: { $ne: null } }).select('email clientNumber').lean();
+  let updated = 0;
+  for (const c of clients) {
+    const result = await OnboardingJobModel.updateMany(
+      { clientEmail: (c.email || '').toLowerCase() },
+      { $set: { clientNumber: c.clientNumber } }
+    );
+    updated += result.modifiedCount || 0;
+  }
+  if (updated > 0) console.log(`📋 [Client Numbers] Synced ${updated} onboarding job(s) with clientNumber from Client model`);
+  return updated;
+};
+
 // Start the server
 app.listen(process.env.PORT, () => {
   console.log(`✅ Server is live at port: ${process.env.PORT}`);
   console.log(`📡 Dashboard Backend URL: ${FLASHFIRE_API_BASE_URL}`);
+
+  // Sync client numbers on startup (Client model → OnboardingJob)
+  syncClientNumbersToOnboardingJobs().catch((err) => console.error('❌ [Client Numbers] Startup sync error:', err));
 
   // Start the automated call sweep job
   startCallSweepJob();

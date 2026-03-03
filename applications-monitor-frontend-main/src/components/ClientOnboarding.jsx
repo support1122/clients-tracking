@@ -512,9 +512,9 @@ export default function ClientOnboarding() {
     
     return Array.from(clientMap.values())
       .map((job) => {
-        // Enrich with clientNumber from clientsList when job lacks it (e.g. old clients added via addnumbers API)
+        // Client model is source of truth for clientNumber; prefer it over job's stored value
         const email = (job.clientEmail || '').toLowerCase();
-        const clientNum = job.clientNumber ?? clientsListArr.find((c) => (c.email || '').toLowerCase() === email)?.clientNumber;
+        const clientNum = clientsListArr.find((c) => (c.email || '').toLowerCase() === email)?.clientNumber ?? job.clientNumber;
         return clientNum != null ? { ...job, clientNumber: clientNum } : job;
       })
       .sort((a, b) => {
@@ -549,9 +549,9 @@ export default function ClientOnboarding() {
       }
     });
     let deduplicatedJobs = Array.from(uniqueJobsMap.values());
-    // Enrich jobs with clientNumber from clientsList when job lacks it (e.g. old clients added via addnumbers API)
+    // Client model is source of truth for clientNumber; prefer it over job's stored value
     deduplicatedJobs = deduplicatedJobs.map((job) => {
-      const clientNum = job.clientNumber ?? clientsListArr.find((c) => (c.email || '').toLowerCase() === (job.clientEmail || '').toLowerCase())?.clientNumber;
+      const clientNum = clientsListArr.find((c) => (c.email || '').toLowerCase() === (job.clientEmail || '').toLowerCase())?.clientNumber ?? job.clientNumber;
       return clientNum != null ? { ...job, clientNumber: clientNum } : job;
     });
     

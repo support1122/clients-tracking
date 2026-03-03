@@ -191,7 +191,7 @@ export async function listOnboardingJobs(req, res) {
 
     const [clients, managers] = await Promise.all([
       clientEmails.length
-        ? ClientModel.find({ email: { $in: clientEmails } }).select('email status isPaused').lean()
+        ? ClientModel.find({ email: { $in: clientEmails } }).select('email status isPaused clientNumber').lean()
         : Promise.resolve([]),
       managerNames.length
         ? ManagerModel.find({ fullName: { $in: managerNames }, isActive: true }).select('fullName email').lean()
@@ -199,16 +199,19 @@ export async function listOnboardingJobs(req, res) {
     ]);
 
     const clientStatusMap = new Map(
-      clients.map(c => [c.email.toLowerCase(), { status: c.status || 'active', isPaused: c.isPaused || false }])
+      clients.map(c => [c.email.toLowerCase(), { status: c.status || 'active', isPaused: c.isPaused || false, clientNumber: c.clientNumber }])
     );
     const managerEmailByName = new Map(managers.map(m => [m.fullName, m.email]));
 
     const enrichedJobs = jobs.map(job => {
       const clientEmail = (job.clientEmail || '').toLowerCase();
-      const clientInfo = clientStatusMap.get(clientEmail) || { status: 'active', isPaused: false };
+      const clientInfo = clientStatusMap.get(clientEmail) || { status: 'active', isPaused: false, clientNumber: null };
       const dashboardManagerEmail = (job.dashboardManagerName && managerEmailByName.get(job.dashboardManagerName)) || '';
+      // Client model is source of truth for clientNumber; use it over job's stored value
+      const clientNumber = clientInfo.clientNumber != null ? clientInfo.clientNumber : job.clientNumber;
       return {
         ...job,
+        clientNumber,
         clientStatus: clientInfo.status,
         clientIsPaused: clientInfo.isPaused,
         dashboardManagerEmail
@@ -249,7 +252,7 @@ export async function getOnboardingJobById(req, res) {
     const clientEmail = (job.clientEmail || '').toLowerCase();
     const [client, manager] = await Promise.all([
       clientEmail
-        ? ClientModel.findOne({ email: clientEmail }).select('status isPaused').lean()
+        ? ClientModel.findOne({ email: clientEmail }).select('status isPaused clientNumber').lean()
         : Promise.resolve(null),
       job.dashboardManagerName
         ? ManagerModel.findOne({ fullName: job.dashboardManagerName, isActive: true }).select('email').lean()
@@ -259,6 +262,8 @@ export async function getOnboardingJobById(req, res) {
     job.clientStatus = client?.status || 'active';
     job.clientIsPaused = client?.isPaused || false;
     job.dashboardManagerEmail = manager?.email || '';
+    // Client model is source of truth for clientNumber
+    if (client?.clientNumber != null) job.clientNumber = client.clientNumber;
 
     res.status(200).json({ job });
   } catch (e) {
@@ -630,7 +635,7 @@ export async function getOnboardingRoles(req, res) {
     const operationsInterns = users.filter(u => u.role === 'operations_intern');
     const admins = users.filter(u => u.role === 'admin');
     const mentionableMap = new Map();
-    [...csms, ...teamLeads, ...operationsInterns].forEach(u => {
+    [...csms, ...teamLeads, ...operationsInterns, ...admins].forEach(u => {
       if (u.email) mentionableMap.set(u.email.toLowerCase(), { email: u.email, name: u.name || u.email });
     });
     const mentionableUsers = Array.from(mentionableMap.values());
