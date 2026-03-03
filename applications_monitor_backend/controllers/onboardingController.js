@@ -276,7 +276,7 @@ function validateTransition(fromStatus, toStatus) {
 export async function patchOnboardingJob(req, res) {
   try {
     const { id } = req.params;
-    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment, clientName, gmailCredentials } = req.body || {};
+    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment, clientName, gmailCredentials, dashboardManagerName } = req.body || {};
     
     // Validate ID format
     if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
@@ -397,6 +397,14 @@ export async function patchOnboardingJob(req, res) {
     }
     if (isAdmin && clientName !== undefined && typeof clientName === 'string') {
       job.clientName = clientName.trim() || job.clientName;
+    }
+    if (isAdmin && dashboardManagerName !== undefined && typeof dashboardManagerName === 'string') {
+      job.dashboardManagerName = dashboardManagerName.trim() || '';
+      // Sync to Client model
+      await ClientModel.updateOne(
+        { email: (job.clientEmail || '').toLowerCase() },
+        { $set: { dashboardTeamLeadName: job.dashboardManagerName, updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata') } }
+      );
     }
 
     // Handle Gmail credentials update with history

@@ -53,6 +53,7 @@ import {
   rejectMove
 } from './controllers/onboardingController.js';
 import { ClientCounterModel } from './ClientCounterModel.js';
+import { OnboardingJobModel } from './OnboardingJobModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
 import { setOtp, getOtp, deleteOtp, decrementAttempts, otpHash } from './utils/otpCache.js';
 import { sendOtpEmail } from './utils/sendOtpEmail.js';
@@ -935,7 +936,7 @@ const updateClientOperationsName = async (req, res) => {
   }
 };
 
-// Update client dashboard team lead name
+// Update client dashboard team lead name (syncs to Client + OnboardingJobs)
 const updateClientDashboardTeamLead = async (req, res) => {
   try {
     const { email, dashboardTeamLeadName } = req.body;
@@ -944,10 +945,13 @@ const updateClientDashboardTeamLead = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
 
+    const emailLower = email.toLowerCase();
+    const newName = (dashboardTeamLeadName || '').trim();
+
     const client = await ClientModel.findOneAndUpdate(
-      { email: email.toLowerCase() },
+      { email: emailLower },
       {
-        dashboardTeamLeadName: dashboardTeamLeadName || '',
+        dashboardTeamLeadName: newName,
         updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
       },
       { new: true }
@@ -956,6 +960,12 @@ const updateClientDashboardTeamLead = async (req, res) => {
     if (!client) {
       return res.status(404).json({ success: false, error: 'Client not found' });
     }
+
+    // Sync to onboarding jobs for this client
+    await OnboardingJobModel.updateMany(
+      { clientEmail: emailLower },
+      { $set: { dashboardManagerName: newName } }
+    );
 
     res.status(200).json({ success: true, client });
   } catch (error) {
