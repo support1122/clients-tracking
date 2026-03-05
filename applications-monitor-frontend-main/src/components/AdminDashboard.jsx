@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { handleAuthFailure } from '../utils/authUtils.js';
 
 const API_BASE = import.meta.env.VITE_BASE ;
 
@@ -44,7 +45,9 @@ export default function AdminDashboard() {
         const data = await response.json();
         setUsers(data.users);
       } else {
-        setError('Failed to fetch users');
+        const data = await response.json().catch(() => ({}));
+        if (handleAuthFailure(response, data)) return;
+        setError(data.error || 'Failed to fetch users');
       }
     } catch (error) {
       setError('Network error');
@@ -76,7 +79,8 @@ export default function AdminDashboard() {
         setShowAddUser(false);
         fetchUsers(); // Refresh users list
       } else {
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
+        if (handleAuthFailure(response, data)) return;
         setError(data.error || 'Failed to create user');
       }
     } catch (error) {
@@ -107,7 +111,8 @@ export default function AdminDashboard() {
         const days = data.validDays ?? 90;
         alert(`Session key generated. Valid for ${days} days. Share it with the user.`);
       } else {
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
+        if (handleAuthFailure(response, data)) return;
         setError(data.error || 'Failed to generate session key');
       }
     } catch (error) {
@@ -129,6 +134,9 @@ export default function AdminDashboard() {
       if (response.ok) {
         const data = await response.json();
         return data.sessionKeys;
+      } else {
+        const data = await response.json().catch(() => ({}));
+        if (handleAuthFailure(response, data)) return [];
       }
     } catch (error) {
       // Error fetching session keys
@@ -154,7 +162,8 @@ export default function AdminDashboard() {
         setError('');
         fetchUsers(); // Refresh users list
       } else {
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
+        if (handleAuthFailure(response, data)) return;
         setError(data.error || 'Failed to delete user');
       }
     } catch (error) {
@@ -205,7 +214,7 @@ export default function AdminDashboard() {
         })
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (response.ok) {
         setError('');
@@ -215,6 +224,7 @@ export default function AdminDashboard() {
           alert(`Password changed successfully for ${passwordChangeModal.userEmail}`);
         }, 100);
       } else {
+        if (handleAuthFailure(response, data)) return;
         setPasswordError(data.error || 'Failed to change password');
       }
     } catch (error) {
@@ -260,11 +270,12 @@ export default function AdminDashboard() {
           linkedDashboardManagerName: editUserForm.linkedDashboardManagerName?.trim() || ''
         })
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         closeEditUserModal();
         fetchUsers();
       } else {
+        if (handleAuthFailure(res, data)) return;
         setEditUserError(data.error || 'Failed to update user');
       }
     } catch (err) {
