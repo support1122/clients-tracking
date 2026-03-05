@@ -3001,7 +3001,7 @@ export default function ClientOnboarding() {
                       <div>
                         <label className="block text-xs font-semibold text-gray-700 mb-1.5">Password</label>
                         <input
-                          type="password"
+                          type="text"
                           value={gmailPassword}
                           onChange={(e) => setGmailPassword(e.target.value)}
                           placeholder="Enter Gmail password"
