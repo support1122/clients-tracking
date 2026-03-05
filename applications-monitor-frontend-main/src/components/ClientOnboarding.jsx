@@ -7,6 +7,7 @@ import {
   PLAN_STATUSES
 } from '../store/onboardingStore';
 import { toastUtils } from '../utils/toastUtils';
+import { handleAuthFailure } from '../utils/authUtils';
 import {
   ChevronRight,
   ChevronDown,
@@ -116,6 +117,23 @@ const JobCard = React.memo(({
   const allowed = getAllowedStatusesForPlan(job.planType);
   const moveToOptions = (visibleColumns || []).filter((s) => allowed.includes(s) && s !== job.status);
 
+  // Step status for card: dashboard → resume → cover & linkedin (exec) → portfolio (exec)
+  // Dashboard details: use single source of truth — Dashboard Manager assigned (no nested credentials needed in list)
+  const planLower = (job.planType || '').toLowerCase();
+  const isExecutive = planLower === 'executive' || planLower.includes('executive');
+  const hasDashboard = !!(job.dashboardManagerName || '').trim();
+  const attachmentNames = (job.attachments || []).map((a) => (a.name || '').trim()).filter(Boolean);
+  const hasResume = job.status !== 'resume_in_progress' || attachmentNames.some((n) => /^resume$/i.test(n));
+  const coverLinkedInDone = ['linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress', 'completed'].includes(job.status);
+  const hasPortfolio = attachmentNames.some((n) => /portfolio/i.test(n));
+  const steps = [
+    { key: 'dashboard', label: 'Dashboard details', labelDone: 'Dashboard details', done: hasDashboard },
+    { key: 'resume', label: 'Resume not sent', labelDone: 'Resume sent', done: hasResume },
+    ...(isExecutive ? [{ key: 'coverLinkedIn', label: 'Cover and LinkedIn Pending', labelDone: 'Cover and LinkedIn', done: coverLinkedInDone }] : []),
+    ...(isExecutive ? [{ key: 'portfolio', label: 'Portfolio Pending', labelDone: 'Portfolio', done: hasPortfolio }] : [])
+  ];
+  const firstIncompleteIndex = steps.findIndex((s) => !s.done);
+
   // Determine background color based on client status and pause state
   const getCardBackgroundColor = () => {
     if (job.clientStatus === 'inactive') {
@@ -161,6 +179,36 @@ const JobCard = React.memo(({
         <div className="opacity-0 group-hover:opacity-100 transition-opacity">
           <button type="button" className="text-gray-400 hover:text-primary"><MoreHorizontal className="w-4 h-4" /></button>
         </div>
+      </div>
+      {/* Step status: first incomplete = red, done = green, later = grey */}
+      <div className="flex flex-wrap gap-1 mb-2">
+        {steps.map((step, idx) => {
+          const isFirstIncomplete = firstIncompleteIndex === idx;
+          const isDone = step.done;
+          const isLater = firstIncompleteIndex >= 0 && idx > firstIncompleteIndex;
+          const label = isDone ? step.labelDone : step.label;
+          if (isDone) {
+            return (
+              <span key={step.key} className="inline-flex items-center gap-0.5 text-[10px] font-medium text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-200">
+                <CheckCircle className="w-2.5 h-2.5 flex-shrink-0" />
+                {label}
+              </span>
+            );
+          }
+          if (isFirstIncomplete) {
+            return (
+              <span key={step.key} className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-red-700 bg-red-50 px-1.5 py-0.5 rounded border border-red-200">
+                <AlertCircle className="w-2.5 h-2.5 flex-shrink-0" />
+                {label}
+              </span>
+            );
+          }
+          return (
+            <span key={step.key} className="inline-flex items-center gap-0.5 text-[10px] font-medium text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200">
+              {label}
+            </span>
+          );
+        })}
       </div>
       {isEditing ? (
         <input
@@ -305,7 +353,9 @@ const JobCard = React.memo(({
     prevProps.jobAnalysis?.rejected === nextProps.jobAnalysis?.rejected &&
     prevProps.jobAnalysis?.removed === nextProps.jobAnalysis?.removed &&
     prevProps.jobAnalysis?.lastAppliedOperatorName === nextProps.jobAnalysis?.lastAppliedOperatorName &&
-    prevProps.job.pendingMoveRequest?.active === nextProps.job.pendingMoveRequest?.active
+    prevProps.job.pendingMoveRequest?.active === nextProps.job.pendingMoveRequest?.active &&
+    (prevProps.job.attachments || []).length === (nextProps.job.attachments || []).length &&
+    (prevProps.job.attachments || []).every((a, i) => (nextProps.job.attachments || [])[i]?.name === a?.name)
   );
 });
 
@@ -326,6 +376,7 @@ export default function ClientOnboarding() {
   const [assigningCsm, setAssigningCsm] = useState(false);
   const [assigningResumeMaker, setAssigningResumeMaker] = useState(false);
   const [assigningLinkedInMember, setAssigningLinkedInMember] = useState(false);
+  const [assigningOperator, setAssigningOperator] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [addMode, setAddMode] = useState('existing'); // 'existing' | 'new'
   const [clientsList, setClientsList] = useState([]);
@@ -603,8 +654,11 @@ export default function ClientOnboarding() {
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/onboarding/jobs`, { headers: AUTH_HEADERS() });
-      if (!res.ok) throw new Error('Failed to load jobs');
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (handleAuthFailure(res, data)) return;
+        throw new Error(data.error || 'Failed to load jobs');
+      }
       const fetchedJobs = data.jobs || [];
 
       // Ensure no duplicates by using Map with _id as key (primary deduplication)
@@ -686,9 +740,11 @@ export default function ClientOnboarding() {
   const fetchRoles = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/onboarding/jobs/roles`, { headers: AUTH_HEADERS() });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        const data = await res.json();
         setRoles(data);
+      } else if (handleAuthFailure(res, data)) {
+        return;
       }
     } catch (_) { }
   }, [setRoles]);
@@ -696,8 +752,11 @@ export default function ClientOnboarding() {
   const fetchNotifications = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/onboarding/notifications`, { headers: AUTH_HEADERS() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (handleAuthFailure(res, data)) return;
+      }
       if (res.ok) {
-        const data = await res.json();
         const notifs = data.notifications || [];
         const unreadCount = notifs.filter(n => !n.read).length;
         // Play sound when unread count increases (skip the initial load)
@@ -724,8 +783,10 @@ export default function ClientOnboarding() {
         ? `${API_BASE}/api/onboarding/issues/non-resolved?admin=1`
         : `${API_BASE}/api/onboarding/issues/non-resolved`;
       const res = await fetch(url, { headers: AUTH_HEADERS() });
-      if (res.ok) {
-        const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (handleAuthFailure(res, data)) return;
+      } else {
         setNonResolvedIssues({ count: data.count ?? 0, items: data.items ?? [], perUser: data.perUser ?? [], pendingMoves: data.pendingMoves ?? [] });
       }
     } catch (_) { }
@@ -1367,9 +1428,20 @@ export default function ClientOnboarding() {
     const inBase = (email) => base.some((u) => (u.email || '').toLowerCase() === (email || '').toLowerCase());
     if (selectedJob?.csmEmail && !inBase(selectedJob.csmEmail)) extra.push({ email: selectedJob.csmEmail, name: 'CSM' });
     if (selectedJob?.resumeMakerEmail && !inBase(selectedJob.resumeMakerEmail)) extra.push({ email: selectedJob.resumeMakerEmail, name: 'Resume Maker' });
+    if (selectedJob?.operatorEmail && !inBase(selectedJob.operatorEmail)) extra.push({ email: selectedJob.operatorEmail, name: selectedJob.operatorName || 'Operations Intern' });
     if (selectedJob?.dashboardManagerEmail && !inBase(selectedJob.dashboardManagerEmail)) extra.push({ email: selectedJob.dashboardManagerEmail, name: 'Dashboard Manager' });
     return [...base, ...extra];
-  }, [roles?.mentionableUsers, selectedJob?.csmEmail, selectedJob?.resumeMakerEmail, selectedJob?.dashboardManagerEmail]);
+  }, [roles?.mentionableUsers, selectedJob?.csmEmail, selectedJob?.resumeMakerEmail, selectedJob?.operatorEmail, selectedJob?.operatorName, selectedJob?.dashboardManagerEmail]);
+
+  // Operations Intern dropdown: list from API + current assignee if not in list (already assigned / unlinked from team)
+  const operatorOptions = useMemo(() => {
+    const list = [...(roles?.operationsInterns || [])];
+    const currentEmail = (selectedJob?.operatorEmail || '').toLowerCase().trim();
+    if (currentEmail && !list.some((o) => (o.email || '').toLowerCase() === currentEmail)) {
+      list.push({ email: selectedJob.operatorEmail, name: selectedJob.operatorName || selectedJob.operatorEmail });
+    }
+    return list;
+  }, [roles?.operationsInterns, selectedJob?.operatorEmail, selectedJob?.operatorName]);
 
   const handleCommentChange = (e) => {
     const element = e.target;
@@ -1654,16 +1726,48 @@ export default function ClientOnboarding() {
     }
   };
 
+  const handleAssignOperator = async (operatorEmail, operatorName) => {
+    if (!selectedJob || !isAdmin) return;
+    setAssigningOperator(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, {
+        method: 'PATCH',
+        headers: AUTH_HEADERS(),
+        body: JSON.stringify({ operatorEmail: operatorEmail || '', operatorName: operatorName || '' })
+      });
+      if (!res.ok) throw new Error('Failed to assign Operations Intern');
+      const data = await res.json();
+      setSelectedJob(data.job);
+      setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
+      toastUtils.success('Operations Intern assigned');
+    } catch (e) {
+      toastUtils.error(e.message || 'Failed');
+    } finally {
+      setAssigningOperator(false);
+    }
+  };
+
+  // Default attachment names by plan: executive = Resume, Cover letter, Portfolio (link); others = Resume
+  const getNextDefaultAttachmentName = useCallback((job) => {
+    const planLower = (job?.planType || '').toLowerCase();
+    const isExecutive = planLower === 'executive' || planLower.includes('executive');
+    const defaults = isExecutive ? ['Resume', 'Cover letter', 'Portfolio (link)'] : ['Resume'];
+    const names = (job?.attachments || []).map((a) => (a.name || '').trim());
+    const hasMatch = (defaultName) => names.some((n) => n.toLowerCase() === defaultName.toLowerCase());
+    const next = defaults.find((d) => !hasMatch(d));
+    return next || '';
+  }, []);
+
   const openAddAttachmentModal = useCallback((e) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
-    setAttachmentNameInput('');
+    setAttachmentNameInput(selectedJob ? getNextDefaultAttachmentName(selectedJob) : '');
     setAttachmentFilePending(null);
     setShowAddAttachmentModal(true);
     setTimeout(() => attachmentNameInputRef.current?.focus?.(), 100);
-  }, []);
+  }, [selectedJob, getNextDefaultAttachmentName]);
 
   const handleAttachmentFileSelect = (e) => {
     const file = e?.target?.files?.[0];
@@ -2769,6 +2873,34 @@ export default function ClientOnboarding() {
                           </div>
                         )}
                       </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Operations Intern</label>
+                        {isAdmin ? (
+                          <select
+                            value={selectedJob.operatorEmail || ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === '') {
+                                handleAssignOperator('', '');
+                                return;
+                              }
+                              const opt = operatorOptions.find((o) => (o.email || '').toLowerCase() === val.toLowerCase());
+                              handleAssignOperator(opt?.email ?? val, opt?.name ?? selectedJob?.operatorName ?? val);
+                            }}
+                            disabled={assigningOperator}
+                            className="w-full text-sm border-gray-200 rounded-lg focus:ring-primary focus:border-primary bg-white"
+                          >
+                            <option value="">— Unassigned —</option>
+                            {operatorOptions.map((o) => (
+                              <option key={(o.email || '').toLowerCase()} value={o.email}>{o.name || o.email}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div className="p-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 font-medium">
+                            {selectedJob.operatorName || selectedJob.operatorEmail || 'Unassigned'}
+                          </div>
+                        )}
+                      </div>
                       {(selectedJob.linkedInPhaseStarted || selectedJob.status === 'linkedin_in_progress' || selectedJob.status === 'linkedin_done') && (
                         <div>
                           <label className="block text-xs font-semibold text-gray-700 mb-1.5">LinkedIn Member</label>
@@ -3177,6 +3309,29 @@ export default function ClientOnboarding() {
                   </button>
                   {showAttachments && (
                     <>
+                      {/* Default attachment types by plan */}
+                      <div className="mb-3 p-3 rounded-lg bg-slate-50 border border-slate-100">
+                        <p className="text-xs font-semibold text-slate-600 mb-2">By plan</p>
+                        <ul className="space-y-1.5 text-sm">
+                          {(() => {
+                            const planLower = (selectedJob?.planType || '').toLowerCase();
+                            const isExecutive = planLower === 'executive' || planLower.includes('executive');
+                            const types = isExecutive ? ['Resume', 'Cover letter', 'Portfolio (link)'] : ['Resume'];
+                            const names = (selectedJob?.attachments || []).map((a) => (a.name || '').trim());
+                            const has = (label) => names.some((n) => n.toLowerCase() === label.toLowerCase());
+                            return types.map((label) => (
+                              <li key={label} className="flex items-center gap-2">
+                                {has(label) ? (
+                                  <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
+                                ) : (
+                                  <span className="w-4 h-4 rounded-full border-2 border-slate-300 flex-shrink-0" />
+                                )}
+                                <span className={has(label) ? 'text-slate-800 font-medium' : 'text-slate-500'}>{label}</span>
+                              </li>
+                            ));
+                          })()}
+                        </ul>
+                      </div>
                       <div className="space-y-1 mb-3">
                         {(selectedJob.attachments || []).length === 0 && (
                           <p className="text-sm text-gray-500 py-4">No attachments yet</p>

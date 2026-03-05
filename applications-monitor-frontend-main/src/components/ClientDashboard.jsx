@@ -3,6 +3,7 @@ import { toast } from 'react-hot-toast';
 import Layout from './Layout';
 import { Search, User, CreditCard, Zap, X, CheckCircle2, ArrowUp, Sparkles, Crown, Rocket, Star } from 'lucide-react';
 import { parseAmount, extractCurrency, formatAmount } from '../utils/currencyUtils';
+import { handleAuthFailure } from '../utils/authUtils';
 
 const API_BASE = import.meta.env.VITE_BASE || 'http://localhost:8001';
 
@@ -144,8 +145,8 @@ export default function ClientDashboard() {
     setLoadingReferralUsers(true);
     try {
       const response = await fetch(`${API_BASE}/api/referral-management/users`);
+      const data = await response.json().catch(() => ({}));
       if (response.ok) {
-        const data = await response.json();
         if (data.success) {
           setReferralUsers((data.users || []).map(user => ({
             ...user,
@@ -161,7 +162,8 @@ export default function ClientDashboard() {
           throw new Error(data.error || 'Failed to fetch users');
         }
       } else {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        if (handleAuthFailure(response, data)) return;
+        throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
       }
     } catch (error) {
       console.error('Error fetching referral users:', error);

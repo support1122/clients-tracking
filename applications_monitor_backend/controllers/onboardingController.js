@@ -5,7 +5,12 @@ import { OnboardingNotificationModel } from '../OnboardingNotificationModel.js';
 import { UserModel } from '../UserModel.js';
 import { ClientModel } from '../ClientModel.js';
 import { ManagerModel } from '../ManagerModel.js';
+import OperationsModel from '../OperationsModel.js';
 import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
+
+// When true, all resume-maker assignments go to rachna077@gmail.com (no round-robin) remevee this later
+const rachana = true;
+const RACHANA_EMAIL = 'rachna077@gmail.com';
 
 // ---------------------------------------------------------------------------
 // Simple in-process TTL cache — avoids redundant DB round-trips
@@ -80,6 +85,9 @@ export async function getCurrentClientNumber() {
 }
 
 export async function getNextResumeMaker() {
+  if (rachana) {
+    return { email: RACHANA_EMAIL.toLowerCase(), name: 'Rachana' };
+  }
   const users = await UserModel.find({
     role: 'onboarding_team',
     onboardingSubRole: 'resume_maker',
@@ -143,9 +151,11 @@ export async function createOnboardingJobPayload(payload) {
 }
 
 // Fields needed for Kanban card display (excludes heavy arrays loaded on card open)
+// attachments trimmed to names only in send for card step-status
 const LIST_PROJECTION = 'jobNumber clientNumber clientEmail clientName planType status ' +
   'resumeMakerEmail resumeMakerName linkedInMemberEmail linkedInMemberName ' +
-  'csmEmail csmName dashboardManagerName linkedInPhaseStarted adminUnreadCount pendingMoveRequest createdAt updatedAt';
+  'operatorEmail operatorName csmEmail csmName dashboardManagerName linkedInPhaseStarted adminUnreadCount pendingMoveRequest createdAt updatedAt ' +
+  'attachments';
 
 export async function listOnboardingJobs(req, res) {
   try {
@@ -216,10 +226,12 @@ export async function listOnboardingJobs(req, res) {
       const clientEmail = (job.clientEmail || '').toLowerCase();
       const clientInfo = clientStatusMap.get(clientEmail) || { status: 'active', isPaused: false, clientNumber: null };
       const dashboardManagerEmail = (job.dashboardManagerName && managerEmailByName.get(job.dashboardManagerName)) || '';
-      // Client model is source of truth for clientNumber; use it over job's stored value
       const clientNumber = clientInfo.clientNumber != null ? clientInfo.clientNumber : job.clientNumber;
+      const attachmentNames = (job.attachments || []).map(a => ({ name: a.name || '' }));
+      const { attachments: _att, ...rest } = job;
       return {
-        ...job,
+        ...rest,
+        attachments: attachmentNames,
         clientNumber,
         clientStatus: clientInfo.status,
         clientIsPaused: clientInfo.isPaused,
@@ -295,7 +307,7 @@ function validateTransition(fromStatus, toStatus) {
 export async function patchOnboardingJob(req, res) {
   try {
     const { id } = req.params;
-    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, comment, clientName, gmailCredentials, dashboardManagerName } = req.body || {};
+    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, operatorEmail, operatorName, comment, clientName, gmailCredentials, dashboardManagerName } = req.body || {};
     
     // Validate ID format
     if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
@@ -413,6 +425,10 @@ export async function patchOnboardingJob(req, res) {
     if (isAdmin && linkedInMemberEmail !== undefined) {
       job.linkedInMemberEmail = (linkedInMemberEmail || '').toLowerCase().trim();
       job.linkedInMemberName = linkedInMemberName || '';
+    }
+    if (isAdmin && operatorEmail !== undefined) {
+      job.operatorEmail = (operatorEmail || '').toLowerCase().trim();
+      job.operatorName = operatorName || '';
     }
     if (isAdmin && clientName !== undefined && typeof clientName === 'string') {
       job.clientName = clientName.trim() || job.clientName;
@@ -636,9 +652,10 @@ export async function getOnboardingRoles(req, res) {
     const cachedRoles = rolesCache.get('roles');
     if (cachedRoles) return res.status(200).json(cachedRoles);
 
-    const users = await UserModel.find({ isActive: true })
-      .select('email role onboardingSubRole roles name')
-      .lean();
+    const [users, operationsList] = await Promise.all([
+      UserModel.find({ isActive: true }).select('email role onboardingSubRole roles name').lean(),
+      OperationsModel.find().select('email name').lean()
+    ]);
     const csms = users.filter(u => u.roles?.includes?.('csm') || u.role === 'csm');
     const resumeMakers = users.filter(u => u.role === 'onboarding_team' && u.onboardingSubRole === 'resume_maker');
     const linkedInMembers = users.filter(u =>
@@ -646,17 +663,22 @@ export async function getOnboardingRoles(req, res) {
       u.onboardingSubRole === 'linkedin_and_cover_letter_optimization'
     );
     const teamLeads = users.filter(u => u.role === 'team_lead');
-    const operationsInterns = users.filter(u => u.role === 'operations_intern');
     const admins = users.filter(u => u.role === 'admin');
+    // Operations Intern dropdown: use Operations Team (OperationsModel), same list as Operations Team tab
+    const operationsInterns = (operationsList || []).map(o => ({ email: o.email, name: o.name || o.email }));
     const mentionableMap = new Map();
-    [...csms, ...teamLeads, ...operationsInterns, ...admins].forEach(u => {
+    [...csms, ...teamLeads, ...admins].forEach(u => {
       if (u.email) mentionableMap.set(u.email.toLowerCase(), { email: u.email, name: u.name || u.email });
+    });
+    operationsInterns.forEach(o => {
+      if (o.email) mentionableMap.set((o.email || '').toLowerCase(), { email: o.email, name: o.name || o.email });
     });
     const mentionableUsers = Array.from(mentionableMap.values());
     const rolesPayload = {
       csms: csms.map(u => ({ email: u.email, name: u.name || u.email })),
       resumeMakers: resumeMakers.map(u => ({ email: u.email, name: u.name || u.email })),
       linkedInMembers: linkedInMembers.map(u => ({ email: u.email, name: u.name || u.email })),
+      operationsInterns: operationsInterns.map(u => ({ email: u.email, name: u.name || u.email })),
       teamLeads: teamLeads.map(u => ({ email: u.email, name: u.name || u.email })),
       admins: admins.map(u => ({ email: u.email, name: u.name || u.email })),
       mentionableUsers
