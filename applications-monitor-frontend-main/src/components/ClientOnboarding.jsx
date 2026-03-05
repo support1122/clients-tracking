@@ -8,6 +8,7 @@ import {
 } from '../store/onboardingStore';
 import { toastUtils } from '../utils/toastUtils';
 import { handleAuthFailure } from '../utils/authUtils';
+import { hasLinkedInOptimization } from '../utils/planFeatures';
 import {
   ChevronRight,
   ChevronDown,
@@ -117,18 +118,24 @@ const JobCard = React.memo(({
   const allowed = getAllowedStatusesForPlan(job.planType);
   const moveToOptions = (visibleColumns || []).filter((s) => allowed.includes(s) && s !== job.status);
 
-  // Step status for card: dashboard → resume → cover & linkedin (exec) → portfolio (exec)
+  // Step status for card: dashboard → resume → linkedin (prof) → cover & linkedin (exec) → portfolio (exec)
   // Dashboard details: use single source of truth — Dashboard Manager assigned (no nested credentials needed in list)
   const planLower = (job.planType || '').toLowerCase();
   const isExecutive = planLower === 'executive' || planLower.includes('executive');
+  const isProfessional = planLower === 'professional' || planLower.includes('professional');
+  const hasLinkedIn = hasLinkedInOptimization(job.planType);
   const hasDashboard = !!(job.dashboardManagerName || '').trim();
   const attachmentNames = (job.attachments || []).map((a) => (a.name || '').trim()).filter(Boolean);
   const hasResume = job.status !== 'resume_in_progress' || attachmentNames.some((n) => /^resume$/i.test(n));
+  const linkedInDone = ['linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress', 'completed'].includes(job.status);
   const coverLinkedInDone = ['linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress', 'completed'].includes(job.status);
   const hasPortfolio = attachmentNames.some((n) => /portfolio/i.test(n));
   const steps = [
     { key: 'dashboard', label: 'Dashboard details', labelDone: 'Dashboard details', done: hasDashboard },
     { key: 'resume', label: 'Resume not sent', labelDone: 'Resume sent', done: hasResume },
+    // Professional plan: LinkedIn separately
+    ...(hasLinkedIn && !isExecutive ? [{ key: 'linkedin', label: 'LinkedIn Pending', labelDone: 'LinkedIn', done: linkedInDone }] : []),
+    // Executive plan: Cover and LinkedIn combined
     ...(isExecutive ? [{ key: 'coverLinkedIn', label: 'Cover and LinkedIn Pending', labelDone: 'Cover and LinkedIn', done: coverLinkedInDone }] : []),
     ...(isExecutive ? [{ key: 'portfolio', label: 'Portfolio Pending', labelDone: 'Portfolio', done: hasPortfolio }] : [])
   ];
