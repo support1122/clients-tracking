@@ -44,6 +44,7 @@ import {
   getOnboardingRoles,
   getNextResumeMakerApi,
   postOnboardingJobAttachment,
+  patchOnboardingJobAttachment,
   getOnboardingNotifications,
   markOnboardingNotificationRead,
   markAdminRead,
@@ -3863,6 +3864,7 @@ app.get('/api/onboarding/jobs/:id', verifyToken, getOnboardingJobById);
 app.patch('/api/onboarding/jobs/:id/comments/:commentId/resolve', verifyToken, resolveOnboardingComment);
 app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
 app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
+app.patch('/api/onboarding/jobs/:id/attachments/:index', verifyToken, patchOnboardingJobAttachment);
 app.post('/api/onboarding/jobs/:id/admin-read', verifyToken, markAdminRead);
 app.post('/api/onboarding/jobs/:id/request-move', verifyToken, requestMove);
 app.post('/api/onboarding/jobs/:id/approve-move', verifyToken, approveMove);
@@ -3925,11 +3927,22 @@ app.post('/api/managers', verifyToken, verifyAdmin, upload.single('profilePhoto'
 app.put('/api/managers/:id', verifyToken, verifyAdmin, upload.single('profilePhoto'), updateManager);
 app.delete('/api/managers/:id', verifyToken, verifyAdmin, deleteManager);
 app.post('/api/managers/:id/upload-photo', verifyToken, verifyAdmin, upload.single('profilePhoto'), uploadProfilePhoto);
+// Resolve operation by email (try as-is then @flashfirehq if @flashfirehq.com)
+const findOperationByEmail = async (email) => {
+  const lower = (email || '').toLowerCase().trim();
+  let operation = await OperationsModel.findOne({ email: lower }).lean();
+  if (!operation && lower.endsWith('@flashfirehq.com')) {
+    const alt = lower.replace('@flashfirehq.com', '@flashfirehq');
+    operation = await OperationsModel.findOne({ email: alt }).lean();
+  }
+  return operation;
+};
+
 // Get managed users for an operation
 const getManagedUsers = async (req, res) => {
   try {
     const { email } = req.params;
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() }).lean();
+    const operation = await findOperationByEmail(email);
 
     if (!operation) {
       return res.status(404).json({ error: 'Operation not found' });
@@ -3974,10 +3987,9 @@ const addManagedUser = async (req, res) => {
       return res.status(400).json({ error: 'userID is required' });
     }
 
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() });
-    if (!operation) {
-      return res.status(404).json({ error: 'Operation not found' });
-    }
+    const op = await findOperationByEmail(email);
+    if (!op) return res.status(404).json({ error: 'Operation not found' });
+    const operation = await OperationsModel.findOne({ email: op.email });
 
     // Add userID to managedUsers array if not already present (handle ObjectId comparison)
     const isAlreadyManaged = operation.managedUsers.some(managedId => managedId.toString() === userID);
@@ -3997,10 +4009,9 @@ const removeManagedUser = async (req, res) => {
   try {
     const { email, userID } = req.params;
 
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() });
-    if (!operation) {
-      return res.status(404).json({ error: 'Operation not found' });
-    }
+    const op = await findOperationByEmail(email);
+    if (!op) return res.status(404).json({ error: 'Operation not found' });
+    const operation = await OperationsModel.findOne({ email: op.email });
 
     // Remove userID from managedUsers array (handle ObjectId comparison)
     operation.managedUsers = operation.managedUsers.filter(id => id.toString() !== userID);
@@ -4027,11 +4038,11 @@ const assignClientToOperator = async (req, res) => {
       return res.status(404).json({ error: 'Client not found' });
     }
 
-    // Find the operator by email
-    const operator = await OperationsModel.findOne({ email: operatorEmail.toLowerCase() });
-    if (!operator) {
-      return res.status(404).json({ error: 'Operator not found' });
-    }
+    // Find the operator by email (support both @flashfirehq and @flashfirehq.com)
+    const op = await findOperationByEmail(operatorEmail);
+    if (!op) return res.status(404).json({ error: 'Operator not found' });
+    const operator = await OperationsModel.findOne({ email: op.email });
+    if (!operator) return res.status(404).json({ error: 'Operator not found' });
 
     // Check if client is already managed by this operator
     const isAlreadyManaged = operator.managedUsers.some(managedId => managedId.toString() === client._id.toString());
@@ -4063,7 +4074,7 @@ const getAvailableClients = async (req, res) => {
   try {
     const { email } = req.params;
 
-    const operation = await OperationsModel.findOne({ email: email.toLowerCase() }).lean();
+    const operation = await findOperationByEmail(email);
     if (!operation) {
       return res.status(404).json({ error: 'Operation not found' });
     }
@@ -4474,7 +4485,27 @@ const getOperationsPerformanceReport = async (req, res) => {
 
 app.get('/api/operations/performance-report', getOperationsPerformanceReport);
 
+// Get all operations who have this client in their managedUsers (by client email)
+const getOperationsByClient = async (req, res) => {
+  try {
+    const { clientEmail } = req.params;
+    if (!clientEmail) return res.status(400).json({ error: 'clientEmail is required' });
+
+    const client = await NewUserModel.findOne({ email: clientEmail.toLowerCase().trim() }).lean();
+    if (!client) return res.status(200).json({ operations: [], clientId: null });
+
+    const operations = await OperationsModel.find({ managedUsers: client._id }).select('email name').lean();
+    const list = (operations || []).map(o => ({ email: o.email, name: o.name || o.email }));
+
+    res.status(200).json({ operations: list, clientId: client._id.toString() });
+  } catch (error) {
+    console.error('getOperationsByClient:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 app.get('/api/operations', getAllOperations);
+app.get('/api/operations/by-client/:clientEmail', getOperationsByClient);
 app.get('/api/operations/names', getOperationsNames);
 app.get('/api/operations/:email', getOperationsByEmail);
 app.post('/api/operations', createOrUpdateOperation);

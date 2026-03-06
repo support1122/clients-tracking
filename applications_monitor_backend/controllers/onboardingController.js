@@ -6,6 +6,7 @@ import { UserModel } from '../UserModel.js';
 import { ClientModel } from '../ClientModel.js';
 import { ManagerModel } from '../ManagerModel.js';
 import OperationsModel from '../OperationsModel.js';
+import { NewUserModel } from '../schema_models/UserModel.js';
 import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
 
 // When true, all resume-maker assignments go to rachna077@gmail.com (no round-robin) remevee this later
@@ -331,7 +332,7 @@ export async function patchOnboardingJob(req, res) {
       // Plan-based validation
       const planType = (job.planType || 'default').toLowerCase();
       const executiveStatuses = ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved', 'linkedin_in_progress', 'linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress', 'completed'];
-      const professionalStatuses = ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved', 'linkedin_in_progress', 'linkedin_done', 'applications_ready', 'applications_in_progress', 'completed'];
+      const professionalStatuses = ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved', 'linkedin_in_progress', 'linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress', 'completed'];
       const defaultStatuses = ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved', 'applications_ready', 'applications_in_progress', 'completed'];
       
       const allowedStatusesForPlan = planType === 'executive' ? executiveStatuses : (planType === 'professional' ? professionalStatuses : defaultStatuses);
@@ -429,6 +430,21 @@ export async function patchOnboardingJob(req, res) {
     if (isAdmin && operatorEmail !== undefined) {
       job.operatorEmail = (operatorEmail || '').toLowerCase().trim();
       job.operatorName = operatorName || '';
+      // Auto-add client to operator's managedUsers when assigning (so they appear in operations list)
+      if (job.operatorEmail && job.clientEmail) {
+        try {
+          const client = await NewUserModel.findOne({ email: job.clientEmail.toLowerCase() }).lean();
+          const opEmail = job.operatorEmail;
+          const opEmailAlt = opEmail.replace('@flashfirehq.com', '@flashfirehq');
+          const operator = await OperationsModel.findOne({ email: { $in: [opEmail, opEmailAlt] } });
+          if (client && operator && !operator.managedUsers.some(id => id.toString() === client._id.toString())) {
+            operator.managedUsers.push(client._id);
+            await operator.save();
+          }
+        } catch (err) {
+          console.error('Auto-add client to operator managedUsers:', err);
+        }
+      }
     }
     if (isAdmin && clientName !== undefined && typeof clientName === 'string') {
       job.clientName = clientName.trim() || job.clientName;
@@ -992,6 +1008,37 @@ export async function postOnboardingJobAttachment(req, res) {
   } catch (e) {
     console.error('postOnboardingJobAttachment:', e);
     res.status(500).json({ error: e.message || 'Failed to add attachment' });
+  }
+}
+
+/**
+ * PATCH /api/onboarding/jobs/:id/attachments/:index
+ * Update a single attachment's name and/or url/filename (replace file).
+ */
+export async function patchOnboardingJobAttachment(req, res) {
+  try {
+    const { id, index } = req.params;
+    const { name, url, filename } = req.body || {};
+    if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) return res.status(400).json({ error: 'Invalid job ID' });
+    const idx = parseInt(index, 10);
+    if (isNaN(idx) || idx < 0) return res.status(400).json({ error: 'Invalid attachment index' });
+    const job = await OnboardingJobModel.findById(id);
+    if (!job) return res.status(404).json({ error: 'Onboarding job not found' });
+    if (!job.attachments || !Array.isArray(job.attachments) || idx >= job.attachments.length) {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+    const att = job.attachments[idx];
+    if (name !== undefined && typeof name === 'string') att.name = name.trim() || att.filename || '';
+    if (url !== undefined && typeof url === 'string') att.url = url;
+    if (filename !== undefined && typeof filename === 'string') att.filename = filename;
+    job.updatedAt = new Date();
+    job.markModified('attachments');
+    await job.save();
+    jobListCache.clear();
+    res.status(200).json({ attachment: job.attachments[idx], job: job.toObject ? job.toObject() : job });
+  } catch (e) {
+    console.error('patchOnboardingJobAttachment:', e);
+    res.status(500).json({ error: e.message || 'Failed to update attachment' });
   }
 }
 
