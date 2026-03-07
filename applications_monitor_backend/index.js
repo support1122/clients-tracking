@@ -33,6 +33,7 @@ import { NewUserModel } from './schema_models/UserModel.js';
 import { ClientTodosModel } from './ClientTodosModel.js';
 import {
   createOnboardingJobPayload,
+  addClientActionToJobMoveHistory,
   getNextClientNumber,
   previewNextClientNumber,
   getCurrentClientNumber,
@@ -181,6 +182,17 @@ const verifyToken = (req, res, next) => {
   } catch (error) {
     res.status(400).json({ error: 'Invalid token.' });
   }
+};
+
+// Optional auth: decode token if present and set req.user, but never fail (for audit logging)
+const optionalVerifyToken = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return next();
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+  } catch (_) { /* ignore invalid token */ }
+  next();
 };
 
 // Add a referral entry for a user
@@ -812,7 +824,8 @@ export const createOrUpdateClient = async (req, res) => {
           clientNumber: finalClientNumber,
           planType: capitalizedPlan || 'Professional',
           dashboardManagerName: dashboardManager || '',
-          dashboardCredentials: dashboardCredentials || { username: '', password: '', loginUrl: '' }
+          dashboardCredentials: dashboardCredentials || { username: '', password: '', loginUrl: '' },
+          createdBy: req.user?.email || ''
         });
       } catch (onbErr) {
         console.error('Onboarding job creation failed:', onbErr?.message || onbErr);
@@ -833,6 +846,15 @@ export const createOrUpdateClient = async (req, res) => {
         { $set: clientUpdate },
         { runValidators: false }
       );
+      // Log pause/unpause/phase changes to job move history for audit
+      const movedBy = req.user?.email || 'unknown';
+      if (req.body.isPaused === true && req.body.onboardingPhase === true) {
+        await addClientActionToJobMoveHistory(emailLower, 'client_phase_set', movedBy);
+      } else if (req.body.isPaused === true) {
+        await addClientActionToJobMoveHistory(emailLower, 'client_paused', movedBy);
+      } else if (req.body.isPaused === false) {
+        await addClientActionToJobMoveHistory(emailLower, 'client_unpaused', movedBy);
+      }
       const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
       return res.status(200).json({
         message: "🔄 Client fields updated successfully",
@@ -861,6 +883,15 @@ export const createOrUpdateClient = async (req, res) => {
       { $set: clientUpdate },
       { runValidators: false }
     );
+    // Log pause/unpause/phase changes to job move history for audit
+    const movedBy = req.user?.email || 'unknown';
+    if (req.body.isPaused === true && req.body.onboardingPhase === true) {
+      await addClientActionToJobMoveHistory(emailLower, 'client_phase_set', movedBy);
+    } else if (req.body.isPaused === true) {
+      await addClientActionToJobMoveHistory(emailLower, 'client_paused', movedBy);
+    } else if (req.body.isPaused === false) {
+      await addClientActionToJobMoveHistory(emailLower, 'client_unpaused', movedBy);
+    }
     // Only update NewUserModel when we have name/dashboard/plan from the request (Phase/Pause only sends email, isPaused, onboardingPhase — no name)
     const updateFields = {};
     if (name !== undefined && name !== null && String(name).trim() !== '') {
@@ -3834,8 +3865,54 @@ app.get('/api/clients/all', async (req, res) => {
   }
 });
 
-app.post('/api/clients', createOrUpdateClient);
+/**
+ * PATCH /api/clients/:email/client-number
+ * Update a single client's clientNumber. Syncs to OnboardingJob. Admin only.
+ * Body: { clientNumber: number } - can be null to clear the number.
+ */
+const updateClientNumber = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { clientNumber } = req.body;
+    const emailLower = (email || '').toLowerCase().trim();
+    if (!emailLower) return res.status(400).json({ error: 'Email is required' });
+
+    const client = await ClientModel.findOne({ email: emailLower });
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    let finalNumber = null;
+    if (clientNumber !== undefined && clientNumber !== null && clientNumber !== '') {
+      const num = parseInt(String(clientNumber).trim(), 10);
+      if (isNaN(num) || num < 1) return res.status(400).json({ error: 'clientNumber must be a positive integer' });
+      finalNumber = num;
+      const CLIENT_NUMBER_FLOOR = 5809;
+      await ClientCounterModel.findOneAndUpdate(
+        { _id: 'client_number' },
+        { $max: { lastNumber: Math.max(num, CLIENT_NUMBER_FLOOR - 1) } },
+        { upsert: true }
+      );
+    }
+
+    await ClientModel.updateOne({ email: emailLower }, { $set: { clientNumber: finalNumber } });
+    await OnboardingJobModel.updateMany(
+      { clientEmail: emailLower },
+      { $set: { clientNumber: finalNumber } }
+    );
+
+    res.status(200).json({
+      success: true,
+      clientNumber: finalNumber,
+      message: `Client number ${finalNumber != null ? `set to ${finalNumber}` : 'cleared'} and synced to onboarding jobs`,
+    });
+  } catch (error) {
+    console.error('updateClientNumber:', error);
+    res.status(500).json({ error: error.message || 'Failed to update client number' });
+  }
+};
+
+app.post('/api/clients', optionalVerifyToken, createOrUpdateClient);
 app.post('/api/clients/addnumbers', addNumbersToClients);
+app.patch('/api/clients/:email/client-number', verifyToken, verifyAdmin, updateClientNumber);
 app.post('/api/clients/sync-client-numbers', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const synced = await syncClientNumbersToOnboardingJobs();
@@ -3888,18 +3965,56 @@ app.post('/api/upload/onboarding-attachment', verifyToken, fileUpload.single('fi
   }
 });
 
+// Check if profile has all required fields (matches flashfire ProfileContext isProfileComplete)
+function isProfileComplete(profile) {
+  if (!profile || typeof profile !== 'object') return false;
+  const required = [
+    'firstName', 'lastName', 'contactNumber', 'dob',
+    'bachelorsUniDegree', 'bachelorsGradMonthYear',
+    'visaStatus', 'address',
+    'preferredRoles', 'experienceLevel', 'expectedSalaryRange',
+    'preferredLocations', 'targetCompanies',
+    'linkedinUrl', 'resumeUrl'
+  ];
+  const ok = required.every((f) => {
+    const v = profile[f];
+    if (Array.isArray(v)) return v.length > 0;
+    return v != null && String(v).trim() !== '';
+  });
+  return ok && !!profile.confirmAccuracy && !!profile.agreeTos;
+}
+
 // Proxy to fetch client profile from flashfire (for resume-making context in tickets)
+// Also updates onboarding jobs with profileComplete so "Dashboard details" step reflects actual profile completion
 app.get('/api/onboarding/client-profile/:email', verifyToken, async (req, res) => {
   try {
     const { email } = req.params;
     if (!email) return res.status(400).json({ error: 'Email is required' });
-    const url = `${FLASHFIRE_API_BASE_URL}/get-profile?email=${encodeURIComponent(email)}`;
+    const emailLower = email.toLowerCase().trim();
+    const url = `${FLASHFIRE_API_BASE_URL}/get-profile?email=${encodeURIComponent(emailLower)}`;
     const response = await fetch(url);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      return res.status(response.status).json(data);
+      // Profile not found - update jobs to profileComplete=false so card shows "Dashboard details" as pending
+      await OnboardingJobModel.updateMany(
+        { clientEmail: emailLower },
+        { $set: { profileComplete: false } }
+      ).catch(() => {});
+      return res.status(response.status).json({ ...data, profileComplete: false });
     }
-    res.status(200).json(data);
+    const profile = data?.userProfile ?? data;
+    const complete = isProfileComplete(profile);
+    const now = new Date();
+    await OnboardingJobModel.updateMany(
+      { clientEmail: emailLower },
+      {
+        $set: {
+          profileComplete: complete,
+          ...(complete ? { dashboardDetailsCompletedAt: now } : {})
+        }
+      }
+    ).catch(() => {});
+    res.status(200).json({ ...data, profileComplete: complete });
   } catch (e) {
     console.error('getClientProfile proxy:', e);
     res.status(500).json({ error: e.message || 'Failed to fetch client profile' });
