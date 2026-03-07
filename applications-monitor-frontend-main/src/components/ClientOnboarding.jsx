@@ -118,19 +118,19 @@ const JobCard = React.memo(({
   const moveToOptions = (visibleColumns || []).filter((s) => allowed.includes(s) && s !== job.status);
 
   // Step status for card: dashboard → resume → cover & linkedin (prof+exec) → portfolio (exec only)
-  // Dashboard details: use single source of truth — Dashboard Manager assigned (no nested credentials needed in list)
+  // All steps are driven by attachments only (not job status/columns)
   const planLower = (job.planType || '').toLowerCase();
   const isExecutive = planLower === 'executive' || planLower.includes('executive');
   const hasLinkedInCoverLetter = ['professional', 'executive'].includes(planLower);
   const hasDashboard = !!(job.dashboardManagerName || '').trim();
   const attachmentNames = (job.attachments || []).map((a) => (a.name || '').trim()).filter(Boolean);
-  const hasResume = job.status !== 'resume_in_progress' || attachmentNames.some((n) => /^resume$/i.test(n));
-  const coverLinkedInDone = ['linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress', 'completed'].includes(job.status);
+  const hasResume = attachmentNames.some((n) => /^resume$/i.test(n));
+  const hasCoverLetter = attachmentNames.some((n) => /cover\s*letter/i.test(n));
   const hasPortfolio = attachmentNames.some((n) => /portfolio/i.test(n));
   const steps = [
     { key: 'dashboard', label: 'Dashboard details', labelDone: 'Dashboard details', done: hasDashboard },
     { key: 'resume', label: 'Resume not sent', labelDone: 'Resume sent', done: hasResume },
-    ...(hasLinkedInCoverLetter ? [{ key: 'coverLinkedIn', label: 'Cover and LinkedIn Pending', labelDone: 'Cover and LinkedIn', done: coverLinkedInDone }] : []),
+    ...(hasLinkedInCoverLetter ? [{ key: 'coverLinkedIn', label: 'Cover and LinkedIn Pending', labelDone: 'Cover and LinkedIn', done: hasCoverLetter }] : []),
     ...(isExecutive ? [{ key: 'portfolio', label: 'Portfolio Pending', labelDone: 'Portfolio', done: hasPortfolio }] : [])
   ];
   const firstIncompleteIndex = steps.findIndex((s) => !s.done);
