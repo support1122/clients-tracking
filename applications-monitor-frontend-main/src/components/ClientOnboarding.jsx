@@ -8,7 +8,6 @@ import {
 } from '../store/onboardingStore';
 import { toastUtils } from '../utils/toastUtils';
 import { handleAuthFailure } from '../utils/authUtils';
-import { hasLinkedInOptimization } from '../utils/planFeatures';
 import {
   ChevronRight,
   ChevronDown,
@@ -118,25 +117,20 @@ const JobCard = React.memo(({
   const allowed = getAllowedStatusesForPlan(job.planType);
   const moveToOptions = (visibleColumns || []).filter((s) => allowed.includes(s) && s !== job.status);
 
-  // Step status for card: dashboard → resume → linkedin (prof) → cover & linkedin (exec) → portfolio (exec)
+  // Step status for card: dashboard → resume → cover & linkedin (prof+exec) → portfolio (exec only)
   // Dashboard details: use single source of truth — Dashboard Manager assigned (no nested credentials needed in list)
   const planLower = (job.planType || '').toLowerCase();
   const isExecutive = planLower === 'executive' || planLower.includes('executive');
-  const isProfessional = planLower === 'professional' || planLower.includes('professional');
-  const hasLinkedIn = hasLinkedInOptimization(job.planType);
+  const hasLinkedInCoverLetter = ['professional', 'executive'].includes(planLower);
   const hasDashboard = !!(job.dashboardManagerName || '').trim();
   const attachmentNames = (job.attachments || []).map((a) => (a.name || '').trim()).filter(Boolean);
   const hasResume = job.status !== 'resume_in_progress' || attachmentNames.some((n) => /^resume$/i.test(n));
-  const linkedInDone = ['linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress', 'completed'].includes(job.status);
   const coverLinkedInDone = ['linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress', 'completed'].includes(job.status);
   const hasPortfolio = attachmentNames.some((n) => /portfolio/i.test(n));
   const steps = [
     { key: 'dashboard', label: 'Dashboard details', labelDone: 'Dashboard details', done: hasDashboard },
     { key: 'resume', label: 'Resume not sent', labelDone: 'Resume sent', done: hasResume },
-    // Professional plan: LinkedIn separately
-    ...(hasLinkedIn && !isExecutive ? [{ key: 'linkedin', label: 'LinkedIn Pending', labelDone: 'LinkedIn', done: linkedInDone }] : []),
-    // Executive plan: Cover and LinkedIn combined
-    ...(isExecutive ? [{ key: 'coverLinkedIn', label: 'Cover and LinkedIn Pending', labelDone: 'Cover and LinkedIn', done: coverLinkedInDone }] : []),
+    ...(hasLinkedInCoverLetter ? [{ key: 'coverLinkedIn', label: 'Cover and LinkedIn Pending', labelDone: 'Cover and LinkedIn', done: coverLinkedInDone }] : []),
     ...(isExecutive ? [{ key: 'portfolio', label: 'Portfolio Pending', labelDone: 'Portfolio', done: hasPortfolio }] : [])
   ];
   const firstIncompleteIndex = steps.findIndex((s) => !s.done);
@@ -437,7 +431,24 @@ export default function ClientOnboarding() {
   const [attachmentNameInput, setAttachmentNameInput] = useState('');
   const [attachmentFilePending, setAttachmentFilePending] = useState(null);
   const [expandedAttachmentIndices, setExpandedAttachmentIndices] = useState(new Set());
+  const [editingAttachmentIndex, setEditingAttachmentIndex] = useState(null);
+  const [editingAttachmentName, setEditingAttachmentName] = useState('');
+  const [attachmentReplaceFilePending, setAttachmentReplaceFilePending] = useState(null);
+  const [savingAttachmentEdit, setSavingAttachmentEdit] = useState(false);
   const [moveToJob, setMoveToJob] = useState(null);
+  const [operatorManagedUsers, setOperatorManagedUsers] = useState([]);
+  const [loadingOperatorManagedUsers, setLoadingOperatorManagedUsers] = useState(false);
+  const [showAddManagedUserModal, setShowAddManagedUserModal] = useState(false);
+  const [availableClientsForOperator, setAvailableClientsForOperator] = useState([]);
+  const [loadingAvailableClientsForOperator, setLoadingAvailableClientsForOperator] = useState(false);
+  const [addingClientToOperator, setAddingClientToOperator] = useState(false);
+  const [removingManagedUser, setRemovingManagedUser] = useState(null);
+  const [operationsForClient, setOperationsForClient] = useState([]);
+  const [clientIdForOperations, setClientIdForOperations] = useState(null);
+  const [loadingOperationsForClient, setLoadingOperationsForClient] = useState(false);
+  const [showAddOperatorModal, setShowAddOperatorModal] = useState(false);
+  const [addingOperatorToClient, setAddingOperatorToClient] = useState(false);
+  const [removingOperatorFromClient, setRemovingOperatorFromClient] = useState(null);
   const [clientJobAnalysis, setClientJobAnalysis] = useState({}); // Map of clientEmail -> { saved, applied, interviewing, offer, rejected, removed, lastAppliedOperatorName }
   const [cardAnalysisDate, setCardAnalysisDate] = useState(''); // Date filter for job analysis inside card modal
   const [cardJobAnalysis, setCardJobAnalysis] = useState(null); // Job analysis data for the currently opened card
@@ -470,6 +481,7 @@ export default function ClientOnboarding() {
   const isTeamLead = user?.role === 'team_lead';
   const userSubRole = user?.onboardingSubRole || '';
   const canMoveAny = isAdmin || isCsm || isTeamLead;
+  const canViewOperations = isAdmin || isCsm || isTeamLead;
 
   // Get allowed statuses based on user role
   const getAllowedStatusesForUser = () => {
@@ -1148,6 +1160,21 @@ export default function ClientOnboarding() {
       return;
     }
 
+    // Require at least one resume attachment before moving to LinkedIn / Cover / Applications
+    const requireResumeStatuses = ['linkedin_in_progress', 'linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress'];
+    if (requireResumeStatuses.includes(newStatus)) {
+      const attachmentNames = (job.attachments || []).map((a) => (typeof a === 'object' && a?.name != null ? String(a.name).trim() : '')).filter(Boolean);
+      const hasResumeAttachment = attachmentNames.some((n) => /^resume$/i.test(n));
+      if (!hasResumeAttachment) {
+        toastUtils.error('Please upload a resume attachment before moving to this stage.');
+        setShowAttachments(true);
+        setAttachmentNameInput('Resume');
+        setShowAddAttachmentModal(true);
+        if (selectedJob?._id !== jobId) setSelectedJob(job);
+        return;
+      }
+    }
+
     const originalJob = { ...job };
     setMovingStatus(jobId);
 
@@ -1750,6 +1777,9 @@ export default function ClientOnboarding() {
       const data = await res.json();
       setSelectedJob(data.job);
       setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
+      setOperatorManagedUsers([]);
+      setShowAddManagedUserModal(false);
+      if (selectedJob.clientEmail && canViewOperations) fetchOperationsForClient(selectedJob.clientEmail);
       toastUtils.success('Operations Intern assigned');
     } catch (e) {
       toastUtils.error(e.message || 'Failed');
@@ -1758,11 +1788,185 @@ export default function ClientOnboarding() {
     }
   };
 
-  // Default attachment names by plan: executive = Resume, Cover letter, Portfolio (link); others = Resume
+  // Fetch managed users when an operator is selected on the ticket
+  const fetchOperatorManagedUsers = useCallback(async (operatorEmail) => {
+    if (!operatorEmail || !(operatorEmail || '').trim()) {
+      setOperatorManagedUsers([]);
+      return;
+    }
+    setLoadingOperatorManagedUsers(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/operations/${encodeURIComponent(operatorEmail.trim())}/managed-users`, { headers: AUTH_HEADERS() });
+      if (res.ok) {
+        const data = await res.json();
+        setOperatorManagedUsers(data.managedUsers || []);
+      } else {
+        setOperatorManagedUsers([]);
+      }
+    } catch {
+      setOperatorManagedUsers([]);
+    } finally {
+      setLoadingOperatorManagedUsers(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedJob?.operatorEmail) fetchOperatorManagedUsers(selectedJob.operatorEmail);
+    else setOperatorManagedUsers([]);
+  }, [selectedJob?.operatorEmail, fetchOperatorManagedUsers]);
+
+  const fetchOperationsForClient = useCallback(async (clientEmail) => {
+    if (!clientEmail || !canViewOperations) return;
+    setLoadingOperationsForClient(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/operations/by-client/${encodeURIComponent(clientEmail)}`, { headers: AUTH_HEADERS() });
+      if (res.ok) {
+        const data = await res.json();
+        setOperationsForClient(data.operations || []);
+        setClientIdForOperations(data.clientId || null);
+      } else {
+        setOperationsForClient([]);
+        setClientIdForOperations(null);
+      }
+    } catch {
+      setOperationsForClient([]);
+      setClientIdForOperations(null);
+    } finally {
+      setLoadingOperationsForClient(false);
+    }
+  }, [canViewOperations]);
+
+  useEffect(() => {
+    if (selectedJob?.clientEmail && canViewOperations) fetchOperationsForClient(selectedJob.clientEmail);
+    else {
+      setOperationsForClient([]);
+      setClientIdForOperations(null);
+    }
+  }, [selectedJob?.clientEmail, canViewOperations, fetchOperationsForClient]);
+
+  const openAddManagedUserModal = useCallback(async () => {
+    const email = selectedJob?.operatorEmail;
+    if (!email) return;
+    setShowAddManagedUserModal(true);
+    setAvailableClientsForOperator([]);
+    setLoadingAvailableClientsForOperator(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/operations/${encodeURIComponent(email.trim())}/available-clients`, { headers: AUTH_HEADERS() });
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableClientsForOperator(data.availableClients || []);
+      }
+    } catch {
+      setAvailableClientsForOperator([]);
+    } finally {
+      setLoadingAvailableClientsForOperator(false);
+    }
+  }, [selectedJob?.operatorEmail]);
+
+  const handleAssignClientToOperator = useCallback(async (clientEmail) => {
+    const operatorEmail = selectedJob?.operatorEmail;
+    if (!operatorEmail || !clientEmail) return;
+    setAddingClientToOperator(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/operations/assign-client`, {
+        method: 'POST',
+        headers: { ...AUTH_HEADERS(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientEmail, operatorEmail })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to add user');
+      }
+      toastUtils.success('Client added to this operator');
+      setShowAddManagedUserModal(false);
+      fetchOperatorManagedUsers(operatorEmail);
+    } catch (e) {
+      toastUtils.error(e.message || 'Failed');
+    } finally {
+      setAddingClientToOperator(false);
+    }
+  }, [selectedJob?.operatorEmail, fetchOperatorManagedUsers]);
+
+  const handleRemoveManagedUser = useCallback(async (userID) => {
+    const operatorEmail = selectedJob?.operatorEmail;
+    if (!operatorEmail || !userID) return;
+    setRemovingManagedUser(userID);
+    try {
+      const res = await fetch(`${API_BASE}/api/operations/${encodeURIComponent(operatorEmail.trim())}/managed-users/${encodeURIComponent(userID)}`, {
+        method: 'DELETE',
+        headers: AUTH_HEADERS()
+      });
+      if (!res.ok) throw new Error('Failed to remove');
+      toastUtils.success('User removed from operator');
+      fetchOperatorManagedUsers(operatorEmail);
+    } catch (e) {
+      toastUtils.error(e.message || 'Failed');
+    } finally {
+      setRemovingManagedUser(null);
+    }
+  }, [selectedJob?.operatorEmail, fetchOperatorManagedUsers]);
+
+  const handleAddOperatorToClient = useCallback(async (operatorEmail) => {
+    const clientEmail = selectedJob?.clientEmail;
+    if (!clientEmail || !operatorEmail) return;
+    setAddingOperatorToClient(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/operations/assign-client`, {
+        method: 'POST',
+        headers: { ...AUTH_HEADERS(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientEmail, operatorEmail })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to add');
+      }
+      toastUtils.success('Operations intern added');
+      setShowAddOperatorModal(false);
+      fetchOperationsForClient(clientEmail);
+    } catch (e) {
+      toastUtils.error(e.message || 'Failed');
+    } finally {
+      setAddingOperatorToClient(false);
+    }
+  }, [selectedJob?.clientEmail, fetchOperationsForClient]);
+
+  const handleRemoveOperatorFromClient = useCallback(async (operatorEmail) => {
+    const clientEmail = selectedJob?.clientEmail;
+    const clientId = clientIdForOperations;
+    if (!clientEmail || !operatorEmail || !clientId) return;
+    setRemovingOperatorFromClient(operatorEmail);
+    try {
+      const res = await fetch(`${API_BASE}/api/operations/${encodeURIComponent(operatorEmail.trim())}/managed-users/${encodeURIComponent(clientId)}`, {
+        method: 'DELETE',
+        headers: AUTH_HEADERS()
+      });
+      if (!res.ok) throw new Error('Failed to remove');
+      toastUtils.success('Operations intern removed');
+      fetchOperationsForClient(clientEmail);
+      if (selectedJob?.operatorEmail?.toLowerCase() === operatorEmail.toLowerCase()) {
+        const res2 = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, {
+          method: 'PATCH',
+          headers: AUTH_HEADERS(),
+          body: JSON.stringify({ operatorEmail: '', operatorName: '' })
+        });
+        if (res2.ok) {
+          const data = await res2.json();
+          setSelectedJob(data.job);
+          setJobs(prev => prev.map(j => (j._id === selectedJob._id ? data.job : j)));
+        }
+      }
+    } catch (e) {
+      toastUtils.error(e.message || 'Failed');
+    } finally {
+      setRemovingOperatorFromClient(null);
+    }
+  }, [selectedJob?.clientEmail, selectedJob?.operatorEmail, selectedJob?._id, clientIdForOperations, fetchOperationsForClient]);
+
+  // Default attachment names by plan: professional = Resume, Cover letter; executive = Resume, Cover letter, Portfolio (link)
   const getNextDefaultAttachmentName = useCallback((job) => {
     const planLower = (job?.planType || '').toLowerCase();
     const isExecutive = planLower === 'executive' || planLower.includes('executive');
-    const defaults = isExecutive ? ['Resume', 'Cover letter', 'Portfolio (link)'] : ['Resume'];
+    const defaults = isExecutive ? ['Resume', 'Cover letter', 'Portfolio (link)'] : (planLower === 'professional' ? ['Resume', 'Cover letter'] : ['Resume']);
     const names = (job?.attachments || []).map((a) => (a.name || '').trim());
     const hasMatch = (defaultName) => names.some((n) => n.toLowerCase() === defaultName.toLowerCase());
     const next = defaults.find((d) => !hasMatch(d));
@@ -1788,6 +1992,25 @@ export default function ClientOnboarding() {
     }
     e.target.value = '';
   };
+
+  const handleAttachmentPaste = useCallback((e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file && file.type.startsWith('image/')) {
+          e.preventDefault();
+          e.stopPropagation();
+          setAttachmentFilePending(file);
+          setAttachmentNameInput(prev => prev.trim() ? prev : (file.name.replace(/\.[^/.]+$/, '') || 'pasted-image.png'));
+          toastUtils.success('Image pasted! Click Upload to add.');
+          return;
+        }
+      }
+    }
+  }, []);
 
   const handleUploadAttachment = async () => {
     const name = attachmentNameInput.trim() || attachmentFilePending?.name || 'Attachment';
@@ -1849,6 +2072,66 @@ export default function ClientOnboarding() {
       return next;
     });
   };
+
+  const openAttachmentEditModal = (i) => {
+    const att = selectedJob?.attachments?.[i];
+    if (!att) return;
+    setEditingAttachmentIndex(i);
+    setEditingAttachmentName((att.name && String(att.name).trim()) || att.filename || '');
+    setAttachmentReplaceFilePending(null);
+  };
+
+  const closeAttachmentEditModal = () => {
+    setEditingAttachmentIndex(null);
+    setEditingAttachmentName('');
+    setAttachmentReplaceFilePending(null);
+  };
+
+  const saveAttachmentEdit = useCallback(async () => {
+    if (editingAttachmentIndex == null || !selectedJob?._id) return;
+    setSavingAttachmentEdit(true);
+    try {
+      const base = (API_BASE || '').replace(/\/$/, '');
+      let url = selectedJob.attachments?.[editingAttachmentIndex]?.url;
+      let filename = selectedJob.attachments?.[editingAttachmentIndex]?.filename;
+      if (attachmentReplaceFilePending) {
+        const formData = new FormData();
+        formData.append('file', attachmentReplaceFilePending);
+        const uploadRes = await fetch(`${base}/api/upload/onboarding-attachment`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${localStorage.getItem('authToken') || ''}` },
+          body: formData
+        });
+        const uploadData = await uploadRes.json().catch(() => ({}));
+        if (!uploadRes.ok || !uploadData?.url) throw new Error(uploadData?.message || uploadData?.error || 'Upload failed');
+        url = uploadData.url;
+        filename = uploadData.filename || attachmentReplaceFilePending.name;
+      }
+      const payload = { name: editingAttachmentName.trim() || filename };
+      if (url) payload.url = url;
+      if (filename) payload.filename = filename;
+      const res = await fetch(`${base}/api/onboarding/jobs/${selectedJob._id}/attachments/${editingAttachmentIndex}`, {
+        method: 'PATCH',
+        headers: AUTH_HEADERS(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to update attachment');
+      const updated = data.job ? data.job : (() => {
+        const u = { ...selectedJob, attachments: [...(selectedJob.attachments || [])] };
+        u.attachments[editingAttachmentIndex] = { ...u.attachments[editingAttachmentIndex], ...payload };
+        return u;
+      })();
+      setSelectedJob(updated);
+      setJobs((prev) => prev.map((j) => (j._id === selectedJob._id ? updated : j)));
+      closeAttachmentEditModal();
+      toastUtils.success('Attachment updated');
+    } catch (e) {
+      toastUtils.error(e?.message || 'Failed to update');
+    } finally {
+      setSavingAttachmentEdit(false);
+    }
+  }, [editingAttachmentIndex, editingAttachmentName, attachmentReplaceFilePending, selectedJob]);
 
   const jobTitle = (job) => `${job.jobNumber} - ${clientDisplayName(job)}-${job.planType || 'Plan'}`;
 
@@ -2884,34 +3167,115 @@ export default function ClientOnboarding() {
                           </div>
                         )}
                       </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Operations Intern</label>
-                        {isAdmin ? (
-                          <select
-                            value={selectedJob.operatorEmail || ''}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val === '') {
-                                handleAssignOperator('', '');
-                                return;
-                              }
-                              const opt = operatorOptions.find((o) => (o.email || '').toLowerCase() === val.toLowerCase());
-                              handleAssignOperator(opt?.email ?? val, opt?.name ?? selectedJob?.operatorName ?? val);
-                            }}
-                            disabled={assigningOperator}
-                            className="w-full text-sm border-gray-200 rounded-lg focus:ring-primary focus:border-primary bg-white"
-                          >
-                            <option value="">— Unassigned —</option>
-                            {operatorOptions.map((o) => (
-                              <option key={(o.email || '').toLowerCase()} value={o.email}>{o.name || o.email}</option>
-                            ))}
-                          </select>
-                        ) : (
-                          <div className="p-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 font-medium">
-                            {selectedJob.operatorName || selectedJob.operatorEmail || 'Unassigned'}
+                      {canViewOperations && (
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">Operations Intern</label>
+                          {isAdmin ? (
+                            <select
+                              value={selectedJob.operatorEmail || ''}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === '') {
+                                  handleAssignOperator('', '');
+                                  return;
+                                }
+                                const opt = operatorOptions.find((o) => (o.email || '').toLowerCase() === val.toLowerCase());
+                                handleAssignOperator(opt?.email ?? val, opt?.name ?? selectedJob?.operatorName ?? val);
+                              }}
+                              disabled={assigningOperator}
+                              className="w-full text-sm border-gray-200 rounded-lg focus:ring-primary focus:border-primary bg-white"
+                            >
+                              <option value="">— Unassigned —</option>
+                              {operatorOptions.map((o) => (
+                                <option key={(o.email || '').toLowerCase()} value={o.email}>{o.name || o.email}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <div className="p-2.5 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 font-medium">
+                              {selectedJob.operatorName || selectedJob.operatorEmail || 'Unassigned'}
+                            </div>
+                          )}
+                          {/* All operations managing this client */}
+                          <div className="mt-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Operations managing this client</span>
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowAddOperatorModal(true)}
+                                  className="text-xs font-medium text-primary hover:text-primary/80"
+                                >
+                                  + Add operations intern
+                                </button>
+                              )}
+                            </div>
+                            {loadingOperationsForClient ? (
+                              <p className="text-xs text-gray-500">Loading...</p>
+                            ) : operationsForClient.length === 0 ? (
+                              <p className="text-xs text-gray-500">No operations assigned yet.</p>
+                            ) : (
+                              <ul className="space-y-1.5 max-h-32 overflow-y-auto rounded-lg border border-gray-100 bg-white p-2">
+                                {operationsForClient.map((o) => (
+                                  <li key={(o.email || '').toLowerCase()} className="flex items-center justify-between gap-2 text-sm">
+                                    <span className="truncate text-gray-800" title={o.email}>{o.name || o.email}</span>
+                                    {isAdmin && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveOperatorFromClient(o.email)}
+                                        disabled={removingOperatorFromClient === o.email}
+                                        className="text-red-500 hover:text-red-700 text-xs disabled:opacity-50 shrink-0"
+                                        title="Remove from client"
+                                      >
+                                        {removingOperatorFromClient === o.email ? '…' : 'Remove'}
+                                      </button>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
                           </div>
-                        )}
-                      </div>
+                          {selectedJob.operatorEmail && (
+                            <div className="mt-3 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Users managed by primary operator</span>
+                                {isAdmin && (
+                                  <button
+                                    type="button"
+                                    onClick={openAddManagedUserModal}
+                                    className="text-xs font-medium text-primary hover:text-primary/80"
+                                  >
+                                    + Add new user
+                                  </button>
+                                )}
+                              </div>
+                              {loadingOperatorManagedUsers ? (
+                                <p className="text-xs text-gray-500">Loading...</p>
+                              ) : operatorManagedUsers.length === 0 ? (
+                                <p className="text-xs text-gray-500">No users assigned yet.</p>
+                              ) : (
+                                <ul className="space-y-1.5 max-h-32 overflow-y-auto rounded-lg border border-gray-100 bg-white p-2">
+                                  {operatorManagedUsers.map((u) => (
+                                    <li key={u.userID} className="flex items-center justify-between gap-2 text-sm">
+                                      <span className="truncate text-gray-800" title={u.email}>{u.name || u.email}</span>
+                                      {isAdmin && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveManagedUser(u.userID)}
+                                          disabled={removingManagedUser === u.userID}
+                                          className="text-red-500 hover:text-red-700 text-xs disabled:opacity-50 shrink-0"
+                                          title="Remove from operator"
+                                        >
+                                          {removingManagedUser === u.userID ? '…' : 'Remove'}
+                                        </button>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       {(selectedJob.linkedInPhaseStarted || selectedJob.status === 'linkedin_in_progress' || selectedJob.status === 'linkedin_done') && (
                         <div>
                           <label className="block text-xs font-semibold text-gray-700 mb-1.5">LinkedIn Member</label>
@@ -3380,17 +3744,29 @@ export default function ClientOnboarding() {
                           {(() => {
                             const planLower = (selectedJob?.planType || '').toLowerCase();
                             const isExecutive = planLower === 'executive' || planLower.includes('executive');
-                            const types = isExecutive ? ['Resume', 'Cover letter', 'Portfolio (link)'] : ['Resume'];
+                            const isProfessional = planLower === 'professional';
+                            const types = isExecutive ? ['Resume', 'Cover letter', 'Portfolio (link)'] : (isProfessional ? ['Resume', 'Cover letter'] : ['Resume']);
                             const names = (selectedJob?.attachments || []).map((a) => (a.name || '').trim());
                             const has = (label) => names.some((n) => n.toLowerCase() === label.toLowerCase());
                             return types.map((label) => (
-                              <li key={label} className="flex items-center gap-2">
-                                {has(label) ? (
-                                  <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
-                                ) : (
-                                  <span className="w-4 h-4 rounded-full border-2 border-slate-300 flex-shrink-0" />
-                                )}
-                                <span className={has(label) ? 'text-slate-800 font-medium' : 'text-slate-500'}>{label}</span>
+                              <li key={label}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAttachmentNameInput(label);
+                                    setAttachmentFilePending(null);
+                                    setShowAddAttachmentModal(true);
+                                    setTimeout(() => attachmentNameInputRef.current?.focus?.(), 100);
+                                  }}
+                                  className="flex items-center gap-2 w-full text-left rounded px-1 py-0.5 -mx-1 hover:bg-slate-100/80 transition-colors"
+                                >
+                                  {has(label) ? (
+                                    <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
+                                  ) : (
+                                    <span className="w-4 h-4 rounded-full border-2 border-slate-300 flex-shrink-0" />
+                                  )}
+                                  <span className={has(label) ? 'text-slate-800 font-medium' : 'text-slate-500'}>{label}</span>
+                                </button>
                               </li>
                             ));
                           })()}
@@ -3408,19 +3784,24 @@ export default function ClientOnboarding() {
                           const displayName = (a.name && a.name.trim()) || a.filename || 'Attachment';
                           return (
                             <div key={i} className="border border-gray-200 rounded-lg overflow-hidden bg-white">
-                              <button
-                                type="button"
-                                onClick={() => toggleAttachmentExpand(i)}
-                                className="w-full flex items-center gap-2 px-4 py-2.5 text-left hover:bg-gray-50/80 transition-colors"
-                              >
-                                {isExpanded ? (
-                                  <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />
-                                ) : (
-                                  <ChevronRight className="w-4 h-4 text-gray-500 flex-shrink-0" />
-                                )}
-                                <Paperclip className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                                <span className="text-sm font-medium text-gray-900 truncate flex-1">{displayName}</span>
-                              </button>
+                              <div className="w-full flex items-center gap-2 px-4 py-2.5">
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); toggleAttachmentExpand(i); }}
+                                  className="p-0.5 text-gray-500 hover:text-gray-700 flex-shrink-0"
+                                  aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                                >
+                                  {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openAttachmentEditModal(i)}
+                                  className="flex-1 flex items-center gap-2 text-left hover:bg-gray-50/80 transition-colors rounded py-0.5 -my-0.5 px-1 -mx-1 min-w-0"
+                                >
+                                  <Paperclip className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                                  <span className="text-sm font-medium text-gray-900 truncate flex-1">{displayName}</span>
+                                </button>
+                              </div>
                               {isExpanded && (
                                 <div className="border-t border-gray-100 p-3 bg-gray-50/50">
                                   {isImage ? (
@@ -3937,6 +4318,148 @@ export default function ClientOnboarding() {
         </div>
       )}
 
+      {/* Add operations intern to client modal */}
+      {showAddOperatorModal && selectedJob?.clientEmail && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !addingOperatorToClient && setShowAddOperatorModal(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900">Add operations intern to client</h3>
+              <button type="button" onClick={() => !addingOperatorToClient && setShowAddOperatorModal(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5">
+              {(() => {
+                const assignedEmails = new Set(operationsForClient.map(o => (o.email || '').toLowerCase()));
+                const available = (roles?.operationsInterns || []).filter(o => !assignedEmails.has((o.email || '').toLowerCase()));
+                if (available.length === 0) {
+                  return <p className="text-sm text-gray-500">All operations interns are already assigned to this client.</p>;
+                }
+                return (
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {available.map((op) => (
+                      <div key={(op.email || '').toLowerCase()} className="flex items-center justify-between gap-3 py-2 px-3 rounded-lg border border-gray-100 hover:bg-gray-50">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-gray-900 truncate">{op.name || op.email}</p>
+                          <p className="text-xs text-gray-500 truncate">{op.email}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleAddOperatorToClient(op.email)}
+                          disabled={addingOperatorToClient}
+                          className="shrink-0 px-3 py-1.5 text-xs font-medium bg-primary text-white rounded-lg hover:bg-primary/90 disabled:opacity-50"
+                        >
+                          {addingOperatorToClient ? 'Adding…' : 'Add'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add new user to operator (managed users) modal */}
+      {showAddManagedUserModal && selectedJob?.operatorEmail && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !addingClientToOperator && setShowAddManagedUserModal(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900">Add user to operator</h3>
+              <button type="button" onClick={() => !addingClientToOperator && setShowAddManagedUserModal(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5">
+              {loadingAvailableClientsForOperator ? (
+                <p className="text-sm text-gray-500">Loading available clients...</p>
+              ) : availableClientsForOperator.length === 0 ? (
+                <p className="text-sm text-gray-500">No additional clients available to assign. All clients may already be assigned to this operator.</p>
+              ) : (
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {availableClientsForOperator.map((client) => (
+                    <div key={client._id || client.email} className="flex items-center justify-between gap-3 py-2 px-3 rounded-lg border border-gray-100 hover:bg-gray-50">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-900 truncate">{client.name || client.email}</p>
+                        <p className="text-xs text-gray-500 truncate">{client.email}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleAssignClientToOperator(client.email)}
+                        disabled={addingClientToOperator}
+                        className="shrink-0 px-3 py-1.5 text-xs font-medium bg-primary text-white rounded-lg hover:bg-primary/90 disabled:opacity-50"
+                      >
+                        {addingClientToOperator ? 'Adding…' : 'Add'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit single attachment modal (name + open link + replace file) */}
+      {editingAttachmentIndex != null && selectedJob && selectedJob.attachments?.[editingAttachmentIndex] && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !savingAttachmentEdit && closeAttachmentEditModal()}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900">Edit attachment</h3>
+              <button type="button" onClick={closeAttachmentEditModal} disabled={savingAttachmentEdit} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg disabled:opacity-50">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <input
+                  type="text"
+                  value={editingAttachmentName}
+                  onChange={(e) => setEditingAttachmentName(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                  placeholder="e.g. Resume"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">File</label>
+                <a href={selectedJob.attachments[editingAttachmentIndex].url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-sm text-primary hover:underline">
+                  <FileText className="w-4 h-4" />
+                  Open current file
+                </a>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Replace file (optional)</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    className="hidden"
+                    id="attachment-replace-input"
+                    onChange={(e) => setAttachmentReplaceFilePending(e.target.files?.[0] || null)}
+                  />
+                  <label htmlFor="attachment-replace-input" className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-600 bg-gray-50 hover:bg-gray-100 cursor-pointer truncate">
+                    {attachmentReplaceFilePending ? attachmentReplaceFilePending.name : 'Choose new file…'}
+                  </label>
+                  {attachmentReplaceFilePending && (
+                    <button type="button" onClick={() => setAttachmentReplaceFilePending(null)} className="text-sm text-gray-500 hover:text-red-600">Clear</button>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2">
+              <button type="button" onClick={closeAttachmentEditModal} disabled={savingAttachmentEdit} className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50">
+                Cancel
+              </button>
+              <button type="button" onClick={saveAttachmentEdit} disabled={savingAttachmentEdit} className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 disabled:opacity-50 inline-flex items-center gap-2">
+                {savingAttachmentEdit ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add Attachment Modal - above Detail Modal (z-[100]) so it appears on top */}
       {showAddAttachmentModal && selectedJob && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
@@ -3946,7 +4469,7 @@ export default function ClientOnboarding() {
             setAttachmentFilePending(null);
           }
         }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()} onPaste={handleAttachmentPaste} tabIndex={-1}>
             <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900">Add Attachment</h2>
               <button
@@ -3974,13 +4497,14 @@ export default function ClientOnboarding() {
                 <label className="block text-sm font-semibold text-gray-700 mb-1.5">File</label>
                 <label className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 rounded-lg hover:border-gray-300 cursor-pointer text-sm font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 transition-colors">
                   <Paperclip className="w-4 h-4" />
-                  {attachmentFilePending ? attachmentFilePending.name : 'Choose file'}
+                  {attachmentFilePending ? attachmentFilePending.name : 'Choose file or paste image (Ctrl+V)'}
                   <input
                     type="file"
                     className="hidden"
                     onChange={handleAttachmentFileSelect}
                   />
                 </label>
+                <p className="text-xs text-gray-500 mt-1">Paste an image from clipboard with Ctrl+V</p>
               </div>
             </div>
             <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">

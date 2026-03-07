@@ -43,8 +43,10 @@ export const VALID_NEXT_STATUSES = {
 };
 
 // Plan-based status visibility (Applications + Completed available for all plans)
+// Professional: Resume + LinkedIn + Cover Letter optimization
+// Executive: Resume + LinkedIn + Cover Letter + Portfolio
 export const PLAN_STATUSES = {
-  executive: ONBOARDING_STATUSES, // All statuses
+  executive: ONBOARDING_STATUSES, // All statuses including cover_letter + portfolio
   professional: [
     'resume_in_progress',
     'resume_draft_done',
@@ -52,6 +54,8 @@ export const PLAN_STATUSES = {
     'resume_approved',
     'linkedin_in_progress',
     'linkedin_done',
+    'cover_letter_in_progress',
+    'cover_letter_done',
     'applications_ready',
     'applications_in_progress',
     'completed'
