@@ -36,10 +36,14 @@ const commentSchema = new mongoose.Schema({
 }, { _id: true });
 
 const moveHistorySchema = new mongoose.Schema({
-  fromStatus: { type: String, required: true },
-  toStatus: { type: String, required: true },
+  fromStatus: { type: String, required: false },
+  toStatus: { type: String, required: false },
   movedBy: { type: String, required: true },
-  movedAt: { type: Date, default: Date.now }
+  movedAt: { type: Date, default: Date.now },
+  // For assignment events: 'dashboard_manager', 'linkedin_member'
+  actionType: { type: String, default: 'status_change', enum: ['status_change', 'assignment', 'client_paused', 'client_unpaused', 'client_phase_set'] },
+  targetRole: { type: String },
+  targetName: { type: String }
 }, { _id: false });
 
 const gmailCredentialHistorySchema = new mongoose.Schema({
@@ -100,6 +104,11 @@ const onboardingJobSchema = new mongoose.Schema({
     requestedAt: { type: Date, default: null },
     active: { type: Boolean, default: false }
   },
+  // Timestamps for "days in pipeline" (dashboard details → applications completed)
+  dashboardDetailsCompletedAt: { type: Date, default: null },
+  applicationsCompletedAt: { type: Date, default: null },
+  // Profile complete = client filled dashboard form (Personal, Education, Preferences, etc.). Set when we fetch profile.
+  profileComplete: { type: Boolean, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

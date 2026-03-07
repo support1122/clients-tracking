@@ -53,6 +53,21 @@ const VALID_TRANSITIONS = {
   completed: []
 };
 
+/** Add client-level action (pause/unpause/phase) to the job's move history for audit. */
+export async function addClientActionToJobMoveHistory(clientEmail, actionType, movedBy) {
+  if (!clientEmail || !actionType) return;
+  const job = await OnboardingJobModel.findOne({ clientEmail: (clientEmail || '').toLowerCase().trim() });
+  if (!job) return;
+  if (!job.moveHistory) job.moveHistory = [];
+  job.moveHistory.push({
+    actionType,
+    movedBy: movedBy || 'unknown',
+    movedAt: new Date()
+  });
+  await job.save();
+  jobListCache.clear();
+}
+
 export async function getNextJobNumber() {
   const counter = await OnboardingJobCounterModel.findOneAndUpdate(
     { _id: 'onboarding_job_number' },
@@ -128,6 +143,7 @@ export async function createOnboardingJobPayload(payload) {
   const jobNumber = await getNextJobNumber();
   const clientNumber = payload.clientNumber != null ? payload.clientNumber : await getNextClientNumber();
   const nextResume = await getNextResumeMaker();
+  const createdBy = (payload.createdBy || '').trim() || 'system';
   const doc = {
     jobNumber,
     clientNumber,
@@ -136,6 +152,7 @@ export async function createOnboardingJobPayload(payload) {
     planType: payload.planType || 'Professional',
     status: 'resume_in_progress',
     dashboardManagerName: payload.dashboardManagerName || '',
+    dashboardDetailsCompletedAt: (payload.dashboardManagerName || '').trim() ? new Date() : null,
     bachelorsStartDate: payload.bachelorsStartDate || '',
     mastersEndDate: payload.mastersEndDate || '',
     dashboardCredentials: payload.dashboardCredentials || { username: '', password: '', loginUrl: '' },
@@ -145,7 +162,7 @@ export async function createOnboardingJobPayload(payload) {
     resumeMakerName: nextResume?.name || '',
     attachments: [],
     comments: [],
-    moveHistory: [{ fromStatus: 'created', toStatus: 'resume_in_progress', movedBy: 'system', movedAt: new Date() }]
+    moveHistory: [{ fromStatus: 'created', toStatus: 'resume_in_progress', movedBy: createdBy, movedAt: new Date() }]
   };
   const job = await OnboardingJobModel.create(doc);
   return job;
@@ -155,8 +172,8 @@ export async function createOnboardingJobPayload(payload) {
 // attachments trimmed to names only in send for card step-status
 const LIST_PROJECTION = 'jobNumber clientNumber clientEmail clientName planType status ' +
   'resumeMakerEmail resumeMakerName linkedInMemberEmail linkedInMemberName ' +
-  'operatorEmail operatorName csmEmail csmName dashboardManagerName linkedInPhaseStarted adminUnreadCount pendingMoveRequest createdAt updatedAt ' +
-  'attachments';
+  'operatorEmail operatorName csmEmail csmName dashboardManagerName linkedInPhaseStarted adminUnreadCount pendingMoveRequest ' +
+  'dashboardDetailsCompletedAt applicationsCompletedAt profileComplete createdAt updatedAt moveHistory attachments';
 
 export async function listOnboardingJobs(req, res) {
   try {
@@ -223,6 +240,7 @@ export async function listOnboardingJobs(req, res) {
     );
     const managerEmailByName = new Map(managers.map(m => [m.fullName, m.email]));
 
+    const now = new Date();
     const enrichedJobs = jobs.map(job => {
       const clientEmail = (job.clientEmail || '').toLowerCase();
       const clientInfo = clientStatusMap.get(clientEmail) || { status: 'active', isPaused: false, clientNumber: null };
@@ -230,13 +248,23 @@ export async function listOnboardingJobs(req, res) {
       const clientNumber = clientInfo.clientNumber != null ? clientInfo.clientNumber : job.clientNumber;
       const attachmentNames = (job.attachments || []).map(a => ({ name: a.name || '' }));
       const { attachments: _att, ...rest } = job;
+      // Days from dashboard details completed until applications completed (or today)
+      const startDate = job.dashboardDetailsCompletedAt || job.createdAt || now;
+      let endDate = job.applicationsCompletedAt;
+      if (!endDate && job.status === 'completed' && (job.moveHistory || []).length > 0) {
+        const completedMove = job.moveHistory.find(m => m.toStatus === 'completed');
+        if (completedMove?.movedAt) endDate = completedMove.movedAt;
+      }
+      if (!endDate) endDate = now;
+      const daysInPipeline = Math.max(0, Math.floor((new Date(endDate) - new Date(startDate)) / (24 * 60 * 60 * 1000)));
       return {
         ...rest,
         attachments: attachmentNames,
         clientNumber,
         clientStatus: clientInfo.status,
         clientIsPaused: clientInfo.isPaused,
-        dashboardManagerEmail
+        dashboardManagerEmail,
+        daysInPipeline
       };
     });
 
@@ -350,12 +378,15 @@ export async function patchOnboardingJob(req, res) {
       }
       job.status = status;
       if (!job.moveHistory) job.moveHistory = [];
+      const movedAt = new Date();
       job.moveHistory.push({
+        actionType: 'status_change',
         fromStatus,
         toStatus: status,
         movedBy: req.user?.email || 'unknown',
-        movedAt: new Date()
+        movedAt
       });
+      if (status === 'completed') job.applicationsCompletedAt = movedAt;
       
       // Mark LinkedIn phase as started when Resume Approved (same job appears in both columns)
       if (status === 'resume_approved' && fromStatus !== 'resume_approved' && !job.linkedInPhaseStarted) {
@@ -424,8 +455,20 @@ export async function patchOnboardingJob(req, res) {
       job.resumeMakerName = resumeMakerName || '';
     }
     if (isAdmin && linkedInMemberEmail !== undefined) {
+      const prevLinkedIn = (job.linkedInMemberName || job.linkedInMemberEmail || '').trim();
+      const newLinkedIn = (linkedInMemberName || linkedInMemberEmail || '').trim();
       job.linkedInMemberEmail = (linkedInMemberEmail || '').toLowerCase().trim();
       job.linkedInMemberName = linkedInMemberName || '';
+      if (newLinkedIn && (prevLinkedIn !== newLinkedIn)) {
+        if (!job.moveHistory) job.moveHistory = [];
+        job.moveHistory.push({
+          actionType: 'assignment',
+          targetRole: 'linkedin_member',
+          targetName: newLinkedIn,
+          movedBy: req.user?.email || 'unknown',
+          movedAt: new Date()
+        });
+      }
     }
     if (isAdmin && operatorEmail !== undefined) {
       job.operatorEmail = (operatorEmail || '').toLowerCase().trim();
@@ -450,7 +493,20 @@ export async function patchOnboardingJob(req, res) {
       job.clientName = clientName.trim() || job.clientName;
     }
     if (isAdmin && dashboardManagerName !== undefined && typeof dashboardManagerName === 'string') {
-      job.dashboardManagerName = dashboardManagerName.trim() || '';
+      const prevName = (job.dashboardManagerName || '').trim();
+      const newName = dashboardManagerName.trim() || '';
+      if (newName && !job.dashboardDetailsCompletedAt) job.dashboardDetailsCompletedAt = new Date();
+      job.dashboardManagerName = newName;
+      if (newName && prevName !== newName) {
+        if (!job.moveHistory) job.moveHistory = [];
+        job.moveHistory.push({
+          actionType: 'assignment',
+          targetRole: 'dashboard_manager',
+          targetName: newName,
+          movedBy: req.user?.email || 'unknown',
+          movedAt: new Date()
+        });
+      }
       // Sync to Client model
       await ClientModel.updateOne(
         { email: (job.clientEmail || '').toLowerCase() },
@@ -622,7 +678,8 @@ export async function postOnboardingJob(req, res) {
       dashboardManagerName: dashboardManagerName || '',
       bachelorsStartDate: bachelorsStartDate || '',
       mastersEndDate: mastersEndDate || '',
-      dashboardCredentials: dashboardCredentials || {}
+      dashboardCredentials: dashboardCredentials || {},
+      createdBy: req.user?.email || ''
     });
     jobListCache.clear(); // invalidate list cache after new ticket
     
@@ -1122,6 +1179,7 @@ export async function approveMove(req, res) {
     job.status = targetStatus;
     if (!job.moveHistory) job.moveHistory = [];
     job.moveHistory.push({
+      actionType: 'status_change',
       fromStatus,
       toStatus: targetStatus,
       movedBy: req.user?.email || ''

@@ -2,8 +2,13 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import Layout from './Layout';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
+import { Pencil, X, Loader2 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
+const AUTH_HEADERS = () => ({
+  'Content-Type': 'application/json',
+  Authorization: `Bearer ${localStorage.getItem('authToken') || ''}`
+});
 
 /** Capitalize first letter of operator name (e.g. sonali -> Sonali, raj deep -> Raj deep). */
 function capitalizeOperatorName(name) {
@@ -36,6 +41,9 @@ export default function ClientJobAnalysis() {
   const [savingPause, setSavingPause] = useState(new Set());
   const [userRole, setUserRole] = useState(null);
   const [lastAppliedByFilter, setLastAppliedByFilter] = useState(''); // Filter for "Last applied by" operator name
+  const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
+  const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
+  const [savingClientNumber, setSavingClientNumber] = useState(false);
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -69,6 +77,29 @@ export default function ClientJobAnalysis() {
       setLoading(false);
     }
   }, [convertToDMY]);
+
+  const handleSaveClientNumber = useCallback(async () => {
+    if (!editingClientNumberEmail || userRole !== 'admin') return;
+    const val = String(editingClientNumberValue || '').trim();
+    setSavingClientNumber(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(editingClientNumberEmail)}/client-number`, {
+        method: 'PATCH',
+        headers: AUTH_HEADERS(),
+        body: JSON.stringify({ clientNumber: val ? parseInt(val, 10) : null })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to update');
+      toast.success('Client number updated');
+      setEditingClientNumberEmail(null);
+      setEditingClientNumberValue('');
+      fetchAnalysis(date);
+    } catch (e) {
+      toast.error(e.message || 'Failed');
+    } finally {
+      setSavingClientNumber(false);
+    }
+  }, [editingClientNumberEmail, editingClientNumberValue, userRole, date, fetchAnalysis]);
 
   useEffect(() => {
     const fetchDashboardManagerNames = async () => {
@@ -380,8 +411,24 @@ export default function ClientJobAnalysis() {
                 return (
                   <tr key={r.email + idx} className={rowColor}>
                     <td className="px-2 py-1">
-                      <div className="text-gray-900 font-medium truncate max-w-[180px]" title={r.email}>
-                        {formatClientLabel(r)}
+                      <div className="flex items-center gap-1.5 max-w-[180px]">
+                        <div className="text-gray-900 font-medium truncate min-w-0 flex-1" title={r.email}>
+                          {formatClientLabel(r)}
+                        </div>
+                        {userRole === 'admin' && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingClientNumberEmail(r.email);
+                              setEditingClientNumberValue(String(r.clientNumber ?? ''));
+                            }}
+                            className="p-1 text-gray-400 hover:text-primary hover:bg-primary/5 rounded flex-shrink-0"
+                            title="Edit client number"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                       <div className="text-gray-500 text-[10px] truncate max-w-[180px]">{r.email}</div>
                     </td>
@@ -518,6 +565,42 @@ export default function ClientJobAnalysis() {
           </table>
         </div>
       </div>
+
+      {/* Edit Client Number Modal */}
+      {editingClientNumberEmail && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget && !savingClientNumber) { setEditingClientNumberEmail(null); setEditingClientNumberValue(''); } }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">Edit Client Number</h2>
+              <button type="button" onClick={() => { setEditingClientNumberEmail(null); setEditingClientNumberValue(''); }} disabled={savingClientNumber} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">Client Number</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={editingClientNumberValue}
+                  onChange={(e) => setEditingClientNumberValue(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSaveClientNumber(); if (e.key === 'Escape') { setEditingClientNumberEmail(null); setEditingClientNumberValue(''); } }}
+                  placeholder="e.g. 5810"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary text-sm"
+                  autoFocus
+                />
+                <p className="text-xs text-gray-500 mt-1">Leave empty to clear the number</p>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">
+              <button type="button" onClick={() => { setEditingClientNumberEmail(null); setEditingClientNumberValue(''); }} disabled={savingClientNumber} className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 disabled:opacity-50">Cancel</button>
+              <button type="button" onClick={handleSaveClientNumber} disabled={savingClientNumber} className="px-4 py-2 text-sm font-semibold text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2">
+                {savingClientNumber ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </Layout>
   );

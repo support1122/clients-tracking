@@ -122,7 +122,7 @@ const JobCard = React.memo(({
   const planLower = (job.planType || '').toLowerCase();
   const isExecutive = planLower === 'executive' || planLower.includes('executive');
   const hasLinkedInCoverLetter = ['professional', 'executive'].includes(planLower);
-  const hasDashboard = !!(job.dashboardManagerName || '').trim();
+  const hasDashboard = job.profileComplete === true;
   const attachmentNames = (job.attachments || []).map((a) => (a.name || '').trim()).filter(Boolean);
   const hasResume = attachmentNames.some((n) => /^resume$/i.test(n));
   const hasCoverLetter = attachmentNames.some((n) => /cover\s*letter/i.test(n));
@@ -165,6 +165,11 @@ const JobCard = React.memo(({
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
             {job.jobNumber}
+            {job.daysInPipeline != null && (
+              <span className="ml-1 font-normal text-gray-500 normal-case" title="Days from dashboard details to applications completed">
+                · {job.daysInPipeline}d
+              </span>
+            )}
           </span>
           {isAdmin && job.adminUnreadCount > 0 && (
             <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
@@ -336,6 +341,7 @@ const JobCard = React.memo(({
     prevProps.job.clientNumber === nextProps.job.clientNumber &&
     prevProps.job.status === nextProps.job.status &&
     prevProps.job.dashboardManagerName === nextProps.job.dashboardManagerName &&
+    prevProps.job.profileComplete === nextProps.job.profileComplete &&
     prevProps.job.linkedInMemberName === nextProps.job.linkedInMemberName &&
     prevProps.job.planType === nextProps.job.planType &&
     prevProps.job.jobNumber === nextProps.job.jobNumber &&
@@ -458,6 +464,10 @@ export default function ClientOnboarding() {
   const [showAdminTicketSummary, setShowAdminTicketSummary] = useState(true); // Admin ticket count panel
   const [filteredClientEmail, setFilteredClientEmail] = useState(null); // Filter by client (admin only)
   const [clientSidebarSearch, setClientSidebarSearch] = useState(''); // Search in client list (name or number)
+  const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
+  const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
+  const [savingClientNumber, setSavingClientNumber] = useState(false);
+  const [showEditClientNumberModal, setShowEditClientNumberModal] = useState(false);
   const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
   const [savingDashboardManager, setSavingDashboardManager] = useState(new Set());
   const notificationSoundRef = useRef(null);  // Audio object for notification sound
@@ -861,6 +871,31 @@ export default function ClientOnboarding() {
       .finally(() => setClientsLoading(false));
   }, []);
 
+  const handleSaveClientNumber = useCallback(async (clientEmail, valueOverride) => {
+    if (!clientEmail || !isAdmin) return;
+    const val = String((valueOverride ?? editingClientNumberValue) || '').trim();
+    setSavingClientNumber(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}/client-number`, {
+        method: 'PATCH',
+        headers: AUTH_HEADERS(),
+        body: JSON.stringify({ clientNumber: val ? parseInt(val, 10) : null })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to update');
+      toastUtils.success('Client number updated');
+      setEditingClientNumberEmail(null);
+      setEditingClientNumberValue('');
+      setShowEditClientNumberModal(false);
+      fetchClients();
+      fetchJobs();
+    } catch (e) {
+      toastUtils.error(e.message || 'Failed');
+    } finally {
+      setSavingClientNumber(false);
+    }
+  }, [editingClientNumberValue, isAdmin, fetchClients, fetchJobs]);
+
   const markNotificationRead = useCallback(async (id) => {
     try {
       const res = await fetch(`${API_BASE}/api/onboarding/notifications/${id}/read`, {
@@ -1107,23 +1142,34 @@ export default function ClientOnboarding() {
     }
   }, [selectedJob?.gmailCredentials]);
 
-  // Fetch client profile only when user expands the Client Profile section (avoids lag on modal open)
+  // Fetch client profile when ticket opens (updates profileComplete on backend for "Dashboard details" step)
+  // Profile data shown in UI only when showClientProfile is expanded
   useEffect(() => {
-    if (!selectedJob?.clientEmail || !showClientProfile) {
-      if (!selectedJob?.clientEmail) setClientProfileData(null);
+    if (!selectedJob?.clientEmail) {
+      setClientProfileData(null);
       return;
     }
     let cancelled = false;
-    setProfileLoading(true);
-    setClientProfileData(null);
+    if (showClientProfile) setProfileLoading(true);
+    if (!showClientProfile) setClientProfileData(null);
     fetch(`${API_BASE}/api/onboarding/client-profile/${encodeURIComponent(selectedJob.clientEmail)}`, {
       headers: AUTH_HEADERS()
     })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        return { ok: r.ok, data };
+      })
+      .then(({ ok, data }) => {
         if (!cancelled) {
-          const profile = data?.userProfile ?? data;
-          setClientProfileData(profile && typeof profile === 'object' ? profile : null);
+          const profile = ok ? (data?.userProfile ?? data) : null;
+          const profileObj = profile && typeof profile === 'object' ? profile : null;
+          setClientProfileData(showClientProfile ? profileObj : null);
+          const complete = data?.profileComplete === true;
+          const jobId = selectedJob?._id;
+          if (complete !== undefined && jobId) {
+            setJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, profileComplete: complete } : j)));
+            setSelectedJob((prev) => (prev && prev._id === jobId ? { ...prev, profileComplete: complete } : prev));
+          }
         }
       })
       .catch(() => {
@@ -1133,7 +1179,7 @@ export default function ClientOnboarding() {
         if (!cancelled) setProfileLoading(false);
       });
     return () => { cancelled = true; };
-  }, [selectedJob?.clientEmail, showClientProfile]);
+  }, [selectedJob?.clientEmail, selectedJob?._id, showClientProfile]);
 
   const handleMove = useCallback(async (jobId, newStatus, skipRoleCheck = false) => {
     if (movingStatus) {
@@ -2890,21 +2936,74 @@ export default function ClientOnboarding() {
                     const displayName = clientDisplayName(job);
                     const planType = (job.planType || 'Professional').toLowerCase();
                     const fullDisplayName = `${displayName} - ${planType}`;
+                    const isEditing = editingClientNumberEmail?.toLowerCase() === email;
                     return (
                       <li key={email}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setFilteredClientEmail(isSelected ? null : job.clientEmail);
-                          }}
-                          className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors hover:bg-gray-50 ${
-                            isSelected 
-                              ? 'bg-primary/10 text-primary border-l-4 border-primary' 
-                              : 'text-gray-700 hover:text-gray-900'
-                          }`}
-                        >
-                          <span className="block truncate">{fullDisplayName}</span>
-                        </button>
+                        {isEditing ? (
+                          <div className="px-4 py-2.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="number"
+                              min={1}
+                              value={editingClientNumberValue}
+                              onChange={(e) => setEditingClientNumberValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleSaveClientNumber(job.clientEmail);
+                                if (e.key === 'Escape') { setEditingClientNumberEmail(null); setEditingClientNumberValue(''); }
+                              }}
+                              placeholder="Number"
+                              className="flex-1 min-w-0 px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                              autoFocus
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleSaveClientNumber(job.clientEmail)}
+                              disabled={savingClientNumber}
+                              className="p-1.5 text-primary hover:bg-primary/10 rounded disabled:opacity-50"
+                              title="Save"
+                            >
+                              {savingClientNumber ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setEditingClientNumberEmail(null); setEditingClientNumberValue(''); }}
+                              disabled={savingClientNumber}
+                              className="p-1.5 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50"
+                              title="Cancel"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div
+                            className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors hover:bg-gray-50 flex items-center justify-between gap-2 group ${
+                              isSelected 
+                                ? 'bg-primary/10 text-primary border-l-4 border-primary' 
+                                : 'text-gray-700 hover:text-gray-900'
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setFilteredClientEmail(isSelected ? null : job.clientEmail)}
+                              className="flex-1 min-w-0 truncate text-left"
+                            >
+                              <span className="block truncate">{fullDisplayName}</span>
+                            </button>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingClientNumberEmail(job.clientEmail);
+                                  setEditingClientNumberValue(String(job.clientNumber ?? ''));
+                                }}
+                                className="p-1 text-gray-400 hover:text-primary hover:bg-primary/5 rounded flex-shrink-0"
+                                title="Edit client number"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </li>
                     );
                   })}
@@ -3088,13 +3187,30 @@ export default function ClientOnboarding() {
                       autoFocus
                     />
                   ) : (
-                    <h2
-                      className="text-2xl font-bold text-gray-900 cursor-default"
-                      onClick={() => isAdmin && (setEditingClientNameJobId(selectedJob._id), setEditingClientNameValue(selectedJob.clientName || ''))}
-                      title={isAdmin ? 'Click to edit name' : undefined}
-                    >
-                      {clientDisplayName(selectedJob)}
-                    </h2>
+                    <div className="flex items-center gap-2">
+                      <h2
+                        className="text-2xl font-bold text-gray-900 cursor-default"
+                        onClick={() => isAdmin && (setEditingClientNameJobId(selectedJob._id), setEditingClientNameValue(selectedJob.clientName || ''))}
+                        title={isAdmin ? 'Click to edit name' : undefined}
+                      >
+                        {clientDisplayName(selectedJob)}
+                      </h2>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingClientNumberEmail(selectedJob.clientEmail);
+                            setEditingClientNumberValue(String(selectedJob.clientNumber ?? ''));
+                            setShowEditClientNumberModal(true);
+                          }}
+                          className="p-1.5 text-gray-400 hover:text-primary hover:bg-primary/5 rounded"
+                          title="Edit client number"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   )}
                   <span className="text-sm font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-md border border-gray-200">#{selectedJob.jobNumber}</span>
                 </div>
@@ -3871,24 +3987,42 @@ export default function ClientOnboarding() {
                       {(selectedJob.moveHistory || []).length === 0 ? (
                         <p className="text-xs text-gray-400 italic py-2 text-center">No move history</p>
                       ) : (
-                        (selectedJob.moveHistory || []).map((move, i) => (
-                          <div key={i} className="flex gap-3">
-                            <div className="flex flex-col items-center pt-1">
-                              <div className="w-2 h-2 rounded-full bg-primary"></div>
-                              {i < (selectedJob.moveHistory || []).length - 1 && (
-                                <div className="w-px h-full bg-gray-200 mt-1 min-h-[20px]"></div>
-                              )}
+                        (selectedJob.moveHistory || []).map((move, i) => {
+                          const actionType = move.actionType || 'status_change';
+                          let label = '';
+                          if (actionType === 'assignment') {
+                            const roleLabel = move.targetRole === 'dashboard_manager' ? 'Dashboard Manager' : move.targetRole === 'linkedin_member' ? 'LinkedIn member' : move.targetRole || 'assignee';
+                            label = `${roleLabel} assigned: ${move.targetName || '—'}`;
+                          } else if (actionType === 'client_paused') {
+                            label = 'Client paused';
+                          } else if (actionType === 'client_unpaused') {
+                            label = 'Client unpaused';
+                          } else if (actionType === 'client_phase_set') {
+                            label = 'Client set to New (onboarding phase)';
+                          } else {
+                            label = move.fromStatus === 'created'
+                              ? 'Job card created'
+                              : `Moved from ${STATUS_LABELS[move.fromStatus] || move.fromStatus}` + (move.toStatus ? ` → ${STATUS_LABELS[move.toStatus] || move.toStatus}` : '');
+                          }
+                          return (
+                            <div key={i} className="flex gap-3">
+                              <div className="flex flex-col items-center pt-1">
+                                <div className="w-2 h-2 rounded-full bg-primary"></div>
+                                {i < (selectedJob.moveHistory || []).length - 1 && (
+                                  <div className="w-px h-full bg-gray-200 mt-1 min-h-[20px]"></div>
+                                )}
+                              </div>
+                              <div className="flex-1 pb-2">
+                                <p className="text-xs text-gray-700">
+                                  <span className="font-semibold text-gray-900">{label}</span>
+                                </p>
+                                <p className="text-[10px] text-gray-400 mt-0.5">
+                                  by {move.movedBy || 'System'} • {new Date(move.movedAt).toLocaleString()}
+                                </p>
+                              </div>
                             </div>
-                            <div className="flex-1 pb-2">
-                              <p className="text-xs text-gray-700">
-                                {move.fromStatus === 'created' ? 'Created' : `Moved from ${STATUS_LABELS[move.fromStatus] || move.fromStatus}`} → <span className="font-semibold text-gray-900">{STATUS_LABELS[move.toStatus] || move.toStatus}</span>
-                              </p>
-                              <p className="text-[10px] text-gray-400 mt-0.5">
-                                by {move.movedBy || 'System'} • {new Date(move.movedAt).toLocaleString()}
-                              </p>
-                            </div>
-                          </div>
-                        ))
+                          );
+                        })
                       )}
                     </div>
                   )}
@@ -4453,6 +4587,69 @@ export default function ClientOnboarding() {
               </button>
               <button type="button" onClick={saveAttachmentEdit} disabled={savingAttachmentEdit} className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 disabled:opacity-50 inline-flex items-center gap-2">
                 {savingAttachmentEdit ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Client Number Modal */}
+      {showEditClientNumberModal && editingClientNumberEmail && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+          if (e.target === e.currentTarget && !savingClientNumber) {
+            setShowEditClientNumberModal(false);
+            setEditingClientNumberEmail(null);
+            setEditingClientNumberValue('');
+          }
+        }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">Edit Client Number</h2>
+              <button
+                type="button"
+                onClick={() => { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); }}
+                disabled={savingClientNumber}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">Client Number</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={editingClientNumberValue}
+                  onChange={(e) => setEditingClientNumberValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveClientNumber(editingClientNumberEmail, editingClientNumberValue);
+                    if (e.key === 'Escape') { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); }
+                  }}
+                  placeholder="e.g. 5810"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary text-sm"
+                  autoFocus
+                />
+                <p className="text-xs text-gray-500 mt-1">Leave empty to clear the number</p>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); }}
+                disabled={savingClientNumber}
+                className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveClientNumber(editingClientNumberEmail, editingClientNumberValue)}
+                disabled={savingClientNumber}
+                className="px-4 py-2 text-sm font-semibold text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
+              >
+                {savingClientNumber ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Save
               </button>
             </div>
