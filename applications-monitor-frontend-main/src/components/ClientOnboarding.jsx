@@ -118,12 +118,13 @@ const JobCard = React.memo(({
   const moveToOptions = (visibleColumns || []).filter((s) => allowed.includes(s) && s !== job.status);
 
   // Step status for card: dashboard → resume → cover & linkedin (prof+exec) → portfolio (exec only)
+  // Dashboard details: use single source of truth — Dashboard Manager assigned (no nested credentials needed in list)
   const planLower = (job.planType || '').toLowerCase();
   const isExecutive = planLower === 'executive' || planLower.includes('executive');
   const hasLinkedInCoverLetter = ['professional', 'executive'].includes(planLower);
   const hasDashboard = !!(job.dashboardManagerName || '').trim();
   const attachmentNames = (job.attachments || []).map((a) => (a.name || '').trim()).filter(Boolean);
-  const hasResume = attachmentNames.some((n) => /^resume$/i.test(n));
+  const hasResume = job.status !== 'resume_in_progress' || attachmentNames.some((n) => /^resume$/i.test(n));
   const coverLinkedInDone = ['linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress', 'completed'].includes(job.status);
   const hasPortfolio = attachmentNames.some((n) => /portfolio/i.test(n));
   const steps = [
@@ -409,6 +410,7 @@ export default function ClientOnboarding() {
   const [gmailPassword, setGmailPassword] = useState('');
   const [savingGmailCredentials, setSavingGmailCredentials] = useState(false);
   const [showGmailCredentialsHistory, setShowGmailCredentialsHistory] = useState(false);
+  const [isEditingGmailCredentials, setIsEditingGmailCredentials] = useState(false);
   const [showAttachments, setShowAttachments] = useState(false);
   const [showMoveOptions, setShowMoveOptions] = useState(false);
   const [commentMoveTarget, setCommentMoveTarget] = useState('');
@@ -1084,6 +1086,7 @@ export default function ClientOnboarding() {
     setGmailUsername('');
     setGmailPassword('');
     setShowGmailCredentialsHistory(false);
+    setIsEditingGmailCredentials(false);
     setCommentImages([]);
     // Clear the selected job using store method
     clearSelected();
@@ -1096,9 +1099,11 @@ export default function ClientOnboarding() {
     if (selectedJob?.gmailCredentials) {
       setGmailUsername(selectedJob.gmailCredentials.username || '');
       setGmailPassword(selectedJob.gmailCredentials.password || '');
+      setIsEditingGmailCredentials(false); // Reset to view mode when credentials exist
     } else {
       setGmailUsername('');
       setGmailPassword('');
+      setIsEditingGmailCredentials(true); // Start in edit mode when no credentials
     }
   }, [selectedJob?.gmailCredentials]);
 
@@ -3358,62 +3363,115 @@ export default function ClientOnboarding() {
                       <Briefcase className="w-3 h-3" /> Gmail Credentials
                     </h3>
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Username</label>
-                        <input
-                          type="text"
-                          value={gmailUsername}
-                          onChange={(e) => setGmailUsername(e.target.value)}
-                          placeholder="Enter Gmail username"
-                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Password</label>
-                        <input
-                          type="password"
-                          value={gmailPassword}
-                          onChange={(e) => setGmailPassword(e.target.value)}
-                          placeholder="Enter Gmail password"
-                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          if (!selectedJob?._id || savingGmailCredentials) return;
-                          setSavingGmailCredentials(true);
-                          try {
-                            const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, {
-                              method: 'PATCH',
-                              headers: AUTH_HEADERS(),
-                              body: JSON.stringify({
-                                gmailCredentials: {
-                                  username: gmailUsername.trim(),
-                                  password: gmailPassword.trim()
+                      {/* View Mode: Show saved credentials */}
+                      {selectedJob?.gmailCredentials && !isEditingGmailCredentials ? (
+                        <>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1.5">Username</label>
+                            <div className="w-full px-3 py-2.5 text-sm bg-white border border-gray-200 rounded-lg text-gray-800 font-mono">
+                              {selectedJob.gmailCredentials.username || '—'}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1.5">Password</label>
+                            <div className="w-full px-3 py-2.5 text-sm bg-white border border-gray-200 rounded-lg text-gray-800 font-mono">
+                              {selectedJob.gmailCredentials.password || '—'}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsEditingGmailCredentials(true);
+                              setGmailUsername(selectedJob.gmailCredentials?.username || '');
+                              setGmailPassword(selectedJob.gmailCredentials?.password || '');
+                            }}
+                            className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-800 transition-colors text-sm font-medium flex items-center justify-center gap-2"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            Change Credentials
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {/* Edit Mode: Show input fields */}
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1.5">Username</label>
+                            <input
+                              type="text"
+                              value={gmailUsername}
+                              onChange={(e) => setGmailUsername(e.target.value)}
+                              placeholder="Enter Gmail username"
+                              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1.5">Password</label>
+                            <input
+                              type="text"
+                              value={gmailPassword}
+                              onChange={(e) => setGmailPassword(e.target.value)}
+                              placeholder="Enter Gmail password"
+                              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white"
+                            />
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!selectedJob?._id || savingGmailCredentials) return;
+                                if (!gmailUsername.trim() || !gmailPassword.trim()) {
+                                  toastUtils.error('Please enter both username and password');
+                                  return;
                                 }
-                              })
-                            });
-                            if (!res.ok) throw new Error('Failed to save credentials');
-                            const data = await res.json();
-                            setSelectedJob(data.job);
-                            setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
-                            toastUtils.success('Gmail credentials saved');
-                            if (data.job.gmailCredentials) {
-                              setGmailUsername(data.job.gmailCredentials.username || '');
-                              setGmailPassword(data.job.gmailCredentials.password || '');
-                            }
-                          } catch (e) {
-                            toastUtils.error(e.message || 'Failed to save credentials');
-                          } finally {
-                            setSavingGmailCredentials(false);
-                          }
-                        }}
-                        disabled={savingGmailCredentials}
-                        className="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
-                      >
-                        {savingGmailCredentials ? 'Saving...' : 'Save Credentials'}
-                      </button>
+                                setSavingGmailCredentials(true);
+                                try {
+                                  const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, {
+                                    method: 'PATCH',
+                                    headers: AUTH_HEADERS(),
+                                    body: JSON.stringify({
+                                      gmailCredentials: {
+                                        username: gmailUsername.trim(),
+                                        password: gmailPassword.trim()
+                                      }
+                                    })
+                                  });
+                                  if (!res.ok) throw new Error('Failed to save credentials');
+                                  const data = await res.json();
+                                  setSelectedJob(data.job);
+                                  setJobs(jobs.map((j) => (j._id === selectedJob._id ? data.job : j)));
+                                  toastUtils.success('Gmail credentials saved');
+                                  setIsEditingGmailCredentials(false);
+                                  if (data.job.gmailCredentials) {
+                                    setGmailUsername(data.job.gmailCredentials.username || '');
+                                    setGmailPassword(data.job.gmailCredentials.password || '');
+                                  }
+                                } catch (e) {
+                                  toastUtils.error(e.message || 'Failed to save credentials');
+                                } finally {
+                                  setSavingGmailCredentials(false);
+                                }
+                              }}
+                              disabled={savingGmailCredentials}
+                              className="flex-1 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+                            >
+                              {savingGmailCredentials ? 'Saving...' : 'Save Credentials'}
+                            </button>
+                            {selectedJob?.gmailCredentials && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsEditingGmailCredentials(false);
+                                  setGmailUsername(selectedJob.gmailCredentials?.username || '');
+                                  setGmailPassword(selectedJob.gmailCredentials?.password || '');
+                                }}
+                                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm font-medium"
+                              >
+                                Cancel
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
                       {(selectedJob.gmailCredentialsHistory || []).length > 0 && (
                         <div className="mt-4 pt-4 border-t border-gray-200">
                           <button
