@@ -415,20 +415,6 @@ export default function ClientJobAnalysis() {
                         <div className="text-gray-900 font-medium truncate min-w-0 flex-1" title={r.email}>
                           {formatClientLabel(r)}
                         </div>
-                        {userRole === 'admin' && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingClientNumberEmail(r.email);
-                              setEditingClientNumberValue(String(r.clientNumber ?? ''));
-                            }}
-                            className="p-1 text-gray-400 hover:text-primary hover:bg-primary/5 rounded flex-shrink-0"
-                            title="Edit client number"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                        )}
                       </div>
                       <div className="text-gray-500 text-[10px] truncate max-w-[180px]">{r.email}</div>
                     </td>
