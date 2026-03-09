@@ -485,6 +485,8 @@ export default function ClientOnboarding() {
   const scrollLoopRef = useRef(null);
   const dragCursorXRef = useRef(0);
   const previousJobIdRef = useRef(null); // Track previous job ID to detect job changes
+  const profileCacheRef = useRef(new Map()); // Cache profile data by email to avoid refetching
+  const profileFetchingRef = useRef(new Set()); // Track emails currently being fetched to prevent duplicate requests
   const visibleColumns = getVisibleColumns(user);
   const LONG_PRESS_MS = 3500;
   const isAdmin = user?.role === 'admin';
@@ -1057,13 +1059,15 @@ export default function ClientOnboarding() {
   // Use a ref to track the previous job ID so we only clear when switching to a DIFFERENT job
   useEffect(() => {
     const currentJobId = selectedJob?._id;
+    const currentEmail = selectedJob?.clientEmail?.toLowerCase().trim();
     
     // Only clear if we're switching to a different job (not just updating the same job)
     if (previousJobIdRef.current !== null && previousJobIdRef.current !== currentJobId) {
       setShowClientProfile(false);
       setShowAttachments(false);
       setShowMoveHistory(false);
-      setClientProfileData(null);
+      // Don't clear clientProfileData here - let the profile effect handle it based on email
+      // This prevents flickering when the same email is used in different jobs
       setAppliedOnDateCount(null); // Reset applied on date count when card changes
     }
     
@@ -1153,31 +1157,57 @@ export default function ClientOnboarding() {
 
   // Fetch client profile when ticket opens (updates profileComplete on backend for "Dashboard details" step)
   // Profile data shown in UI only when showClientProfile is expanded
+  // Uses caching to avoid refetching and prevents duplicate requests
   useEffect(() => {
     if (!selectedJob?.clientEmail) {
-      setClientProfileData(null);
+      // Only clear if no job selected, otherwise keep cached data
+      if (!selectedJob) {
+        setClientProfileData(null);
+      }
       return;
     }
+    
+    const email = selectedJob.clientEmail.toLowerCase().trim();
     let cancelled = false;
     
-    // Only fetch when section is expanded (lazy loading)
-    if (!showClientProfile) {
-      setClientProfileData(null);
-      return;
-    }
-    
-    setProfileLoading(true);
-    fetch(`${API_BASE}/api/onboarding/client-profile/${encodeURIComponent(selectedJob.clientEmail)}`, {
-      headers: AUTH_HEADERS()
-    })
-      .then(async (r) => {
-        const data = await r.json().catch(() => ({}));
-        return { ok: r.ok, data };
+    // If section is expanded, show cached data immediately or fetch if not cached
+    if (showClientProfile) {
+      // Check cache first
+      const cached = profileCacheRef.current.get(email);
+      if (cached) {
+        setClientProfileData(cached);
+        setProfileLoading(false);
+        // Still update profileComplete status
+        const complete = cached.profileComplete === true;
+        const jobId = selectedJob?._id;
+        if (complete !== undefined && jobId) {
+          setJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, profileComplete: complete } : j)));
+          setSelectedJob((prev) => (prev && prev._id === jobId ? { ...prev, profileComplete: complete } : prev));
+        }
+        return;
+      }
+      
+      // Prevent duplicate fetches for the same email
+      if (profileFetchingRef.current.has(email)) {
+        setProfileLoading(true);
+        return;
+      }
+      
+      // Fetch profile data
+      profileFetchingRef.current.add(email);
+      setProfileLoading(true);
+      
+      fetch(`${API_BASE}/api/onboarding/client-profile/${encodeURIComponent(email)}`, {
+        headers: AUTH_HEADERS()
       })
-      .then(({ ok, data }) => {
-        if (!cancelled && showClientProfile) {
+        .then(async (r) => {
+          const data = await r.json().catch(() => ({}));
+          return { ok: r.ok, data };
+        })
+        .then(({ ok, data }) => {
+          if (cancelled) return;
+          
           // Extract profile from response - handle both nested userProfile and direct data
-          // API returns: { message: "...", userProfile: {...} } or { userProfile: {...} }
           let profile = null;
           if (ok && data) {
             // Check for nested userProfile first
@@ -1192,8 +1222,13 @@ export default function ClientOnboarding() {
           
           const profileObj = profile && typeof profile === 'object' ? profile : null;
           
-          // Only set data if section is still expanded
-          if (showClientProfile) {
+          // Cache the profile data (including profileComplete flag)
+          if (profileObj) {
+            profileCacheRef.current.set(email, { ...profileObj, profileComplete: data?.profileComplete });
+          }
+          
+          // Only update UI if section is still expanded and job hasn't changed
+          if (showClientProfile && selectedJob?.clientEmail?.toLowerCase().trim() === email) {
             setClientProfileData(profileObj);
           }
           
@@ -1204,20 +1239,30 @@ export default function ClientOnboarding() {
             setJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, profileComplete: complete } : j)));
             setSelectedJob((prev) => (prev && prev._id === jobId ? { ...prev, profileComplete: complete } : prev));
           }
-        }
-      })
-      .catch(() => {
-        if (!cancelled && showClientProfile) {
-          setClientProfileData(null);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setProfileLoading(false);
-        }
-      });
-    return () => { cancelled = true; };
-  }, [selectedJob?.clientEmail, selectedJob?._id, showClientProfile]);
+        })
+        .catch((error) => {
+          console.error('Failed to fetch client profile:', error);
+          if (!cancelled && showClientProfile && selectedJob?.clientEmail?.toLowerCase().trim() === email) {
+            setClientProfileData(null);
+          }
+        })
+        .finally(() => {
+          profileFetchingRef.current.delete(email);
+          if (!cancelled) {
+            setProfileLoading(false);
+          }
+        });
+    } else {
+      // When collapsed, don't clear data - keep it cached for next time
+      // Just hide the loading state
+      setProfileLoading(false);
+    }
+    
+    return () => { 
+      cancelled = true;
+      // Don't remove from fetching set here - let the fetch complete naturally
+    };
+  }, [selectedJob?.clientEmail, selectedJob?._id, showClientProfile, setJobs, setSelectedJob]);
 
   const handleMove = useCallback(async (jobId, newStatus, skipRoleCheck = false) => {
     if (movingStatus) {
