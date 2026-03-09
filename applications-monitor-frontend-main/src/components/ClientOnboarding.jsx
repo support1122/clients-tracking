@@ -484,6 +484,7 @@ export default function ClientOnboarding() {
   const boardRef = useRef(null);
   const scrollLoopRef = useRef(null);
   const dragCursorXRef = useRef(0);
+  const previousJobIdRef = useRef(null); // Track previous job ID to detect job changes
   const visibleColumns = getVisibleColumns(user);
   const LONG_PRESS_MS = 3500;
   const isAdmin = user?.role === 'admin';
@@ -1053,13 +1054,21 @@ export default function ClientOnboarding() {
   }, [selectedJob?._id, notifications, markNotificationRead]);
 
   // Collapse modal sections when opening a (possibly different) ticket so UI is fast and not showing stale data
+  // Use a ref to track the previous job ID so we only clear when switching to a DIFFERENT job
   useEffect(() => {
-    if (!selectedJob?._id) return;
-    setShowClientProfile(false);
-    setShowAttachments(false);
-    setShowMoveHistory(false);
-    setClientProfileData(null);
-    setAppliedOnDateCount(null); // Reset applied on date count when card changes
+    const currentJobId = selectedJob?._id;
+    
+    // Only clear if we're switching to a different job (not just updating the same job)
+    if (previousJobIdRef.current !== null && previousJobIdRef.current !== currentJobId) {
+      setShowClientProfile(false);
+      setShowAttachments(false);
+      setShowMoveHistory(false);
+      setClientProfileData(null);
+      setAppliedOnDateCount(null); // Reset applied on date count when card changes
+    }
+    
+    // Update the ref to track the current job ID
+    previousJobIdRef.current = currentJobId;
   }, [selectedJob?._id]);
 
   // Close move options dropdown when clicking outside
@@ -1150,8 +1159,14 @@ export default function ClientOnboarding() {
       return;
     }
     let cancelled = false;
-    if (showClientProfile) setProfileLoading(true);
-    if (!showClientProfile) setClientProfileData(null);
+    
+    // Only fetch when section is expanded (lazy loading)
+    if (!showClientProfile) {
+      setClientProfileData(null);
+      return;
+    }
+    
+    setProfileLoading(true);
     fetch(`${API_BASE}/api/onboarding/client-profile/${encodeURIComponent(selectedJob.clientEmail)}`, {
       headers: AUTH_HEADERS()
     })
@@ -1160,10 +1175,29 @@ export default function ClientOnboarding() {
         return { ok: r.ok, data };
       })
       .then(({ ok, data }) => {
-        if (!cancelled) {
-          const profile = ok ? (data?.userProfile ?? data) : null;
+        if (!cancelled && showClientProfile) {
+          // Extract profile from response - handle both nested userProfile and direct data
+          // API returns: { message: "...", userProfile: {...} } or { userProfile: {...} }
+          let profile = null;
+          if (ok && data) {
+            // Check for nested userProfile first
+            if (data.userProfile && typeof data.userProfile === 'object') {
+              profile = data.userProfile;
+            } 
+            // If no userProfile key, use data directly (if it looks like a profile object)
+            else if (data.firstName || data.email || data.contactNumber) {
+              profile = data;
+            }
+          }
+          
           const profileObj = profile && typeof profile === 'object' ? profile : null;
-          setClientProfileData(showClientProfile ? profileObj : null);
+          
+          // Only set data if section is still expanded
+          if (showClientProfile) {
+            setClientProfileData(profileObj);
+          }
+          
+          // Update profileComplete status regardless of expansion state
           const complete = data?.profileComplete === true;
           const jobId = selectedJob?._id;
           if (complete !== undefined && jobId) {
@@ -1173,10 +1207,14 @@ export default function ClientOnboarding() {
         }
       })
       .catch(() => {
-        if (!cancelled) setClientProfileData(null);
+        if (!cancelled && showClientProfile) {
+          setClientProfileData(null);
+        }
       })
       .finally(() => {
-        if (!cancelled) setProfileLoading(false);
+        if (!cancelled) {
+          setProfileLoading(false);
+        }
       });
     return () => { cancelled = true; };
   }, [selectedJob?.clientEmail, selectedJob?._id, showClientProfile]);
