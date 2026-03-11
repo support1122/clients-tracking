@@ -166,7 +166,7 @@ const JobCard = React.memo(({
           <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
             {job.jobNumber}
             {job.daysInPipeline != null && (
-              <span className="ml-1 font-normal text-gray-500 normal-case" title="Days from dashboard details to applications completed">
+              <span className="ml-1 font-normal text-gray-500 normal-case" title="Days since job created">
                 · {job.daysInPipeline}d
               </span>
             )}
@@ -427,6 +427,7 @@ export default function ClientOnboarding() {
   const [showClientProfile, setShowClientProfile] = useState(false);
   const [clientProfileData, setClientProfileData] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState(null);
   const [searchInput, setSearchInput] = useState('');   // immediate – drives the controlled input
   const [searchQuery, setSearchQuery] = useState('');   // deferred – drives the expensive filter
   const [, startSearchTransition] = useTransition();
@@ -1193,12 +1194,16 @@ export default function ClientOnboarding() {
         return;
       }
       
-      // Fetch profile data
+      // Fetch profile data with timeout so slow external API doesn't block the whole modal
       profileFetchingRef.current.add(email);
       setProfileLoading(true);
-      
+      setProfileError(null);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
       fetch(`${API_BASE}/api/onboarding/client-profile/${encodeURIComponent(email)}`, {
-        headers: AUTH_HEADERS()
+        headers: AUTH_HEADERS(),
+        signal: controller.signal
       })
         .then(async (r) => {
           const data = await r.json().catch(() => ({}));
@@ -1206,33 +1211,25 @@ export default function ClientOnboarding() {
         })
         .then(({ ok, data }) => {
           if (cancelled) return;
-          
-          // Extract profile from response - handle both nested userProfile and direct data
+          clearTimeout(timeoutId);
+          if (showClientProfile && selectedJob?.clientEmail?.toLowerCase().trim() === email) {
+            setProfileError(ok ? null : (data?.error || null));
+          }
           let profile = null;
           if (ok && data) {
-            // Check for nested userProfile first
             if (data.userProfile && typeof data.userProfile === 'object') {
               profile = data.userProfile;
-            } 
-            // If no userProfile key, use data directly (if it looks like a profile object)
-            else if (data.firstName || data.email || data.contactNumber) {
+            } else if (data.firstName || data.email || data.contactNumber) {
               profile = data;
             }
           }
-          
           const profileObj = profile && typeof profile === 'object' ? profile : null;
-          
-          // Cache the profile data (including profileComplete flag)
           if (profileObj) {
             profileCacheRef.current.set(email, { ...profileObj, profileComplete: data?.profileComplete });
           }
-          
-          // Only update UI if section is still expanded and job hasn't changed
           if (showClientProfile && selectedJob?.clientEmail?.toLowerCase().trim() === email) {
             setClientProfileData(profileObj);
           }
-          
-          // Update profileComplete status regardless of expansion state
           const complete = data?.profileComplete === true;
           const jobId = selectedJob?._id;
           if (complete !== undefined && jobId) {
@@ -1241,8 +1238,14 @@ export default function ClientOnboarding() {
           }
         })
         .catch((error) => {
-          console.error('Failed to fetch client profile:', error);
+          clearTimeout(timeoutId);
+          if (error?.name === 'AbortError') {
+            console.warn('Client profile fetch timed out');
+          } else {
+            console.error('Failed to fetch client profile:', error);
+          }
           if (!cancelled && showClientProfile && selectedJob?.clientEmail?.toLowerCase().trim() === email) {
+            setProfileError('Request timed out. Try again.');
             setClientProfileData(null);
           }
         })
@@ -3850,8 +3853,8 @@ export default function ClientOnboarding() {
                           <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
                             <User className="w-6 h-6 text-slate-400" />
                           </div>
-                          <p className="text-sm text-slate-600 font-medium">Profile not found</p>
-                          <p className="text-xs text-slate-400 mt-1">Client may not have completed their profile yet.</p>
+                          <p className="text-sm text-slate-600 font-medium">{profileError || 'Profile not found'}</p>
+                          <p className="text-xs text-slate-400 mt-1">{profileError ? 'Try again in a moment.' : 'Client may not have completed their profile yet.'}</p>
                         </div>
                       ) : (
                         <div className="max-h-[420px] overflow-y-auto">
@@ -4130,7 +4133,13 @@ export default function ClientOnboarding() {
 
                 {/* Comments List - Always Visible */}
                 <div className="flex-1 overflow-y-auto min-h-0 px-5 py-4 space-y-4">
-                  {(selectedJob.comments || []).length === 0 ? (
+                  {loadingJobDetails ? (
+                    <div className="text-center py-12">
+                      <Loader2 className="w-10 h-10 mx-auto mb-3 text-primary animate-spin" />
+                      <p className="text-sm text-gray-600 font-medium">Loading details...</p>
+                      <p className="text-xs text-gray-400 mt-1">Comments will appear shortly</p>
+                    </div>
+                  ) : (selectedJob.comments || []).length === 0 ? (
                     <div className="text-center py-12 opacity-50">
                       <MessageSquare className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                       <p className="text-sm text-gray-500 font-medium">No comments yet</p>

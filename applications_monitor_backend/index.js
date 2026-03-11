@@ -52,7 +52,8 @@ import {
   getNonResolvedIssues,
   requestMove,
   approveMove,
-  rejectMove
+  rejectMove,
+  invalidateJobListCache
 } from './controllers/onboardingController.js';
 import { ClientCounterModel } from './ClientCounterModel.js';
 import { OnboardingJobModel } from './OnboardingJobModel.js';
@@ -64,6 +65,19 @@ import FormData from 'form-data';
 import cron from 'node-cron';
 
 const FLASHFIRE_API_BASE_URL = process.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
+
+// Short TTL cache for client profile from flashfire (avoids hammering external API, keeps dashboard details fast)
+const PROFILE_CACHE_TTL_MS = 90 * 1000; // 90 seconds
+const profileCache = new Map();
+function getCachedProfile(email) {
+  const entry = profileCache.get(email);
+  if (!entry) return null;
+  if (Date.now() > entry.exp) { profileCache.delete(email); return null; }
+  return entry.data;
+}
+function setCachedProfile(email, data) {
+  profileCache.set(email, { data, exp: Date.now() + PROFILE_CACHE_TTL_MS });
+}
 
 const fileUpload = multer({
   storage: multer.memoryStorage(),
@@ -3985,39 +3999,73 @@ function isProfileComplete(profile) {
 }
 
 // Proxy to fetch client profile from flashfire (for resume-making context in tickets)
-// Also updates onboarding jobs with profileComplete so "Dashboard details" step reflects actual profile completion
+// Cached 90s + 10s timeout so dashboard details load fast and don't hang
 app.get('/api/onboarding/client-profile/:email', verifyToken, async (req, res) => {
   try {
     const { email } = req.params;
     if (!email) return res.status(400).json({ error: 'Email is required' });
     const emailLower = email.toLowerCase().trim();
+
+    const cached = getCachedProfile(emailLower);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
+
     const url = `${FLASHFIRE_API_BASE_URL}/get-profile?email=${encodeURIComponent(emailLower)}`;
-    const response = await fetch(url);
+    const PROFILE_FETCH_TIMEOUT_MS = 10000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PROFILE_FETCH_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetch(url, { signal: controller.signal });
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      if (fetchErr.name === 'AbortError') {
+        console.warn('getClientProfile: flashfire get-profile timed out for', emailLower);
+        return res.status(504).json({ error: 'Profile service took too long. Try again in a moment.', profileComplete: false });
+      }
+      throw fetchErr;
+    }
+    clearTimeout(timeoutId);
     const data = await response.json().catch(() => ({}));
+
     if (!response.ok) {
-      // Profile not found - update jobs to profileComplete=false so card shows "Dashboard details" as pending
       await OnboardingJobModel.updateMany(
         { clientEmail: emailLower },
         { $set: { profileComplete: false } }
       ).catch(() => {});
       return res.status(response.status).json({ ...data, profileComplete: false });
     }
+
     const profile = data?.userProfile ?? data;
     const complete = isProfileComplete(profile);
     const now = new Date();
+    let dashboardDetailsCompletedAt = complete ? now : null;
+    if (complete) {
+      const client = await ClientModel.findOne({ email: emailLower }).select('portfolioMade portfolioMadeDate').lean().catch(() => null);
+      const pd = client?.portfolioMadeDate;
+      if (client?.portfolioMade === true && pd && String(pd).trim() && String(pd).trim() !== ' ') {
+        const d = new Date(pd);
+        if (!Number.isNaN(d.getTime())) dashboardDetailsCompletedAt = d;
+      }
+    }
     await OnboardingJobModel.updateMany(
       { clientEmail: emailLower },
       {
         $set: {
           profileComplete: complete,
-          ...(complete ? { dashboardDetailsCompletedAt: now } : {})
+          ...(complete ? { dashboardDetailsCompletedAt } : {})
         }
       }
     ).catch(() => {});
-    res.status(200).json({ ...data, profileComplete: complete });
+    invalidateJobListCache();
+
+    const payload = { ...data, profileComplete: complete };
+    setCachedProfile(emailLower, payload);
+    res.status(200).json(payload);
   } catch (e) {
     console.error('getClientProfile proxy:', e);
-    res.status(500).json({ error: e.message || 'Failed to fetch client profile' });
+    res.status(500).json({ error: e.message || 'Failed to fetch client profile', profileComplete: false });
   }
 });
 

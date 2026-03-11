@@ -248,8 +248,8 @@ export async function listOnboardingJobs(req, res) {
       const clientNumber = clientInfo.clientNumber != null ? clientInfo.clientNumber : job.clientNumber;
       const attachmentNames = (job.attachments || []).map(a => ({ name: a.name || '' }));
       const { attachments: _att, ...rest } = job;
-      // Days from dashboard details completed until applications completed (or today)
-      const startDate = job.dashboardDetailsCompletedAt || job.createdAt || now;
+      // Days = from job createdAt to now (or to applicationsCompletedAt if completed). Each job gets its own value.
+      const startDate = job.createdAt || now;
       let endDate = job.applicationsCompletedAt;
       if (!endDate && job.status === 'completed' && (job.moveHistory || []).length > 0) {
         const completedMove = job.moveHistory.find(m => m.toStatus === 'completed');
@@ -319,6 +319,17 @@ export async function getOnboardingJobById(req, res) {
     job.dashboardManagerEmail = manager?.email || '';
     // Client model is source of truth for clientNumber
     if (client?.clientNumber != null) job.clientNumber = client.clientNumber;
+
+    // Days = from job createdAt to now (or applicationsCompletedAt). Same logic as list.
+    const now = new Date();
+    const startDate = job.createdAt || now;
+    let endDate = job.applicationsCompletedAt;
+    if (!endDate && job.status === 'completed' && (job.moveHistory || []).length > 0) {
+      const completedMove = job.moveHistory.find(m => m.toStatus === 'completed');
+      if (completedMove?.movedAt) endDate = completedMove.movedAt;
+    }
+    if (!endDate) endDate = now;
+    job.daysInPipeline = Math.max(0, Math.floor((new Date(endDate) - new Date(startDate)) / (24 * 60 * 60 * 1000)));
 
     res.status(200).json({ job });
   } catch (e) {
@@ -766,6 +777,9 @@ export async function getOnboardingRoles(req, res) {
 
 // Exported so auth routes can invalidate when users are created/updated/deleted
 export function invalidateRolesCache() { rolesCache.clear(); }
+
+// Exported so client-profile proxy can invalidate when profileComplete/dashboardDetailsCompletedAt is updated
+export function invalidateJobListCache() { jobListCache.clear(); }
 
 export async function getNextResumeMakerApi(req, res) {
   try {
