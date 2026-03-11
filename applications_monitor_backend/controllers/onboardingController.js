@@ -1,4 +1,5 @@
 import { OnboardingJobModel, ONBOARDING_STATUSES_LIST } from '../OnboardingJobModel.js';
+import { JobModel } from '../JobModel.js';
 import { OnboardingJobCounterModel } from '../OnboardingJobCounterModel.js';
 import { ClientCounterModel } from '../ClientCounterModel.js';
 import { OnboardingNotificationModel } from '../OnboardingNotificationModel.js';
@@ -37,6 +38,8 @@ const createTTLCache = (defaultTtlMs) => {
 const jobListCache = createTTLCache(5_000);
 // 60 s TTL for user roles (changes only when admin updates users)
 const rolesCache   = createTTLCache(60_000);
+// 30 s TTL for job detail (dashboard details modal) — instant reopen, invalidated on patch
+const jobDetailCache = createTTLCache(30_000);
 // ---------------------------------------------------------------------------
 
 const VALID_TRANSITIONS = {
@@ -169,11 +172,12 @@ export async function createOnboardingJobPayload(payload) {
 }
 
 // Fields needed for Kanban card display (excludes heavy arrays loaded on card open)
-// attachments trimmed to names only in send for card step-status
+// moveHistory excluded — only needed in getOnboardingJobById (detail modal)
+// attachments trimmed to names only in send step for card step-status badges
 const LIST_PROJECTION = 'jobNumber clientNumber clientEmail clientName planType status ' +
   'resumeMakerEmail resumeMakerName linkedInMemberEmail linkedInMemberName ' +
   'operatorEmail operatorName csmEmail csmName dashboardManagerName linkedInPhaseStarted adminUnreadCount pendingMoveRequest ' +
-  'dashboardDetailsCompletedAt applicationsCompletedAt profileComplete createdAt updatedAt moveHistory attachments';
+  'dashboardDetailsCompletedAt applicationsCompletedAt profileComplete createdAt updatedAt attachments';
 
 export async function listOnboardingJobs(req, res) {
   try {
@@ -226,12 +230,21 @@ export async function listOnboardingJobs(req, res) {
     const clientEmails = [...new Set(jobs.map(job => (job.clientEmail || '').toLowerCase()).filter(Boolean))];
     const managerNames = [...new Set(jobs.map(j => (j.dashboardManagerName || '').trim()).filter(Boolean))];
 
-    const [clients, managers] = await Promise.all([
+    // Batch: fetch earliest job card date per client from client dashboard (JobModel)
+    const [clients, managers, firstJobAgg] = await Promise.all([
       clientEmails.length
         ? ClientModel.find({ email: { $in: clientEmails } }).select('email status isPaused clientNumber').lean()
         : Promise.resolve([]),
       managerNames.length
         ? ManagerModel.find({ fullName: { $in: managerNames }, isActive: true }).select('fullName email').lean()
+        : Promise.resolve([]),
+      clientEmails.length
+        ? JobModel.aggregate([
+            { $addFields: { _userIdLower: { $toLower: '$userID' } } },
+            { $match: { _userIdLower: { $in: clientEmails } } },
+            { $sort: { _id: 1 } },
+            { $group: { _id: '$_userIdLower', firstObjId: { $first: '$_id' } } }
+          ])
         : Promise.resolve([])
     ]);
 
@@ -239,6 +252,13 @@ export async function listOnboardingJobs(req, res) {
       clients.map(c => [c.email.toLowerCase(), { status: c.status || 'active', isPaused: c.isPaused || false, clientNumber: c.clientNumber }])
     );
     const managerEmailByName = new Map(managers.map(m => [m.fullName, m.email]));
+    // Map: clientEmail → earliest job card creation date (from MongoDB ObjectId timestamp)
+    const firstJobDateMap = new Map();
+    for (const row of firstJobAgg) {
+      if (row._id && row.firstObjId) {
+        firstJobDateMap.set(row._id, row.firstObjId.getTimestamp());
+      }
+    }
 
     const now = new Date();
     const enrichedJobs = jobs.map(job => {
@@ -248,8 +268,9 @@ export async function listOnboardingJobs(req, res) {
       const clientNumber = clientInfo.clientNumber != null ? clientInfo.clientNumber : job.clientNumber;
       const attachmentNames = (job.attachments || []).map(a => ({ name: a.name || '' }));
       const { attachments: _att, ...rest } = job;
-      // Days from dashboard details completed until applications completed (or today)
-      const startDate = job.dashboardDetailsCompletedAt || job.createdAt || now;
+      // Days = from the first job card added in client dashboard to now (or applicationsCompletedAt if completed).
+      // Falls back to onboarding job createdAt if no job cards exist yet.
+      const startDate = firstJobDateMap.get(clientEmail) || job.createdAt || now;
       let endDate = job.applicationsCompletedAt;
       if (!endDate && job.status === 'completed' && (job.moveHistory || []).length > 0) {
         const completedMove = job.moveHistory.find(m => m.toStatus === 'completed');
@@ -280,7 +301,31 @@ export async function listOnboardingJobs(req, res) {
 export async function getOnboardingJobById(req, res) {
   try {
     const { id } = req.params;
-    const job = await OnboardingJobModel.findById(id).lean();
+    const cacheKey = `job:${id}`;
+    let job = jobDetailCache.get(cacheKey);
+    if (job) {
+      job = { ...job };
+      const userRole = req.user?.role || '';
+      if (userRole === 'team_lead') {
+        const userEmail = (req.user?.email || '').toLowerCase().trim();
+        let effectiveManagerName = '';
+        if (userEmail) {
+          const dbUser = await UserModel.findOne({ email: userEmail }).select('linkedDashboardManagerName name').lean();
+          effectiveManagerName = ((dbUser?.linkedDashboardManagerName || dbUser?.name || req.user?.name || '').trim()).toLowerCase();
+        }
+        const managerName = (job.dashboardManagerName || '').trim().toLowerCase();
+        if (!effectiveManagerName || !managerName || managerName !== effectiveManagerName) {
+          return res.status(403).json({ error: 'Not authorized to view this onboarding job' });
+        }
+      }
+      const canSeeCredentials = req.user && (req.user.role === 'admin' || req.user.roles?.includes?.('csm'));
+      if (!canSeeCredentials && job.dashboardCredentials?.password) {
+        job.dashboardCredentials = { ...job.dashboardCredentials, password: '********' };
+      }
+      return res.status(200).json({ job });
+    }
+
+    job = await OnboardingJobModel.findById(id).lean();
     if (!job) return res.status(404).json({ error: 'Onboarding job not found' });
 
     // Restrict Team Leads to only tickets assigned to their linked dashboard manager
@@ -320,6 +365,27 @@ export async function getOnboardingJobById(req, res) {
     // Client model is source of truth for clientNumber
     if (client?.clientNumber != null) job.clientNumber = client.clientNumber;
 
+    // Days = from the first job card added in client dashboard to now (or applicationsCompletedAt).
+    const now = new Date();
+    const clientEmailLower = (job.clientEmail || '').toLowerCase();
+    let firstJobDate = null;
+    if (clientEmailLower) {
+      const earliest = await JobModel.findOne({ userID: new RegExp(`^${clientEmailLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') })
+        .sort({ _id: 1 }).select('_id').lean().catch(() => null);
+      if (earliest?._id) {
+        firstJobDate = earliest._id.getTimestamp();
+      }
+    }
+    const startDate = firstJobDate || job.createdAt || now;
+    let endDate = job.applicationsCompletedAt;
+    if (!endDate && job.status === 'completed' && (job.moveHistory || []).length > 0) {
+      const completedMove = job.moveHistory.find(m => m.toStatus === 'completed');
+      if (completedMove?.movedAt) endDate = completedMove.movedAt;
+    }
+    if (!endDate) endDate = now;
+    job.daysInPipeline = Math.max(0, Math.floor((new Date(endDate) - new Date(startDate)) / (24 * 60 * 60 * 1000)));
+
+    jobDetailCache.set(cacheKey, job);
     res.status(200).json({ job });
   } catch (e) {
     console.error('getOnboardingJobById:', e);
@@ -766,6 +832,12 @@ export async function getOnboardingRoles(req, res) {
 
 // Exported so auth routes can invalidate when users are created/updated/deleted
 export function invalidateRolesCache() { rolesCache.clear(); }
+
+// Exported so client-profile proxy can invalidate when profileComplete/dashboardDetailsCompletedAt is updated
+export function invalidateJobListCache() {
+  jobListCache.clear();
+  jobDetailCache.clear();
+}
 
 export async function getNextResumeMakerApi(req, res) {
   try {
