@@ -888,6 +888,7 @@ export async function resolveOnboardingComment(req, res) {
     const { id: jobId, commentId } = req.params;
     const userEmail = (req.user?.email || '').toLowerCase().trim();
     if (!userEmail) return res.status(401).json({ error: 'Unauthorized' });
+    const isAdmin = req.user?.role === 'admin';
     const job = await OnboardingJobModel.findById(jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
     const comment = (job.comments || []).find(
@@ -895,13 +896,18 @@ export async function resolveOnboardingComment(req, res) {
     );
     if (!comment) return res.status(404).json({ error: 'Comment not found' });
     const taggedEmails = (comment.taggedUserIds || []).map(e => (e || '').toLowerCase().trim()).filter(Boolean);
-    if (!taggedEmails.includes(userEmail)) {
-      return res.status(403).json({ error: 'Only tagged users can mark this as resolved' });
-    }
     const resolvedByTagged = comment.resolvedByTagged || [];
-    if (resolvedByTagged.some(r => (r.email || '').toLowerCase() === userEmail)) {
-      return res.status(200).json({ job: job.toObject(), alreadyResolved: true });
+    const alreadyResolvedByUser = resolvedByTagged.some(r => (r.email || '').toLowerCase() === userEmail);
+
+    if (!isAdmin) {
+      if (!taggedEmails.includes(userEmail)) {
+        return res.status(403).json({ error: 'Only tagged users can mark this as resolved' });
+      }
+      if (alreadyResolvedByUser) {
+        return res.status(200).json({ job: job.toObject(), alreadyResolved: true });
+      }
     }
+
     const commentIndex = job.comments.findIndex(
       c => String(c._id) === commentId || String(c._id) === String(commentId)
     );
@@ -909,15 +915,33 @@ export async function resolveOnboardingComment(req, res) {
     if (!job.comments[commentIndex].resolvedByTagged) {
       job.comments[commentIndex].resolvedByTagged = [];
     }
-    job.comments[commentIndex].resolvedByTagged.push({
-      email: userEmail,
-      resolvedAt: new Date()
-    });
+    if (isAdmin) {
+      // Admin resolve: mark as resolved for everyone by adding all tagged users who haven't resolved yet
+      const existingResolvedEmails = new Set(
+        (job.comments[commentIndex].resolvedByTagged || []).map(r => (r.email || '').toLowerCase())
+      );
+      const now = new Date();
+      taggedEmails.forEach(email => {
+        if (!existingResolvedEmails.has(email)) {
+          job.comments[commentIndex].resolvedByTagged.push({ email, resolvedAt: now });
+          existingResolvedEmails.add(email);
+        }
+      });
+      // Also add admin so they appear in "Resolved by"
+      if (!existingResolvedEmails.has(userEmail)) {
+        job.comments[commentIndex].resolvedByTagged.push({ email: userEmail, resolvedAt: now });
+      }
+    } else {
+      job.comments[commentIndex].resolvedByTagged.push({
+        email: userEmail,
+        resolvedAt: new Date()
+      });
+    }
     job.updatedAt = new Date();
     job.markModified('comments');
     await job.save();
     jobListCache.clear();
-    res.status(200).json({ job: job.toObject() }); // use mutated doc directly
+    res.status(200).json({ job: job.toObject() });
   } catch (e) {
     console.error('resolveOnboardingComment:', e);
     res.status(500).json({ error: e.message || 'Failed to mark as resolved' });
