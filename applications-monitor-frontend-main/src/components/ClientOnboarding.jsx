@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo, useTransition } from 'react';
 import {
   useOnboardingStore,
+  useClientProfileStore,
   ONBOARDING_STATUSES,
   STATUS_LABELS,
   VALID_NEXT_STATUSES,
@@ -32,6 +33,9 @@ import {
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_BASE || '';
+const LOG = (msg, ...args) => {
+  if (import.meta.env.DEV) console.log('[ClientOnboarding]', msg, ...args);
+};
 const AUTH_HEADERS = () => ({
   'Content-Type': 'application/json',
   Authorization: `Bearer ${localStorage.getItem('authToken') || ''}`
@@ -55,7 +59,7 @@ function getVisibleColumns(user) {
 }
 
 // Profile field display helper (read-only) - matches dashboard/profile styling
-function ProfileField({ label, value, className = '' }) {
+const ProfileField = React.memo(function ProfileField({ label, value, className = '' }) {
   const v = value != null && String(value).trim() ? String(value).trim() : null;
   return (
     <div className={`py-3 border-b border-slate-100 last:border-b-0 ${className}`}>
@@ -63,6 +67,16 @@ function ProfileField({ label, value, className = '' }) {
       <span className="text-sm font-medium text-slate-800">{v || '—'}</span>
     </div>
   );
+});
+
+// Format a date value (handles raw string, ISO, {$date} objects) — avoids inline new Date() in JSX
+function fmtDate(val, withTime = false) {
+  if (val == null) return null;
+  const raw = typeof val === 'object' && val?.$date ? val.$date : val;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return String(val);
+  if (withTime) return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  return d.toLocaleDateString();
 }
 
 function clientDisplayName(jobOrNotif) {
@@ -82,8 +96,6 @@ function getAllowedStatusesForPlan(planType) {
 const JobCard = React.memo(({
   job,
   draggedJobId,
-  editingClientNameJobId,
-  editingClientNameValue,
   isAdmin,
   visibleColumns,
   onMoveTo,
@@ -92,16 +104,12 @@ const JobCard = React.memo(({
   onCardClick,
   onLongPressStart,
   onLongPressEnd,
-  onEditChange,
-  onEditSave,
-  onEditStart,
   onHoverStart,
   onHoverEnd,
   jobAnalysis, // { saved, applied, interviewing, offer, rejected, removed, lastAppliedOperatorName }
   showJobAnalysis // boolean to show/hide the analysis section
 }) => {
   const isDragging = draggedJobId === job._id;
-  const isEditing = editingClientNameJobId === job._id && isAdmin;
   const [moveDropdownOpen, setMoveDropdownOpen] = useState(false);
   const moveDropdownRef = useRef(null);
 
@@ -123,17 +131,19 @@ const JobCard = React.memo(({
   const isExecutive = planLower === 'executive' || planLower.includes('executive');
   const hasLinkedInCoverLetter = ['professional', 'executive'].includes(planLower);
   const hasDashboard = job.profileComplete === true;
+  const dashboardUnchecked = job.profileComplete == null; // null = never checked yet
   const attachmentNames = (job.attachments || []).map((a) => (a.name || '').trim()).filter(Boolean);
   const hasResume = attachmentNames.some((n) => /^resume$/i.test(n));
   const hasCoverLetter = attachmentNames.some((n) => /cover\s*letter/i.test(n));
   const hasPortfolio = attachmentNames.some((n) => /portfolio/i.test(n));
   const steps = [
-    { key: 'dashboard', label: 'Dashboard details', labelDone: 'Dashboard details', done: hasDashboard },
+    { key: 'dashboard', label: dashboardUnchecked ? 'Dashboard checking…' : 'Dashboard details', labelDone: 'Dashboard details', done: hasDashboard, unchecked: dashboardUnchecked },
     { key: 'resume', label: 'Resume not sent', labelDone: 'Resume sent', done: hasResume },
     ...(hasLinkedInCoverLetter ? [{ key: 'coverLinkedIn', label: 'Cover and LinkedIn Pending', labelDone: 'Cover and LinkedIn', done: hasCoverLetter }] : []),
     ...(isExecutive ? [{ key: 'portfolio', label: 'Portfolio Pending', labelDone: 'Portfolio', done: hasPortfolio }] : [])
   ];
-  const firstIncompleteIndex = steps.findIndex((s) => !s.done);
+  // For firstIncompleteIndex, skip unchecked steps (treat them as neutral, not incomplete)
+  const firstIncompleteIndex = steps.findIndex((s) => !s.done && !s.unchecked);
 
   // Determine background color based on client status and pause state
   const getCardBackgroundColor = () => {
@@ -166,7 +176,7 @@ const JobCard = React.memo(({
           <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
             {job.jobNumber}
             {job.daysInPipeline != null && (
-              <span className="ml-1 font-normal text-gray-500 normal-case" title="Days since job created">
+              <span className="ml-1 font-normal text-gray-500 normal-case" title="Days since profile completed">
                 · {job.daysInPipeline}d
               </span>
             )}
@@ -191,12 +201,18 @@ const JobCard = React.memo(({
         {steps.map((step, idx) => {
           const isFirstIncomplete = firstIncompleteIndex === idx;
           const isDone = step.done;
-          const isLater = firstIncompleteIndex >= 0 && idx > firstIncompleteIndex;
           const label = isDone ? step.labelDone : step.label;
           if (isDone) {
             return (
               <span key={step.key} className="inline-flex items-center gap-0.5 text-[10px] font-medium text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-200">
                 <CheckCircle className="w-2.5 h-2.5 flex-shrink-0" />
+                {label}
+              </span>
+            );
+          }
+          if (step.unchecked) {
+            return (
+              <span key={step.key} className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
                 {label}
               </span>
             );
@@ -216,25 +232,10 @@ const JobCard = React.memo(({
           );
         })}
       </div>
-      {isEditing ? (
-        <input
-          value={editingClientNameValue}
-          onChange={onEditChange}
-          onBlur={() => onEditSave(job._id, editingClientNameValue)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') onEditSave(job._id, editingClientNameValue);
-            if (e.key === 'Escape') onEditStart(null, '');
-            e.stopPropagation();
-          }}
-          onClick={(e) => e.stopPropagation()}
-          className="w-full text-sm font-bold text-gray-900 bg-white border border-primary rounded px-2 py-0.5 mb-1"
-          autoFocus
-        />
-      ) : (
+      {/* Name is read-only on cards — edit via ticket modal */}
+      {false ? null : (
         <h4
           className="font-bold text-gray-900 text-sm leading-snug mb-1 cursor-default"
-          onClick={(e) => { if (isAdmin) { e.stopPropagation(); onEditStart(job._id, job.clientName || ''); } }}
-          title={isAdmin ? 'Click to edit name' : undefined}
         >
           {clientDisplayName(job)}
         </h4>
@@ -349,8 +350,6 @@ const JobCard = React.memo(({
     prevProps.job.clientIsPaused === nextProps.job.clientIsPaused &&
     prevProps.job.adminUnreadCount === nextProps.job.adminUnreadCount &&
     prevProps.draggedJobId === nextProps.draggedJobId &&
-    prevProps.editingClientNameJobId === nextProps.editingClientNameJobId &&
-    prevProps.editingClientNameValue === nextProps.editingClientNameValue &&
     prevProps.visibleColumns === nextProps.visibleColumns &&
     prevProps.showJobAnalysis === nextProps.showJobAnalysis &&
     prevProps.jobAnalysis?.saved === nextProps.jobAnalysis?.saved &&
@@ -486,8 +485,8 @@ export default function ClientOnboarding() {
   const scrollLoopRef = useRef(null);
   const dragCursorXRef = useRef(0);
   const previousJobIdRef = useRef(null); // Track previous job ID to detect job changes
-  const profileCacheRef = useRef(new Map()); // Cache profile data by email to avoid refetching
-  const profileFetchingRef = useRef(new Set()); // Track emails currently being fetched to prevent duplicate requests
+  // profileCacheRef removed — now using persistent Zustand store (useClientProfileStore)
+  const profileFetchRunIdRef = useRef(0); // Track which fetch is active (avoids AbortError from cleanup overwriting good data)
   const visibleColumns = getVisibleColumns(user);
   const LONG_PRESS_MS = 3500;
   const isAdmin = user?.role === 'admin';
@@ -736,6 +735,33 @@ export default function ClientOnboarding() {
       });
 
       setJobs(uniqueJobs);
+
+      // Background: sync profileComplete for jobs that haven't been checked yet (profileComplete === null)
+      const uncheckedEmails = [...new Set(uniqueJobs.filter(j => j.profileComplete == null).map(j => (j.clientEmail || '').toLowerCase().trim()).filter(Boolean))];
+      if (uncheckedEmails.length > 0) {
+        fetch(`${API_BASE}/api/onboarding/batch-profile-status`, {
+          method: 'POST',
+          headers: { ...AUTH_HEADERS(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emails: uncheckedEmails })
+        })
+          .then(r => r.json().catch(() => ({})))
+          .then(data => {
+            const results = data?.results;
+            if (results && typeof results === 'object') {
+              // Update jobs with profileComplete flags
+              setJobs(prev => prev.map(j => {
+                const email = (j.clientEmail || '').toLowerCase().trim();
+                if (email && results[email] !== undefined && j.profileComplete == null) {
+                  return { ...j, profileComplete: results[email] };
+                }
+                return j;
+              }));
+              // Also populate the persistent profile store with completion flags
+              useClientProfileStore.getState().batchSetProfileComplete(results);
+            }
+          })
+          .catch(() => {}); // Silent - this is a background optimization
+      }
 
       // Update selected job if it exists in the fresh data
       // Use the store's current state to avoid stale closure issues
@@ -1067,8 +1093,9 @@ export default function ClientOnboarding() {
       setShowClientProfile(false);
       setShowAttachments(false);
       setShowMoveHistory(false);
-      // Don't clear clientProfileData here - let the profile effect handle it based on email
-      // This prevents flickering when the same email is used in different jobs
+      setClientProfileData(null);
+      setProfileError(null);
+      setProfileLoading(false);
       setAppliedOnDateCount(null); // Reset applied on date count when card changes
     }
     
@@ -1156,116 +1183,77 @@ export default function ClientOnboarding() {
     }
   }, [selectedJob?.gmailCredentials]);
 
-  // Fetch client profile when ticket opens (updates profileComplete on backend for "Dashboard details" step)
-  // Profile data shown in UI only when showClientProfile is expanded
-  // Uses caching to avoid refetching and prevents duplicate requests
-  useEffect(() => {
-    if (!selectedJob?.clientEmail) {
-      // Only clear if no job selected, otherwise keep cached data
-      if (!selectedJob) {
-        setClientProfileData(null);
+  // Fetch client profile — called directly from button click, NOT from any effect.
+  // Uses persistent Zustand store (localStorage) as single source of truth.
+  // Only hits the API if no cached data or data is stale (>24h).
+  const fetchClientProfile = useCallback((email, jobId) => {
+    if (!email) return;
+    const emailLower = email.toLowerCase().trim();
+    const profileStore = useClientProfileStore.getState();
+
+    // Check persistent store first
+    const cached = profileStore.getProfile(emailLower);
+    if (cached && cached.profile && !profileStore.isStale(emailLower)) {
+      LOG('Profile from persistent cache:', emailLower);
+      setClientProfileData(cached.profile);
+      setProfileLoading(false);
+      setProfileError(null);
+      // Sync profileComplete on the job
+      if (jobId) {
+        useOnboardingStore.getState().setJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, profileComplete: cached.profileComplete } : j)));
+        useOnboardingStore.getState().setSelectedJob((prev) => (prev && prev._id === jobId ? { ...prev, profileComplete: cached.profileComplete } : prev));
       }
       return;
     }
-    
-    const email = selectedJob.clientEmail.toLowerCase().trim();
-    let cancelled = false;
-    
-    // If section is expanded, show cached data immediately or fetch if not cached
-    if (showClientProfile) {
-      // Check cache first
-      const cached = profileCacheRef.current.get(email);
-      if (cached) {
-        setClientProfileData(cached);
-        setProfileLoading(false);
-        // Still update profileComplete status
-        const complete = cached.profileComplete === true;
-        const jobId = selectedJob?._id;
-        if (complete !== undefined && jobId) {
-          setJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, profileComplete: complete } : j)));
-          setSelectedJob((prev) => (prev && prev._id === jobId ? { ...prev, profileComplete: complete } : prev));
-        }
-        return;
-      }
-      
-      // Prevent duplicate fetches for the same email
-      if (profileFetchingRef.current.has(email)) {
-        setProfileLoading(true);
-        return;
-      }
-      
-      // Fetch profile data with timeout so slow external API doesn't block the whole modal
-      profileFetchingRef.current.add(email);
-      setProfileLoading(true);
-      setProfileError(null);
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-      fetch(`${API_BASE}/api/onboarding/client-profile/${encodeURIComponent(email)}`, {
-        headers: AUTH_HEADERS(),
-        signal: controller.signal
-      })
-        .then(async (r) => {
-          const data = await r.json().catch(() => ({}));
-          return { ok: r.ok, data };
-        })
-        .then(({ ok, data }) => {
-          if (cancelled) return;
-          clearTimeout(timeoutId);
-          if (showClientProfile && selectedJob?.clientEmail?.toLowerCase().trim() === email) {
-            setProfileError(ok ? null : (data?.error || null));
-          }
-          let profile = null;
-          if (ok && data) {
-            if (data.userProfile && typeof data.userProfile === 'object') {
-              profile = data.userProfile;
-            } else if (data.firstName || data.email || data.contactNumber) {
-              profile = data;
-            }
-          }
-          const profileObj = profile && typeof profile === 'object' ? profile : null;
-          if (profileObj) {
-            profileCacheRef.current.set(email, { ...profileObj, profileComplete: data?.profileComplete });
-          }
-          if (showClientProfile && selectedJob?.clientEmail?.toLowerCase().trim() === email) {
-            setClientProfileData(profileObj);
-          }
-          const complete = data?.profileComplete === true;
-          const jobId = selectedJob?._id;
-          if (complete !== undefined && jobId) {
-            setJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, profileComplete: complete } : j)));
-            setSelectedJob((prev) => (prev && prev._id === jobId ? { ...prev, profileComplete: complete } : prev));
-          }
-        })
-        .catch((error) => {
-          clearTimeout(timeoutId);
-          if (error?.name === 'AbortError') {
-            console.warn('Client profile fetch timed out');
-          } else {
-            console.error('Failed to fetch client profile:', error);
-          }
-          if (!cancelled && showClientProfile && selectedJob?.clientEmail?.toLowerCase().trim() === email) {
-            setProfileError('Request timed out. Try again.');
-            setClientProfileData(null);
-          }
-        })
-        .finally(() => {
-          profileFetchingRef.current.delete(email);
-          if (!cancelled) {
-            setProfileLoading(false);
-          }
-        });
-    } else {
-      // When collapsed, don't clear data - keep it cached for next time
-      // Just hide the loading state
-      setProfileLoading(false);
+    // If we have stale data, show it immediately while refreshing in background
+    if (cached?.profile) {
+      setClientProfileData(cached.profile);
+      setProfileError(null);
     }
-    
-    return () => { 
-      cancelled = true;
-      // Don't remove from fetching set here - let the fetch complete naturally
-    };
-  }, [selectedJob?.clientEmail, selectedJob?._id, showClientProfile, setJobs, setSelectedJob]);
+
+    setProfileLoading(true);
+    const runId = ++profileFetchRunIdRef.current;
+    LOG('Profile fetch start:', { email: emailLower, runId, reason: cached?.profile ? 'stale-refresh' : 'first-fetch' });
+
+    fetch(`${API_BASE}/api/onboarding/client-profile/${encodeURIComponent(emailLower)}`, {
+      headers: AUTH_HEADERS()
+    })
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}));
+        return data;
+      })
+      .then((data) => {
+        if (profileFetchRunIdRef.current !== runId) return; // Superseded
+        const rawProfile = data?.userProfile ?? (data && (data.firstName != null || data.email != null || data.contactNumber != null) ? data : null);
+        const profileObj = rawProfile && typeof rawProfile === 'object' ? rawProfile : null;
+        const complete = data?.profileComplete === true;
+        LOG('Profile fetch response:', { hasProfile: !!profileObj, email: emailLower });
+        if (profileObj) {
+          // Save to persistent store (survives page reload)
+          useClientProfileStore.getState().setProfile(emailLower, profileObj, complete);
+          setProfileError(null);
+          setClientProfileData(profileObj);
+          setProfileLoading(false);
+          const currentJobId = useOnboardingStore.getState().selectedJob?._id ?? jobId;
+          if (currentJobId) {
+            useOnboardingStore.getState().setJobs((prev) => prev.map((j) => (j._id === currentJobId ? { ...j, profileComplete: complete } : j)));
+            useOnboardingStore.getState().setSelectedJob((prev) => (prev && prev._id === currentJobId ? { ...prev, profileComplete: complete } : prev));
+          }
+        } else {
+          useClientProfileStore.getState().setProfileError(emailLower, data?.message || 'Profile not found');
+          setProfileError(data?.message || data?.error || 'Profile not found');
+          setClientProfileData(null);
+          setProfileLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (profileFetchRunIdRef.current !== runId) return;
+        LOG('Profile fetch error:', err?.message);
+        setProfileError(err?.message || 'Failed to fetch profile');
+        setProfileLoading(false);
+      });
+  }, []); // No deps — uses getState() for store access, fully stable
 
   const handleMove = useCallback(async (jobId, newStatus, skipRoleCheck = false) => {
     if (movingStatus) {
@@ -1434,6 +1422,7 @@ export default function ClientOnboarding() {
   };
 
   const handleCardClick = useCallback((job) => {
+    LOG('Card clicked:', job?.jobNumber, job?.clientName, job?._id);
     if (longPressActivatedRef.current) {
       longPressActivatedRef.current = false;
       return;
@@ -1455,6 +1444,7 @@ export default function ClientOnboarding() {
     // If hover-prefetch already loaded the full data, use it immediately (zero wait)
     const prefetched = prefetchCacheRef.current.get(job._id);
     if (prefetched) {
+      LOG('Job details from cache:', job._id);
       setSelectedJob(prefetched);
       setJobs(prev => prev.map(j => j._id === job._id ? { ...j, ...prefetched } : j));
       return;
@@ -1463,21 +1453,25 @@ export default function ClientOnboarding() {
     // Otherwise open panel with lightweight card data and fetch full details in background
     setSelectedJob(job);
     setLoadingJobDetails(true);
+    LOG('Job details fetch start:', job._id);
     fetch(`${API_BASE}/api/onboarding/jobs/${job._id}`, { headers: AUTH_HEADERS() })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data?.job) {
-          prefetchCacheRef.current.set(job._id, data.job); // cache for next open
-          // Only update if the same job is still selected (user hasn't switched cards)
+          prefetchCacheRef.current.set(job._id, data.job);
           const current = useOnboardingStore.getState().selectedJob;
           if (current?._id === job._id) {
             setSelectedJob(data.job);
-            // Keep list entry in sync with any enriched fields
             setJobs(prev => prev.map(j => j._id === job._id ? { ...j, ...data.job } : j));
           }
+          LOG('Job details loaded:', job._id);
+        } else {
+          LOG('Job details empty response:', job._id);
         }
       })
-      .catch(() => {})
+      .catch((err) => {
+        console.error('[ClientOnboarding] Job details fetch error:', err?.message || err, job._id);
+      })
       .finally(() => setLoadingJobDetails(false));
   }, [setSelectedJob, setJobs, user]);
 
@@ -3141,8 +3135,6 @@ export default function ClientOnboarding() {
                           key={job._id}
                           job={job}
                           draggedJobId={draggedJobId}
-                          editingClientNameJobId={editingClientNameJobId}
-                          editingClientNameValue={editingClientNameValue}
                           isAdmin={isAdmin}
                           visibleColumns={visibleColumns}
                           onMoveTo={handleMoveToChoice}
@@ -3151,12 +3143,6 @@ export default function ClientOnboarding() {
                           onCardClick={handleCardClick}
                           onLongPressStart={handleCardLongPressStart}
                           onLongPressEnd={handleCardLongPressEnd}
-                          onEditChange={(e) => setEditingClientNameValue(e.target.value)}
-                          onEditSave={saveClientName}
-                          onEditStart={(jobId, name) => {
-                            setEditingClientNameJobId(jobId);
-                            setEditingClientNameValue(name);
-                          }}
                           onHoverStart={handleCardHoverStart}
                           onHoverEnd={handleCardHoverEnd}
                           showJobAnalysis={true}
@@ -3260,44 +3246,28 @@ export default function ClientOnboarding() {
             <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-start justify-between sticky top-0 z-10">
               <div>
                 <div className="flex items-center gap-3 mb-1">
-                  {editingClientNameJobId === selectedJob._id && isAdmin ? (
-                    <input
-                      value={editingClientNameValue}
-                      onChange={(e) => setEditingClientNameValue(e.target.value)}
-                      onBlur={() => saveClientName(selectedJob._id, editingClientNameValue)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') saveClientName(selectedJob._id, editingClientNameValue);
-                        if (e.key === 'Escape') { setEditingClientNameJobId(null); setEditingClientNameValue(''); }
-                      }}
-                      className="text-2xl font-bold text-gray-900 bg-white border border-primary rounded px-2 py-1 min-w-[120px]"
-                      autoFocus
-                    />
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <h2
-                        className="text-2xl font-bold text-gray-900 cursor-default"
-                        onClick={() => isAdmin && (setEditingClientNameJobId(selectedJob._id), setEditingClientNameValue(selectedJob.clientName || ''))}
-                        title={isAdmin ? 'Click to edit name' : undefined}
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-2xl font-bold text-gray-900">
+                      {clientDisplayName(selectedJob)}
+                    </h2>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingClientNameJobId(selectedJob._id);
+                          setEditingClientNameValue(selectedJob.clientName || '');
+                          setEditingClientNumberEmail(selectedJob.clientEmail);
+                          setEditingClientNumberValue(String(selectedJob.clientNumber ?? ''));
+                          setShowEditClientNumberModal(true);
+                        }}
+                        className="p-1.5 text-gray-400 hover:text-primary hover:bg-primary/5 rounded"
+                        title="Edit client details"
                       >
-                        {clientDisplayName(selectedJob)}
-                      </h2>
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingClientNumberEmail(selectedJob.clientEmail);
-                            setEditingClientNumberValue(String(selectedJob.clientNumber ?? ''));
-                            setShowEditClientNumberModal(true);
-                          }}
-                          className="p-1.5 text-gray-400 hover:text-primary hover:bg-primary/5 rounded"
-                          title="Edit client number"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  )}
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                   <span className="text-sm font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-md border border-gray-200">#{selectedJob.jobNumber}</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -3824,7 +3794,14 @@ export default function ClientOnboarding() {
                 {/* Client Profile (from /profile - for resume-making) */}
                 <div className="mb-6">
                   <button
-                    onClick={() => setShowClientProfile(!showClientProfile)}
+                    onClick={() => {
+                      const willShow = !showClientProfile;
+                      setShowClientProfile(willShow);
+                      // Fetch profile on expand (not via effect — direct call avoids all re-trigger races)
+                      if (willShow && selectedJob?.clientEmail) {
+                        fetchClientProfile(selectedJob.clientEmail, selectedJob._id);
+                      }
+                    }}
                     className="w-full flex items-center justify-between py-3 px-4 text-left rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 hover:border-slate-300 transition-colors shadow-sm"
                   >
                     <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 flex-1 min-w-0">
@@ -3832,7 +3809,7 @@ export default function ClientOnboarding() {
                       <span className="flex-1 min-w-0">Client Profile</span>
                       {clientProfileData && (
                         <span className="text-[10px] font-medium text-slate-500 bg-slate-200 px-2 py-0.5 rounded-md flex-shrink-0">
-                          {clientProfileData.firstName || clientProfileData.lastName ? 'Available' : 'Loaded'}
+                          {clientProfileData.firstName || clientProfileData.lastName || clientProfileData.email ? 'Available' : 'Loaded'}
                         </span>
                       )}
                       {profileLoading && (
@@ -3864,8 +3841,9 @@ export default function ClientOnboarding() {
                             <div className="grid grid-cols-2 gap-x-8 gap-y-0">
                               <ProfileField label="First Name" value={clientProfileData.firstName} />
                               <ProfileField label="Last Name" value={clientProfileData.lastName} />
+                              <ProfileField label="Email" value={clientProfileData.email} className="col-span-2" />
                               <ProfileField label="Contact" value={clientProfileData.contactNumber} />
-                              <ProfileField label="DOB" value={clientProfileData.dob} />
+                              <ProfileField label="DOB" value={fmtDate(clientProfileData.dob)} />
                               <ProfileField label="Visa Status" value={clientProfileData.visaStatus} className="col-span-2" />
                               <ProfileField label="Address" value={clientProfileData.address} className="col-span-2" />
                             </div>
@@ -3876,9 +3854,10 @@ export default function ClientOnboarding() {
                             <div className="grid grid-cols-2 gap-x-8 gap-y-0">
                               <ProfileField label="Bachelor's" value={clientProfileData.bachelorsUniDegree} className="col-span-2" />
                               <ProfileField label="Bachelor's GPA" value={clientProfileData.bachelorsGPA} />
-                              <ProfileField label="Bachelor's End" value={clientProfileData.bachelorsEndDate || clientProfileData.bachelorsGradMonthYear} />
+                              <ProfileField label="Bachelor's End" value={clientProfileData.bachelorsEndDate || fmtDate(clientProfileData.bachelorsGradMonthYear)} />
                               <ProfileField label="Master's" value={clientProfileData.mastersUniDegree} className="col-span-2" />
                               <ProfileField label="Master's GPA" value={clientProfileData.mastersGPA} />
+                              <ProfileField label="Master's End" value={clientProfileData.mastersEndDate || fmtDate(clientProfileData.mastersGradMonthYear)} />
                             </div>
                           </div>
                           {/* Professional */}
@@ -3893,25 +3872,36 @@ export default function ClientOnboarding() {
                               <ProfileField label="Reason for Leaving" value={clientProfileData.reasonForLeaving} className="col-span-2" />
                             </div>
                           </div>
-                          {/* Links */}
+                          {/* Links & Documents */}
                           <div className="p-5 border-t border-slate-100">
                             <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Links & Documents</h4>
                             <div className="flex flex-wrap gap-2">
                               {clientProfileData.linkedinUrl && (
-                                <a href={clientProfileData.linkedinUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">LinkedIn</a>
+                                <a href={clientProfileData.linkedinUrl.startsWith('http') ? clientProfileData.linkedinUrl : `https://${clientProfileData.linkedinUrl}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">LinkedIn</a>
                               )}
                               {clientProfileData.githubUrl && (
-                                <a href={clientProfileData.githubUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">GitHub</a>
+                                <a href={clientProfileData.githubUrl.startsWith('http') ? clientProfileData.githubUrl : `https://${clientProfileData.githubUrl}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">GitHub</a>
                               )}
                               {clientProfileData.resumeUrl && (
-                                <a href={clientProfileData.resumeUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">Resume</a>
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg border border-slate-200">{clientProfileData.resumeUrl}</span>
                               )}
                               {clientProfileData.coverLetterUrl && (
-                                <a href={clientProfileData.coverLetterUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-primary bg-primary/5 rounded-lg border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-colors">Cover Letter</a>
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg border border-slate-200">{clientProfileData.coverLetterUrl}</span>
                               )}
-                              {!clientProfileData.linkedinUrl && !clientProfileData.githubUrl && !clientProfileData.resumeUrl && !clientProfileData.coverLetterUrl && (
+                              {clientProfileData.portfolioFileUrl && (
+                                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg border border-slate-200">{clientProfileData.portfolioFileUrl}</span>
+                              )}
+                              {!clientProfileData.linkedinUrl && !clientProfileData.githubUrl && !clientProfileData.resumeUrl && !clientProfileData.coverLetterUrl && !clientProfileData.portfolioFileUrl && (
                                 <span className="text-sm text-slate-400">No links</span>
                               )}
+                            </div>
+                          </div>
+                          {/* Profile dates */}
+                          <div className="p-5 border-t border-slate-100">
+                            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4">Profile dates</h4>
+                            <div className="grid grid-cols-2 gap-x-8 gap-y-0">
+                              <ProfileField label="Created" value={fmtDate(clientProfileData.createdAt, true)} />
+                              <ProfileField label="Updated" value={fmtDate(clientProfileData.updatedAt, true)} />
                             </div>
                           </div>
                         </div>
@@ -4686,22 +4676,24 @@ export default function ClientOnboarding() {
         </div>
       )}
 
-      {/* Edit Client Number Modal */}
+      {/* Edit Client Details Modal (name + number) */}
       {showEditClientNumberModal && editingClientNumberEmail && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
-          if (e.target === e.currentTarget && !savingClientNumber) {
+          if (e.target === e.currentTarget && !savingClientNumber && !savingClientName) {
             setShowEditClientNumberModal(false);
             setEditingClientNumberEmail(null);
             setEditingClientNumberValue('');
+            setEditingClientNameJobId(null);
+            setEditingClientNameValue('');
           }
         }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between">
-              <h2 className="text-lg font-bold text-gray-900">Edit Client Number</h2>
+              <h2 className="text-lg font-bold text-gray-900">Edit Client Details</h2>
               <button
                 type="button"
-                onClick={() => { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); }}
-                disabled={savingClientNumber}
+                onClick={() => { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); setEditingClientNameJobId(null); setEditingClientNameValue(''); }}
+                disabled={savingClientNumber || savingClientName}
                 className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50"
               >
                 <X className="w-5 h-5" />
@@ -4709,19 +4701,25 @@ export default function ClientOnboarding() {
             </div>
             <div className="p-6 space-y-4">
               <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">Client Name</label>
+                <input
+                  type="text"
+                  value={editingClientNameValue}
+                  onChange={(e) => setEditingClientNameValue(e.target.value)}
+                  placeholder="Client name"
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary text-sm"
+                  autoFocus
+                />
+              </div>
+              <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1.5">Client Number</label>
                 <input
                   type="number"
                   min={1}
                   value={editingClientNumberValue}
                   onChange={(e) => setEditingClientNumberValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveClientNumber(editingClientNumberEmail, editingClientNumberValue);
-                    if (e.key === 'Escape') { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); }
-                  }}
                   placeholder="e.g. 5810"
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary text-sm"
-                  autoFocus
                 />
                 <p className="text-xs text-gray-500 mt-1">Leave empty to clear the number</p>
               </div>
@@ -4729,19 +4727,28 @@ export default function ClientOnboarding() {
             <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">
               <button
                 type="button"
-                onClick={() => { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); }}
-                disabled={savingClientNumber}
+                onClick={() => { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); setEditingClientNameJobId(null); setEditingClientNameValue(''); }}
+                disabled={savingClientNumber || savingClientName}
                 className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={() => handleSaveClientNumber(editingClientNumberEmail, editingClientNumberValue)}
-                disabled={savingClientNumber}
+                onClick={async () => {
+                  // Save name if changed
+                  const nameChanged = editingClientNameJobId && editingClientNameValue.trim();
+                  if (nameChanged) await saveClientName(editingClientNameJobId, editingClientNameValue);
+                  // Save number
+                  await handleSaveClientNumber(editingClientNumberEmail, editingClientNumberValue);
+                  setShowEditClientNumberModal(false);
+                  setEditingClientNameJobId(null);
+                  setEditingClientNameValue('');
+                }}
+                disabled={savingClientNumber || savingClientName}
                 className="px-4 py-2 text-sm font-semibold text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
               >
-                {savingClientNumber ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {(savingClientNumber || savingClientName) ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                 Save
               </button>
             </div>

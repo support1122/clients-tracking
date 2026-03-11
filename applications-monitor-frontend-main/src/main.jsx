@@ -4,6 +4,19 @@ import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
 
+// Log unhandled promise rejections with clear prefix. Many "message channel closed" errors come from
+// browser extensions (ad blockers, React DevTools, etc.), not from app code. Filter by [App] to see real errors.
+window.addEventListener('unhandledrejection', (event) => {
+  const msg = String(event.reason?.message || event.reason || '');
+  const isExtensionError = /message channel closed|asynchronous response/i.test(msg);
+  if (isExtensionError) {
+    console.info('[App] Ignored extension error (not from app):', msg);
+    event.preventDefault();
+  } else {
+    console.error('[App] Unhandled rejection:', msg, event.reason);
+  }
+});
+
 // Lazy-load all route components — only the visited route's JS is downloaded
 const Monitor = React.lazy(() => import('./components/Monitor'));
 const AdminDashboard = React.lazy(() => import('./components/AdminDashboard.jsx'));

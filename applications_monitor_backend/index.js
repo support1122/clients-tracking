@@ -3,6 +3,7 @@ import compression from 'compression';
 import mongoose from 'mongoose';
 import { JobModel } from './JobModel.js';
 import { ClientModel } from './ClientModel.js';
+import { ProfileModel, profileSchema } from './ProfileModel.js';
 import { UserModel } from './UserModel.js';
 import { SessionKeyModel } from './SessionKeyModel.js';
 import { ManagerModel } from './ManagerModel.js';
@@ -77,6 +78,19 @@ function getCachedProfile(email) {
 }
 function setCachedProfile(email, data) {
   profileCache.set(email, { data, exp: Date.now() + PROFILE_CACHE_TTL_MS });
+}
+
+// If flashfire dashboard uses a different DB, set PROFILE_MONGODB_URI to its MONGODB_URI to read profiles from there
+let profileConnection = null;
+function getProfileModel() {
+  const profileUri = process.env.PROFILE_MONGODB_URI || process.env.FLASHFIRE_MONGODB_URI;
+  if (profileUri && profileUri !== process.env.MONGODB_URI) {
+    if (!profileConnection) {
+      profileConnection = mongoose.createConnection(profileUri);
+    }
+    return profileConnection.models.Profile || profileConnection.model('Profile', profileSchema);
+  }
+  return ProfileModel;
 }
 
 const fileUpload = multer({
@@ -3979,6 +3993,22 @@ app.post('/api/upload/onboarding-attachment', verifyToken, fileUpload.single('fi
   }
 });
 
+// Robust date parser: handles ISO, locale strings (e.g. "3/11/2026, 10:30:00 AM"), epoch ms, etc.
+function parseFlexibleDate(val) {
+  if (!val) return null;
+  if (val instanceof Date) return Number.isNaN(val.getTime()) ? null : val;
+  if (typeof val === 'number') { const d = new Date(val); return Number.isNaN(d.getTime()) ? null : d; }
+  const s = String(val).trim();
+  if (!s || s === ' ') return null;
+  // Try native parse first (handles ISO & common formats)
+  let d = new Date(s);
+  if (!Number.isNaN(d.getTime())) return d;
+  // Try DD/MM/YYYY or DD-MM-YYYY (Indian format)
+  const ddmm = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if (ddmm) { d = new Date(`${ddmm[3]}-${ddmm[2].padStart(2,'0')}-${ddmm[1].padStart(2,'0')}`); if (!Number.isNaN(d.getTime())) return d; }
+  return null;
+}
+
 // Check if profile has all required fields (matches flashfire ProfileContext isProfileComplete)
 function isProfileComplete(profile) {
   if (!profile || typeof profile !== 'object') return false;
@@ -3998,74 +4028,142 @@ function isProfileComplete(profile) {
   return ok && !!profile.confirmAccuracy && !!profile.agreeTos;
 }
 
-// Proxy to fetch client profile from flashfire (for resume-making context in tickets)
-// Cached 90s + 10s timeout so dashboard details load fast and don't hang
+// Escape special regex chars so email is safe for case-insensitive match
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Fetch client profile from same DB as flashfire dashboard (ProfileModel = "profiles" collection)
+// Always returns 200 with { userProfile, profileComplete, message? }
+// Email lookup is case-insensitive so we find profile regardless of how email was stored
 app.get('/api/onboarding/client-profile/:email', verifyToken, async (req, res) => {
+  const send = (userProfile, profileComplete, message) => {
+    const payload = { userProfile: userProfile ?? null, profileComplete: !!profileComplete, message: message || undefined };
+    return res.status(200).json(payload);
+  };
+
   try {
     const { email } = req.params;
-    if (!email) return res.status(400).json({ error: 'Email is required' });
+    if (!email) return res.status(400).json({ error: 'Email is required', userProfile: null, profileComplete: false });
     const emailLower = email.toLowerCase().trim();
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[client-profile] Lookup:', { raw: email, normalized: emailLower });
+    }
 
     const cached = getCachedProfile(emailLower);
     if (cached) {
       return res.status(200).json(cached);
     }
 
-    const url = `${FLASHFIRE_API_BASE_URL}/get-profile?email=${encodeURIComponent(emailLower)}`;
-    const PROFILE_FETCH_TIMEOUT_MS = 10000;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), PROFILE_FETCH_TIMEOUT_MS);
-    let response;
-    try {
-      response = await fetch(url, { signal: controller.signal });
-    } catch (fetchErr) {
-      clearTimeout(timeoutId);
-      if (fetchErr.name === 'AbortError') {
-        console.warn('getClientProfile: flashfire get-profile timed out for', emailLower);
-        return res.status(504).json({ error: 'Profile service took too long. Try again in a moment.', profileComplete: false });
-      }
-      throw fetchErr;
+    const Profile = getProfileModel();
+    // Try exact match first, then case-insensitive (profiles may be stored with original email casing)
+    let profile = await Profile.findOne({ email: emailLower }).lean().catch(() => null);
+    if (!profile) {
+      const re = new RegExp(`^${escapeRegex(email.trim())}$`, 'i');
+      profile = await Profile.findOne({ email: re }).lean().catch(() => null);
     }
-    clearTimeout(timeoutId);
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
+    if (!profile) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[client-profile] No profile in DB for email:', emailLower, '(tried exact + case-insensitive). Ensure MONGODB_URI points to the same DB as the flashfire dashboard (profiles collection).');
+      }
+      const payload = { userProfile: null, profileComplete: false, message: 'Profile not found' };
+      setCachedProfile(emailLower, payload);
       await OnboardingJobModel.updateMany(
         { clientEmail: emailLower },
         { $set: { profileComplete: false } }
       ).catch(() => {});
-      return res.status(response.status).json({ ...data, profileComplete: false });
+      return send(null, false, 'Profile not found');
     }
 
-    const profile = data?.userProfile ?? data;
     const complete = isProfileComplete(profile);
-    const now = new Date();
-    let dashboardDetailsCompletedAt = complete ? now : null;
+
+    // Build the update — always sync profileComplete
+    const updateFields = { profileComplete: complete };
+
     if (complete) {
-      const client = await ClientModel.findOne({ email: emailLower }).select('portfolioMade portfolioMadeDate').lean().catch(() => null);
-      const pd = client?.portfolioMadeDate;
-      if (client?.portfolioMade === true && pd && String(pd).trim() && String(pd).trim() !== ' ') {
-        const d = new Date(pd);
-        if (!Number.isNaN(d.getTime())) dashboardDetailsCompletedAt = d;
+      // Only set dashboardDetailsCompletedAt if it isn't already set on the job(s)
+      // This preserves the original date and avoids resetting to "now" on every call
+      const existingJob = await OnboardingJobModel.findOne(
+        { clientEmail: emailLower, dashboardDetailsCompletedAt: { $ne: null } }
+      ).select('dashboardDetailsCompletedAt').lean().catch(() => null);
+
+      if (!existingJob?.dashboardDetailsCompletedAt) {
+        // First time marking complete — use profile's createdAt (when client filled the dashboard)
+        let completedAt = profile.createdAt || profile.updatedAt || new Date();
+        // If portfolioMadeDate exists and is valid, prefer that
+        const client = await ClientModel.findOne({ email: emailLower }).select('portfolioMade portfolioMadeDate').lean().catch(() => null);
+        const pd = client?.portfolioMadeDate;
+        if (client?.portfolioMade === true && pd && String(pd).trim() && String(pd).trim() !== ' ') {
+          const d = new Date(pd);
+          if (!Number.isNaN(d.getTime())) completedAt = d;
+        }
+        updateFields.dashboardDetailsCompletedAt = completedAt;
       }
+      // else: already has a date, don't overwrite
     }
+
     await OnboardingJobModel.updateMany(
       { clientEmail: emailLower },
-      {
-        $set: {
-          profileComplete: complete,
-          ...(complete ? { dashboardDetailsCompletedAt } : {})
-        }
-      }
+      { $set: updateFields }
     ).catch(() => {});
     invalidateJobListCache();
 
-    const payload = { ...data, profileComplete: complete };
+    const payload = { userProfile: profile, profileComplete: complete };
     setCachedProfile(emailLower, payload);
-    res.status(200).json(payload);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[client-profile] Found profile for:', emailLower);
+    }
+    return res.status(200).json(payload);
   } catch (e) {
-    console.error('getClientProfile proxy:', e);
-    res.status(500).json({ error: e.message || 'Failed to fetch client profile', profileComplete: false });
+    console.error('getClientProfile:', e);
+    return send(null, false, e.message || 'Failed to fetch client profile');
+  }
+});
+
+// Batch check profileComplete for multiple emails at once (used on mount to sync card badges)
+app.post('/api/onboarding/batch-profile-status', verifyToken, async (req, res) => {
+  try {
+    const { emails } = req.body || {};
+    if (!Array.isArray(emails) || emails.length === 0) return res.status(200).json({ results: {} });
+    const uniqueEmails = [...new Set(emails.map(e => (e || '').toLowerCase().trim()).filter(Boolean))].slice(0, 100);
+    const Profile = getProfileModel();
+    const profiles = await Profile.find({ email: { $in: uniqueEmails } }).select('email firstName lastName contactNumber dob bachelorsUniDegree bachelorsGradMonthYear visaStatus address preferredRoles experienceLevel expectedSalaryRange preferredLocations targetCompanies linkedinUrl resumeUrl confirmAccuracy agreeTos createdAt updatedAt').lean();
+    const profileMap = new Map(profiles.map(p => [(p.email || '').toLowerCase(), p]));
+    const results = {};
+    const bulkUpdates = [];
+
+    // Find jobs that already have dashboardDetailsCompletedAt set (to avoid overwriting)
+    const jobsWithDate = await OnboardingJobModel.find(
+      { clientEmail: { $in: uniqueEmails }, dashboardDetailsCompletedAt: { $ne: null } }
+    ).select('clientEmail').lean().catch(() => []);
+    const emailsWithDate = new Set((jobsWithDate || []).map(j => j.clientEmail));
+
+    for (const email of uniqueEmails) {
+      const profile = profileMap.get(email);
+      const complete = profile ? isProfileComplete(profile) : false;
+      results[email] = complete;
+
+      const updateSet = { profileComplete: complete };
+      // Set dashboardDetailsCompletedAt only if complete AND not already set
+      if (complete && !emailsWithDate.has(email)) {
+        updateSet.dashboardDetailsCompletedAt = profile.createdAt || profile.updatedAt || new Date();
+      }
+
+      bulkUpdates.push({
+        updateMany: {
+          filter: { clientEmail: email, profileComplete: { $ne: complete } },
+          update: { $set: updateSet }
+        }
+      });
+    }
+    // Batch update job models in background (fire-and-forget)
+    if (bulkUpdates.length > 0) {
+      OnboardingJobModel.bulkWrite(bulkUpdates).then(() => invalidateJobListCache()).catch(() => {});
+    }
+    return res.status(200).json({ results });
+  } catch (e) {
+    console.error('batch-profile-status error:', e);
+    return res.status(200).json({ results: {} });
   }
 });
 

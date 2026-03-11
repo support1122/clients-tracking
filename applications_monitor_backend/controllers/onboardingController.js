@@ -1,4 +1,5 @@
 import { OnboardingJobModel, ONBOARDING_STATUSES_LIST } from '../OnboardingJobModel.js';
+import { JobModel } from '../JobModel.js';
 import { OnboardingJobCounterModel } from '../OnboardingJobCounterModel.js';
 import { ClientCounterModel } from '../ClientCounterModel.js';
 import { OnboardingNotificationModel } from '../OnboardingNotificationModel.js';
@@ -226,12 +227,21 @@ export async function listOnboardingJobs(req, res) {
     const clientEmails = [...new Set(jobs.map(job => (job.clientEmail || '').toLowerCase()).filter(Boolean))];
     const managerNames = [...new Set(jobs.map(j => (j.dashboardManagerName || '').trim()).filter(Boolean))];
 
-    const [clients, managers] = await Promise.all([
+    // Batch: fetch earliest job card date per client from client dashboard (JobModel)
+    const [clients, managers, firstJobAgg] = await Promise.all([
       clientEmails.length
         ? ClientModel.find({ email: { $in: clientEmails } }).select('email status isPaused clientNumber').lean()
         : Promise.resolve([]),
       managerNames.length
         ? ManagerModel.find({ fullName: { $in: managerNames }, isActive: true }).select('fullName email').lean()
+        : Promise.resolve([]),
+      clientEmails.length
+        ? JobModel.aggregate([
+            { $addFields: { _userIdLower: { $toLower: '$userID' } } },
+            { $match: { _userIdLower: { $in: clientEmails } } },
+            { $sort: { _id: 1 } },
+            { $group: { _id: '$_userIdLower', firstObjId: { $first: '$_id' } } }
+          ])
         : Promise.resolve([])
     ]);
 
@@ -239,6 +249,13 @@ export async function listOnboardingJobs(req, res) {
       clients.map(c => [c.email.toLowerCase(), { status: c.status || 'active', isPaused: c.isPaused || false, clientNumber: c.clientNumber }])
     );
     const managerEmailByName = new Map(managers.map(m => [m.fullName, m.email]));
+    // Map: clientEmail → earliest job card creation date (from MongoDB ObjectId timestamp)
+    const firstJobDateMap = new Map();
+    for (const row of firstJobAgg) {
+      if (row._id && row.firstObjId) {
+        firstJobDateMap.set(row._id, row.firstObjId.getTimestamp());
+      }
+    }
 
     const now = new Date();
     const enrichedJobs = jobs.map(job => {
@@ -248,8 +265,9 @@ export async function listOnboardingJobs(req, res) {
       const clientNumber = clientInfo.clientNumber != null ? clientInfo.clientNumber : job.clientNumber;
       const attachmentNames = (job.attachments || []).map(a => ({ name: a.name || '' }));
       const { attachments: _att, ...rest } = job;
-      // Days = from job createdAt to now (or to applicationsCompletedAt if completed). Each job gets its own value.
-      const startDate = job.createdAt || now;
+      // Days = from the first job card added in client dashboard to now (or applicationsCompletedAt if completed).
+      // Falls back to onboarding job createdAt if no job cards exist yet.
+      const startDate = firstJobDateMap.get(clientEmail) || job.createdAt || now;
       let endDate = job.applicationsCompletedAt;
       if (!endDate && job.status === 'completed' && (job.moveHistory || []).length > 0) {
         const completedMove = job.moveHistory.find(m => m.toStatus === 'completed');
@@ -320,9 +338,18 @@ export async function getOnboardingJobById(req, res) {
     // Client model is source of truth for clientNumber
     if (client?.clientNumber != null) job.clientNumber = client.clientNumber;
 
-    // Days = from job createdAt to now (or applicationsCompletedAt). Same logic as list.
+    // Days = from the first job card added in client dashboard to now (or applicationsCompletedAt).
     const now = new Date();
-    const startDate = job.createdAt || now;
+    const clientEmailLower = (job.clientEmail || '').toLowerCase();
+    let firstJobDate = null;
+    if (clientEmailLower) {
+      const earliest = await JobModel.findOne({ userID: new RegExp(`^${clientEmailLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') })
+        .sort({ _id: 1 }).select('_id').lean().catch(() => null);
+      if (earliest?._id) {
+        firstJobDate = earliest._id.getTimestamp();
+      }
+    }
+    const startDate = firstJobDate || job.createdAt || now;
     let endDate = job.applicationsCompletedAt;
     if (!endDate && job.status === 'completed' && (job.moveHistory || []).length > 0) {
       const completedMove = job.moveHistory.find(m => m.toStatus === 'completed');
