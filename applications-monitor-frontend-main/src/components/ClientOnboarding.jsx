@@ -93,6 +93,7 @@ export default function ClientOnboarding() {
   // ── Issues panel ──
   const [nonResolvedIssues, setNonResolvedIssues] = useState({ count: 0, items: [], perUser: [], pendingMoves: [] });
   const [showIssuesPanel, setShowIssuesPanel] = useState(false);
+  const [resolvingIssueKey, setResolvingIssueKey] = useState(null);
   const [issuesFilterUser, setIssuesFilterUser] = useState(null);
 
   // ── Import ──
@@ -374,7 +375,7 @@ export default function ClientOnboarding() {
       const url = isAdminUser
         ? `${API_BASE}/api/onboarding/issues/non-resolved?admin=1`
         : `${API_BASE}/api/onboarding/issues/non-resolved`;
-      const res = await fetch(url, { headers: AUTH_HEADERS() });
+      const res = await fetch(url, { headers: AUTH_HEADERS(), cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (handleAuthFailure(res, data)) return;
@@ -1288,51 +1289,106 @@ export default function ClientOnboarding() {
                           .map((item, idx) => {
                           const job = jobs.find((j) => String(j._id) === String(item.jobId));
                           const displayName = item.clientNumber != null ? `${item.clientNumber} – ${item.clientName || ''}` : (item.clientName || '');
+                          const resolvingKey = `${item.jobId}-${item.commentId}`;
                           return (
                             <li key={item.commentId?.toString() || idx}>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (job) {
-                                    handleCardClick(job);
-                                    setShowIssuesPanel(false);
-                                    setIssuesFilterUser(null);
-                                  } else {
-                                    fetchJobs().then(() => {
-                                      const state = useOnboardingStore.getState();
-                                      const found = (state.jobs || []).find((j) => String(j._id) === String(item.jobId));
-                                      if (found) handleCardClick(found);
-                                    });
-                                    setShowIssuesPanel(false);
-                                    setIssuesFilterUser(null);
-                                  }
-                                }}
-                                className="w-full text-left px-4 py-3 rounded-xl text-sm transition-all flex gap-3 hover:bg-amber-50/50 group"
-                              >
-                                <div className="mt-1 w-2 h-2 rounded-full flex-shrink-0 bg-amber-500" />
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-gray-900 font-medium leading-snug">
-                                    <span className="font-bold">#{item.jobNumber}</span> – {displayName}
-                                  </p>
-                                  {item.snippet && (
-                                    <p className="text-xs text-gray-500 mt-1 truncate">"{item.snippet}"</p>
-                                  )}
-                                  {isAdmin && item.unresolvedEmails?.length > 0 && (
-                                    <div className="flex flex-wrap gap-1 mt-1.5">
-                                      {item.unresolvedEmails.map(email => (
-                                        <span key={email} className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-medium">
-                                          {email.split('@')[0]}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                  <p className="text-[10px] text-gray-400 mt-1.5 font-medium">
-                                    {item.authorName && <span className="text-gray-500">{item.authorName} · </span>}
-                                    {item.createdAt ? `${new Date(item.createdAt).toLocaleDateString()} at ${new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
-                                  </p>
-                                </div>
-                                <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-primary flex-shrink-0" />
-                              </button>
+                              <div className="flex gap-3 items-stretch w-full text-left px-4 py-3 rounded-xl text-sm transition-all hover:bg-amber-50/50 group">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (job) {
+                                      handleCardClick(job);
+                                      setShowIssuesPanel(false);
+                                      setIssuesFilterUser(null);
+                                    } else {
+                                      fetchJobs().then(() => {
+                                        const state = useOnboardingStore.getState();
+                                        const found = (state.jobs || []).find((j) => String(j._id) === String(item.jobId));
+                                        if (found) handleCardClick(found);
+                                      });
+                                      setShowIssuesPanel(false);
+                                      setIssuesFilterUser(null);
+                                    }
+                                  }}
+                                  className="flex-1 min-w-0 flex gap-3"
+                                >
+                                  <div className="mt-1 w-2 h-2 rounded-full flex-shrink-0 bg-amber-500" />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-gray-900 font-medium leading-snug">
+                                      <span className="font-bold">#{item.jobNumber}</span> – {displayName}
+                                    </p>
+                                    {item.snippet && (
+                                      <p className="text-xs text-gray-500 mt-1 truncate">"{item.snippet}"</p>
+                                    )}
+                                    {isAdmin && item.unresolvedEmails?.length > 0 && (
+                                      <div className="flex flex-wrap gap-1 mt-1.5">
+                                        {item.unresolvedEmails.map(email => (
+                                          <span key={email} className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-medium">
+                                            {email.split('@')[0]}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                    <p className="text-[10px] text-gray-400 mt-1.5 font-medium">
+                                      {item.authorName && <span className="text-gray-500">{item.authorName} · </span>}
+                                      {item.createdAt ? `${new Date(item.createdAt).toLocaleDateString()} at ${new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}
+                                    </p>
+                                  </div>
+                                  <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-primary flex-shrink-0" />
+                                </button>
+                                {isAdmin && item.jobId && item.commentId && (
+                                  <button
+                                    type="button"
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      setResolvingIssueKey(resolvingKey);
+                                      const commentIdStr = String(item.commentId);
+                                      const jobIdStr = String(item.jobId);
+                                      const prevIssues = nonResolvedIssues;
+                                      setNonResolvedIssues((curr) => {
+                                        const nextItems = (curr.items || []).filter(
+                                          (i) => String(i.commentId) !== commentIdStr || String(i.jobId) !== jobIdStr
+                                        );
+                                        const nextCount = Math.max(0, (curr.count ?? 0) - 1);
+                                        const userCounts = {};
+                                        nextItems.forEach((it) => {
+                                          (it.unresolvedEmails || []).forEach((email) => {
+                                            userCounts[email] = (userCounts[email] || 0) + 1;
+                                          });
+                                        });
+                                        const nextPerUser = Object.entries(userCounts)
+                                          .map(([email, count]) => ({ email, count }))
+                                          .sort((a, b) => b.count - a.count);
+                                        return { ...curr, items: nextItems, count: nextCount, perUser: nextPerUser };
+                                      });
+                                      try {
+                                        const res = await fetch(`${API_BASE}/api/onboarding/jobs/${item.jobId}/comments/${commentIdStr}/resolve`, {
+                                          method: 'PATCH',
+                                          headers: AUTH_HEADERS()
+                                        });
+                                        const data = await res.json();
+                                        if (!res.ok) throw new Error(data.error || 'Failed to mark as resolved');
+                                        setJobs((prev) => prev.map((j) => (j._id === jobIdStr ? data.job : j)));
+                                        if (selectedJob?._id === jobIdStr) setSelectedJob(data.job);
+                                        toastUtils.success('Marked as resolved');
+                                        await fetchNonResolvedIssues();
+                                      } catch (err) {
+                                        toastUtils.error(err.message || 'Failed to mark as resolved');
+                                        setNonResolvedIssues(prevIssues);
+                                        await fetchNonResolvedIssues();
+                                      } finally {
+                                        setResolvingIssueKey(null);
+                                      }
+                                    }}
+                                    disabled={resolvingIssueKey === resolvingKey}
+                                    className="flex-shrink-0 self-center px-3 py-1.5 text-xs font-medium rounded-lg bg-green-500 text-white hover:bg-green-600 disabled:opacity-50 transition-colors inline-flex items-center gap-1.5"
+                                    title="Mark as resolved (admin)"
+                                  >
+                                    {resolvingIssueKey === resolvingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />}
+                                    Resolve
+                                  </button>
+                                )}
+                              </div>
                             </li>
                           );
                         })

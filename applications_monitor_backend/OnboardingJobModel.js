@@ -39,8 +39,9 @@ const moveHistorySchema = new mongoose.Schema({
   fromStatus: { type: String, required: false },
   toStatus: { type: String, required: false },
   movedBy: { type: String, required: true },
+  movedByName: { type: String, default: '' },
   movedAt: { type: Date, default: Date.now },
-  // For assignment events: 'dashboard_manager', 'linkedin_member'
+  // For assignment events: 'dashboard_manager', 'linkedin_member'. client_phase_set = "New" in Client Job Analysis.
   actionType: { type: String, default: 'status_change', enum: ['status_change', 'assignment', 'client_paused', 'client_unpaused', 'client_phase_set'] },
   targetRole: { type: String },
   targetName: { type: String }
@@ -77,6 +78,7 @@ const onboardingJobSchema = new mongoose.Schema({
   operatorEmail: { type: String, default: '', trim: true, lowercase: true },
   operatorName: { type: String, default: '', trim: true },
   dashboardManagerName: { type: String, default: '', trim: true },
+  taggedDashboardManagerNames: [{ type: String, trim: true }],
   bachelorsStartDate: { type: String, default: '', trim: true },
   mastersEndDate: { type: String, default: '', trim: true },
   dashboardCredentials: {

@@ -56,15 +56,21 @@ const VALID_TRANSITIONS = {
   completed: []
 };
 
-/** Add client-level action (pause/unpause/phase) to the job's move history for audit. */
-export async function addClientActionToJobMoveHistory(clientEmail, actionType, movedBy) {
+/**
+ * Add client-level action (pause/unpause/New phase) to the job's move history for audit.
+ * movedByPayload: string (email) or { email, name }.
+ */
+export async function addClientActionToJobMoveHistory(clientEmail, actionType, movedByPayload) {
   if (!clientEmail || !actionType) return;
   const job = await OnboardingJobModel.findOne({ clientEmail: (clientEmail || '').toLowerCase().trim() });
   if (!job) return;
+  const email = typeof movedByPayload === 'string' ? (movedByPayload || 'unknown') : (movedByPayload?.email || 'unknown');
+  const name = typeof movedByPayload === 'string' ? '' : (movedByPayload?.name || '');
   if (!job.moveHistory) job.moveHistory = [];
   job.moveHistory.push({
     actionType,
-    movedBy: movedBy || 'unknown',
+    movedBy: email,
+    movedByName: name,
     movedAt: new Date()
   });
   await job.save();
@@ -147,6 +153,7 @@ export async function createOnboardingJobPayload(payload) {
   const clientNumber = payload.clientNumber != null ? payload.clientNumber : await getNextClientNumber();
   const nextResume = await getNextResumeMaker();
   const createdBy = (payload.createdBy || '').trim() || 'system';
+  const createdByName = (payload.createdByName || '').trim() || '';
   const doc = {
     jobNumber,
     clientNumber,
@@ -165,7 +172,7 @@ export async function createOnboardingJobPayload(payload) {
     resumeMakerName: nextResume?.name || '',
     attachments: [],
     comments: [],
-    moveHistory: [{ fromStatus: 'created', toStatus: 'resume_in_progress', movedBy: createdBy, movedAt: new Date() }]
+    moveHistory: [{ fromStatus: 'created', toStatus: 'resume_in_progress', movedBy: createdBy, movedByName: createdByName, movedAt: new Date() }]
   };
   const job = await OnboardingJobModel.create(doc);
   return job;
@@ -176,7 +183,7 @@ export async function createOnboardingJobPayload(payload) {
 // attachments trimmed to names only in send step for card step-status badges
 const LIST_PROJECTION = 'jobNumber clientNumber clientEmail clientName planType status ' +
   'resumeMakerEmail resumeMakerName linkedInMemberEmail linkedInMemberName ' +
-  'operatorEmail operatorName csmEmail csmName dashboardManagerName linkedInPhaseStarted adminUnreadCount pendingMoveRequest ' +
+  'operatorEmail operatorName csmEmail csmName dashboardManagerName taggedDashboardManagerNames linkedInPhaseStarted adminUnreadCount pendingMoveRequest ' +
   'dashboardDetailsCompletedAt applicationsCompletedAt profileComplete createdAt updatedAt attachments';
 
 export async function listOnboardingJobs(req, res) {
@@ -201,11 +208,12 @@ export async function listOnboardingJobs(req, res) {
     const sendJobsForUser = (jobs) => {
       let visibleJobs = jobs;
 
-      // Team Leads see only tickets assigned to their linked dashboard manager
+      // Team Leads (and dashboard managers) see tickets where they are primary or tagged
       if (isTeamLead && effectiveManagerName) {
         visibleJobs = jobs.filter((job) => {
-          const managerName = (job.dashboardManagerName || '').trim().toLowerCase();
-          return managerName && managerName === effectiveManagerName;
+          const primary = (job.dashboardManagerName || '').trim().toLowerCase();
+          const tagged = (job.taggedDashboardManagerNames || []).map((n) => (n || '').trim().toLowerCase()).filter(Boolean);
+          return (primary && primary === effectiveManagerName) || tagged.includes(effectiveManagerName);
         });
       }
 
@@ -313,8 +321,10 @@ export async function getOnboardingJobById(req, res) {
           const dbUser = await UserModel.findOne({ email: userEmail }).select('linkedDashboardManagerName name').lean();
           effectiveManagerName = ((dbUser?.linkedDashboardManagerName || dbUser?.name || req.user?.name || '').trim()).toLowerCase();
         }
-        const managerName = (job.dashboardManagerName || '').trim().toLowerCase();
-        if (!effectiveManagerName || !managerName || managerName !== effectiveManagerName) {
+        const primary = (job.dashboardManagerName || '').trim().toLowerCase();
+        const tagged = (job.taggedDashboardManagerNames || []).map((n) => (n || '').trim().toLowerCase()).filter(Boolean);
+        const canView = primary && primary === effectiveManagerName || tagged.includes(effectiveManagerName);
+        if (!effectiveManagerName || !canView) {
           return res.status(403).json({ error: 'Not authorized to view this onboarding job' });
         }
       }
@@ -328,7 +338,7 @@ export async function getOnboardingJobById(req, res) {
     job = await OnboardingJobModel.findById(id).lean();
     if (!job) return res.status(404).json({ error: 'Onboarding job not found' });
 
-    // Restrict Team Leads to only tickets assigned to their linked dashboard manager
+    // Restrict Team Leads to tickets where they are primary or tagged dashboard manager
     const userRole = req.user?.role || '';
     if (userRole === 'team_lead') {
       const userEmail = (req.user?.email || '').toLowerCase().trim();
@@ -337,8 +347,10 @@ export async function getOnboardingJobById(req, res) {
         const dbUser = await UserModel.findOne({ email: userEmail }).select('linkedDashboardManagerName name').lean();
         effectiveManagerName = ((dbUser?.linkedDashboardManagerName || dbUser?.name || req.user?.name || '').trim()).toLowerCase();
       }
-      const managerName = (job.dashboardManagerName || '').trim().toLowerCase();
-      if (!effectiveManagerName || !managerName || managerName !== effectiveManagerName) {
+      const primary = (job.dashboardManagerName || '').trim().toLowerCase();
+      const tagged = (job.taggedDashboardManagerNames || []).map((n) => (n || '').trim().toLowerCase()).filter(Boolean);
+      const canView = (primary && primary === effectiveManagerName) || tagged.includes(effectiveManagerName);
+      if (!effectiveManagerName || !canView) {
         return res.status(403).json({ error: 'Not authorized to view this onboarding job' });
       }
     }
@@ -402,7 +414,7 @@ function validateTransition(fromStatus, toStatus) {
 export async function patchOnboardingJob(req, res) {
   try {
     const { id } = req.params;
-    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, operatorEmail, operatorName, comment, clientName, gmailCredentials, dashboardManagerName } = req.body || {};
+    const { status, csmEmail, csmName, resumeMakerEmail, resumeMakerName, linkedInMemberEmail, linkedInMemberName, operatorEmail, operatorName, comment, clientName, gmailCredentials, dashboardManagerName, taggedDashboardManagerNames } = req.body || {};
     
     // Validate ID format
     if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
@@ -450,6 +462,7 @@ export async function patchOnboardingJob(req, res) {
         fromStatus,
         toStatus: status,
         movedBy: req.user?.email || 'unknown',
+        movedByName: req.user?.name || '',
         movedAt
       });
       if (status === 'completed') job.applicationsCompletedAt = movedAt;
@@ -532,11 +545,13 @@ export async function patchOnboardingJob(req, res) {
           targetRole: 'linkedin_member',
           targetName: newLinkedIn,
           movedBy: req.user?.email || 'unknown',
+          movedByName: req.user?.name || '',
           movedAt: new Date()
         });
       }
     }
-    if (isAdmin && operatorEmail !== undefined) {
+    const canManageOperations = isAdmin || isCsm || isTeamLead;
+    if (canManageOperations && operatorEmail !== undefined) {
       job.operatorEmail = (operatorEmail || '').toLowerCase().trim();
       job.operatorName = operatorName || '';
       // Auto-add client to operator's managedUsers when assigning (so they appear in operations list)
@@ -570,6 +585,7 @@ export async function patchOnboardingJob(req, res) {
           targetRole: 'dashboard_manager',
           targetName: newName,
           movedBy: req.user?.email || 'unknown',
+          movedByName: req.user?.name || '',
           movedAt: new Date()
         });
       }
@@ -578,6 +594,9 @@ export async function patchOnboardingJob(req, res) {
         { email: (job.clientEmail || '').toLowerCase() },
         { $set: { dashboardTeamLeadName: job.dashboardManagerName, updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata') } }
       );
+    }
+    if ((isAdmin || isCsm || isTeamLead) && taggedDashboardManagerNames !== undefined && Array.isArray(taggedDashboardManagerNames)) {
+      job.taggedDashboardManagerNames = taggedDashboardManagerNames.map((n) => (n && String(n).trim()) || '').filter(Boolean);
     }
 
     // Handle Gmail credentials update with history
@@ -701,6 +720,7 @@ export async function patchOnboardingJob(req, res) {
     }
 
     jobListCache.clear(); // invalidate list cache after any mutation
+    jobDetailCache.del(`job:${id}`);
 
     // Use the already-mutated job object — avoids an extra findById round-trip
     const updated = job.toObject();
@@ -745,7 +765,8 @@ export async function postOnboardingJob(req, res) {
       bachelorsStartDate: bachelorsStartDate || '',
       mastersEndDate: mastersEndDate || '',
       dashboardCredentials: dashboardCredentials || {},
-      createdBy: req.user?.email || ''
+      createdBy: req.user?.email || '',
+      createdByName: req.user?.name || ''
     });
     jobListCache.clear(); // invalidate list cache after new ticket
     
@@ -888,6 +909,7 @@ export async function resolveOnboardingComment(req, res) {
     const { id: jobId, commentId } = req.params;
     const userEmail = (req.user?.email || '').toLowerCase().trim();
     if (!userEmail) return res.status(401).json({ error: 'Unauthorized' });
+    const isAdmin = req.user?.role === 'admin';
     const job = await OnboardingJobModel.findById(jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
     const comment = (job.comments || []).find(
@@ -895,13 +917,18 @@ export async function resolveOnboardingComment(req, res) {
     );
     if (!comment) return res.status(404).json({ error: 'Comment not found' });
     const taggedEmails = (comment.taggedUserIds || []).map(e => (e || '').toLowerCase().trim()).filter(Boolean);
-    if (!taggedEmails.includes(userEmail)) {
-      return res.status(403).json({ error: 'Only tagged users can mark this as resolved' });
-    }
     const resolvedByTagged = comment.resolvedByTagged || [];
-    if (resolvedByTagged.some(r => (r.email || '').toLowerCase() === userEmail)) {
-      return res.status(200).json({ job: job.toObject(), alreadyResolved: true });
+    const alreadyResolvedByUser = resolvedByTagged.some(r => (r.email || '').toLowerCase() === userEmail);
+
+    if (!isAdmin) {
+      if (!taggedEmails.includes(userEmail)) {
+        return res.status(403).json({ error: 'Only tagged users can mark this as resolved' });
+      }
+      if (alreadyResolvedByUser) {
+        return res.status(200).json({ job: job.toObject(), alreadyResolved: true });
+      }
     }
+
     const commentIndex = job.comments.findIndex(
       c => String(c._id) === commentId || String(c._id) === String(commentId)
     );
@@ -909,15 +936,34 @@ export async function resolveOnboardingComment(req, res) {
     if (!job.comments[commentIndex].resolvedByTagged) {
       job.comments[commentIndex].resolvedByTagged = [];
     }
-    job.comments[commentIndex].resolvedByTagged.push({
-      email: userEmail,
-      resolvedAt: new Date()
-    });
+    if (isAdmin) {
+      // Admin resolve: mark as resolved for everyone by adding all tagged users who haven't resolved yet
+      const existingResolvedEmails = new Set(
+        (job.comments[commentIndex].resolvedByTagged || []).map(r => (r.email || '').toLowerCase())
+      );
+      const now = new Date();
+      taggedEmails.forEach(email => {
+        if (!existingResolvedEmails.has(email)) {
+          job.comments[commentIndex].resolvedByTagged.push({ email, resolvedAt: now });
+          existingResolvedEmails.add(email);
+        }
+      });
+      // Also add admin so they appear in "Resolved by"
+      if (!existingResolvedEmails.has(userEmail)) {
+        job.comments[commentIndex].resolvedByTagged.push({ email: userEmail, resolvedAt: now });
+      }
+    } else {
+      job.comments[commentIndex].resolvedByTagged.push({
+        email: userEmail,
+        resolvedAt: new Date()
+      });
+    }
     job.updatedAt = new Date();
     job.markModified('comments');
     await job.save();
     jobListCache.clear();
-    res.status(200).json({ job: job.toObject() }); // use mutated doc directly
+    jobDetailCache.del(`job:${jobId}`);
+    res.status(200).json({ job: job.toObject() });
   } catch (e) {
     console.error('resolveOnboardingComment:', e);
     res.status(500).json({ error: e.message || 'Failed to mark as resolved' });
@@ -1254,7 +1300,8 @@ export async function approveMove(req, res) {
       actionType: 'status_change',
       fromStatus,
       toStatus: targetStatus,
-      movedBy: req.user?.email || ''
+      movedBy: req.user?.email || '',
+      movedByName: req.user?.name || ''
     });
     job.pendingMoveRequest = { targetStatus: '', requestedBy: '', requestedByName: '', requestedAt: null, active: false };
     job.updatedAt = new Date();

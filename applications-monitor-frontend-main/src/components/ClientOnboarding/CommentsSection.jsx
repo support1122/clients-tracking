@@ -340,7 +340,11 @@ const CommentsSection = React.memo(({
                     const currentUserEmail = (user?.email || '').toLowerCase().trim();
                     const isTagged = currentUserEmail && taggedEmails.includes(currentUserEmail);
                     const hasResolved = resolvedByTagged.some(r => (r.email || '').toLowerCase() === currentUserEmail);
-                    const canResolve = isTagged && !hasResolved && comment._id;
+                    const allTaggedResolved = taggedEmails.length > 0 && taggedEmails.every(e => resolvedByTagged.some(r => (r.email || '').toLowerCase() === e));
+                    const canResolve = comment._id && (
+                      (isTagged && !hasResolved) ||
+                      (isAdmin && taggedEmails.length > 0 && !allTaggedResolved)
+                    );
                     return (
                       <>
                         {resolvedByTagged.length > 0 && (

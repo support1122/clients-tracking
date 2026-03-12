@@ -66,7 +66,8 @@ export default function ClientJobAnalysis() {
       const resp = await fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        cache: 'no-store'
       });
       if (!resp.ok) throw new Error('Failed');
       const data = await resp.json();
@@ -220,7 +221,7 @@ export default function ClientJobAnalysis() {
     try {
       const resp = await fetch(`${API_BASE}/api/clients`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTH_HEADERS(),
         body: JSON.stringify({ email, isPaused, onboardingPhase, currentPath: window.location.pathname })
       });
       if (!resp.ok) throw new Error('Failed to save');

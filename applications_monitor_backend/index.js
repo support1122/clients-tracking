@@ -408,6 +408,14 @@ const verifyAdmin = (req, res, next) => {
   next();
 };
 
+// Allow admin, CSM, or team_lead to manage operations (link/remove operations interns to clients)
+const verifyOperationsManage = (req, res, next) => {
+  const role = req.user?.role || '';
+  const roles = req.user?.roles || [];
+  if (role === 'admin' || role === 'csm' || role === 'team_lead' || roles.includes('csm')) return next();
+  return res.status(403).json({ error: 'Access denied. Only admin, CSM, or team lead can manage operations.' });
+};
+
 const ConnectDB = () => mongoose.connect(process.env.MONGODB_URI, {
   maxPoolSize: 10,
   minPoolSize: 1,
@@ -874,8 +882,8 @@ export const createOrUpdateClient = async (req, res) => {
         { $set: clientUpdate },
         { runValidators: false }
       );
-      // Log pause/unpause/phase changes to job move history for audit
-      const movedBy = req.user?.email || 'unknown';
+      // Log pause/unpause/New (phase) changes to job move history for audit (who did it: email + name)
+      const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
       if (req.body.isPaused === true && req.body.onboardingPhase === true) {
         await addClientActionToJobMoveHistory(emailLower, 'client_phase_set', movedBy);
       } else if (req.body.isPaused === true) {
@@ -884,6 +892,7 @@ export const createOrUpdateClient = async (req, res) => {
         await addClientActionToJobMoveHistory(emailLower, 'client_unpaused', movedBy);
       }
       const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
+      if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined) clearAnalysisCache();
       return res.status(200).json({
         message: "🔄 Client fields updated successfully",
         updatedClientsTracking,
@@ -911,8 +920,8 @@ export const createOrUpdateClient = async (req, res) => {
       { $set: clientUpdate },
       { runValidators: false }
     );
-    // Log pause/unpause/phase changes to job move history for audit
-    const movedBy = req.user?.email || 'unknown';
+    // Log pause/unpause/New (phase) changes to job move history for audit (who did it: email + name)
+    const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
     if (req.body.isPaused === true && req.body.onboardingPhase === true) {
       await addClientActionToJobMoveHistory(emailLower, 'client_phase_set', movedBy);
     } else if (req.body.isPaused === true) {
@@ -939,7 +948,7 @@ export const createOrUpdateClient = async (req, res) => {
       );
     }
     const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
-
+    if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined) clearAnalysisCache();
 
     return res
       .status(200)
@@ -3107,7 +3116,7 @@ const getJobsByDate = async (req, res) => {
 // Add the job analytics route after function definition
 app.post('/api/jobs/by-date', getJobsByDate);
 
-// In-memory TTL cache for client-job-analysis (30s)
+// In-memory TTL cache for client-job-analysis (30s). Cleared when client isPaused/onboardingPhase updated so status always comes from DB.
 const _analysisCacheStore = new Map();
 const ANALYSIS_CACHE_TTL = 30_000;
 function getAnalysisCache(key) {
@@ -4774,10 +4783,10 @@ app.get('/api/operations/:email/jobs', getJobsByOperatorEmail);
 app.get('/api/operations/:email/client-stats', getClientStatistics);
 app.post('/api/operations/saved-counts', getSavedJobCounts);
 app.get('/api/operations/clients', getUniqueClientsFromJobs);
-app.get('/api/operations/:email/managed-users', getManagedUsers);
-app.post('/api/operations/:email/managed-users', addManagedUser);
-app.post('/api/operations/assign-client', assignClientToOperator);
-app.delete('/api/operations/:email/managed-users/:userID', removeManagedUser);
+app.get('/api/operations/:email/managed-users', verifyToken, getManagedUsers);
+app.post('/api/operations/:email/managed-users', verifyToken, verifyOperationsManage, addManagedUser);
+app.post('/api/operations/assign-client', verifyToken, verifyOperationsManage, assignClientToOperator);
+app.delete('/api/operations/:email/managed-users/:userID', verifyToken, verifyOperationsManage, removeManagedUser);
 
 // Delete operation user with cascade deletion
 const deleteOperationUser = async (req, res) => {
