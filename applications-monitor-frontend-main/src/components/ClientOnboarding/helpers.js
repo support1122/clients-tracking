@@ -21,8 +21,14 @@ export function getVisibleColumns(user) {
 
 export function clientDisplayName(jobOrNotif) {
   const n = jobOrNotif?.clientNumber;
-  const name = jobOrNotif?.clientName || '';
-  return n != null ? `${n} - ${name}` : name;
+  let name = (jobOrNotif?.clientName || '').trim();
+  if (n != null) {
+    // Avoid duplicate number in title (e.g. "5761 - 5761 - Macon Moring" -> "5761 - Macon Moring")
+    const numberPrefix = `${n} - `;
+    if (name.startsWith(numberPrefix)) name = name.slice(numberPrefix.length).trim();
+    return name ? `${n} - ${name}` : String(n);
+  }
+  return name;
 }
 
 export function getAllowedStatusesForPlan(planType) {

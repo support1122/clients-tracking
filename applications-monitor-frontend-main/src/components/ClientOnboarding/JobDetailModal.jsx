@@ -97,6 +97,7 @@ const JobDetailModal = React.memo(({
   const isCsm = user?.role === 'csm' || user?.roles?.includes?.('csm');
   const isTeamLead = user?.role === 'team_lead';
   const canViewOperations = isAdmin || isCsm || isTeamLead;
+  const canManageOperations = isAdmin || isCsm || isTeamLead;
 
   // Reset modal sections on job change
   useEffect(() => {
@@ -445,18 +446,23 @@ const JobDetailModal = React.memo(({
   const handleSaveClientNumber = useCallback(async (clientEmail, valueOverride) => {
     if (!clientEmail || !isAdmin) return;
     const val = String((valueOverride ?? editingClientNumberValue) || '').trim();
+    const finalNumber = val ? parseInt(val, 10) : null;
     setSavingClientNumber(true);
     try {
-      const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}/client-number`, { method: 'PATCH', headers: AUTH_HEADERS(), body: JSON.stringify({ clientNumber: val ? parseInt(val, 10) : null }) });
+      const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}/client-number`, { method: 'PATCH', headers: AUTH_HEADERS(), body: JSON.stringify({ clientNumber: finalNumber }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Failed');
       toastUtils.success('Client number updated');
       setEditingClientNumberEmail(null);
       setEditingClientNumberValue('');
       setShowEditClientNumberModal(false);
+      // Update job in UI so title/display reflects new or cleared number (backend already synced to OnboardingJob)
+      if (selectedJob && (selectedJob.clientEmail || '').toLowerCase() === (clientEmail || '').toLowerCase()) {
+        onUpdateJob({ ...selectedJob, clientNumber: finalNumber });
+      }
     } catch (e) { toastUtils.error(e.message || 'Failed'); }
     finally { setSavingClientNumber(false); }
-  }, [editingClientNumberValue, isAdmin]);
+  }, [editingClientNumberValue, isAdmin, selectedJob, onUpdateJob]);
 
   // Operator management
   const handleAddOperatorToClient = useCallback(async (operatorEmail) => {
@@ -622,7 +628,7 @@ const JobDetailModal = React.memo(({
                   {canViewOperations && (
                     <div>
                       <label className="block text-xs font-semibold text-gray-700 mb-1.5">Operations Intern</label>
-                      {isAdmin ? (
+                      {canManageOperations ? (
                         <select value={selectedJob.operatorEmail || ''} onChange={(e) => { const val = e.target.value; if (val === '') { handleAssignOperator('', ''); return; } const opt = operatorOptions.find((o) => (o.email || '').toLowerCase() === val.toLowerCase()); handleAssignOperator(opt?.email ?? val, opt?.name ?? val); }} disabled={assigningOperator} className="w-full text-sm border-gray-200 rounded-lg focus:ring-primary focus:border-primary bg-white">
                           <option value="">— Unassigned —</option>
                           {operatorOptions.map((o) => (<option key={(o.email || '').toLowerCase()} value={o.email}>{o.name || o.email}</option>))}
@@ -634,14 +640,14 @@ const JobDetailModal = React.memo(({
                       <div className="mt-3 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Operations managing this client</span>
-                          {isAdmin && (<button type="button" onClick={() => setShowAddOperatorModal(true)} className="text-xs font-medium text-primary hover:text-primary/80">+ Add operations intern</button>)}
+                          {canManageOperations && (<button type="button" onClick={() => setShowAddOperatorModal(true)} className="text-xs font-medium text-primary hover:text-primary/80">+ Add operations intern</button>)}
                         </div>
                         {loadingOperationsForClient ? (<p className="text-xs text-gray-500">Loading...</p>) : operationsForClient.length === 0 ? (<p className="text-xs text-gray-500">No operations assigned yet.</p>) : (
                           <ul className="space-y-1.5 max-h-32 overflow-y-auto rounded-lg border border-gray-100 bg-white p-2">
                             {operationsForClient.map((o) => (
                               <li key={(o.email || '').toLowerCase()} className="flex items-center justify-between gap-2 text-sm">
                                 <span className="truncate text-gray-800" title={o.email}>{o.name || o.email}</span>
-                                {isAdmin && (<button type="button" onClick={() => handleRemoveOperatorFromClient(o.email)} disabled={removingOperatorFromClient === o.email} className="text-red-500 hover:text-red-700 text-xs disabled:opacity-50 shrink-0">{removingOperatorFromClient === o.email ? '…' : 'Remove'}</button>)}
+                                {canManageOperations && (<button type="button" onClick={() => handleRemoveOperatorFromClient(o.email)} disabled={removingOperatorFromClient === o.email} className="text-red-500 hover:text-red-700 text-xs disabled:opacity-50 shrink-0">{removingOperatorFromClient === o.email ? '…' : 'Remove'}</button>)}
                               </li>
                             ))}
                           </ul>
@@ -651,14 +657,14 @@ const JobDetailModal = React.memo(({
                         <div className="mt-3 space-y-2">
                           <div className="flex items-center justify-between">
                             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Users managed by primary operator</span>
-                            {isAdmin && (<button type="button" onClick={openAddManagedUserModal} className="text-xs font-medium text-primary hover:text-primary/80">+ Add new user</button>)}
+                            {canManageOperations && (<button type="button" onClick={openAddManagedUserModal} className="text-xs font-medium text-primary hover:text-primary/80">+ Add new user</button>)}
                           </div>
                           {loadingOperatorManagedUsers ? (<p className="text-xs text-gray-500">Loading...</p>) : operatorManagedUsers.length === 0 ? (<p className="text-xs text-gray-500">No users assigned yet.</p>) : (
                             <ul className="space-y-1.5 max-h-32 overflow-y-auto rounded-lg border border-gray-100 bg-white p-2">
                               {operatorManagedUsers.map((u) => (
                                 <li key={u.userID} className="flex items-center justify-between gap-2 text-sm">
                                   <span className="truncate text-gray-800" title={u.email}>{u.name || u.email}</span>
-                                  {isAdmin && (<button type="button" onClick={() => handleRemoveManagedUser(u.userID)} disabled={removingManagedUser === u.userID} className="text-red-500 hover:text-red-700 text-xs disabled:opacity-50 shrink-0">{removingManagedUser === u.userID ? '…' : 'Remove'}</button>)}
+                                  {canManageOperations && (<button type="button" onClick={() => handleRemoveManagedUser(u.userID)} disabled={removingManagedUser === u.userID} className="text-red-500 hover:text-red-700 text-xs disabled:opacity-50 shrink-0">{removingManagedUser === u.userID ? '…' : 'Remove'}</button>)}
                                 </li>
                               ))}
                             </ul>
@@ -706,6 +712,60 @@ const JobDetailModal = React.memo(({
                       </select>
                     ) : (<span className="text-sm text-gray-900 font-medium">{selectedJob.dashboardManagerName || '—'}</span>)}
                   </div>
+                  {canManageOperations && (
+                    <div>
+                      <span className="block text-xs font-semibold text-gray-700 mb-1">Also visible to (tagged managers)</span>
+                      <div className="flex flex-wrap gap-2 items-center">
+                        {(selectedJob.taggedDashboardManagerNames || []).filter((n) => n && n !== (selectedJob.dashboardManagerName || '').trim()).map((name) => (
+                          <span key={name} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-primary/10 text-primary text-xs font-medium">
+                            {name}
+                            <button type="button" onClick={async () => {
+                              if (!selectedJob?._id || savingDashboardManager.has(selectedJob._id)) return;
+                              const next = (selectedJob.taggedDashboardManagerNames || []).filter((n) => n !== name);
+                              setSavingDashboardManager((s) => new Set(s).add(selectedJob._id));
+                              try {
+                                const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, { method: 'PATCH', headers: AUTH_HEADERS(), body: JSON.stringify({ taggedDashboardManagerNames: next }) });
+                                if (!res.ok) throw new Error('Failed');
+                                const data = await res.json();
+                                onUpdateJob(data.job);
+                                toastUtils.success('Manager removed from visibility');
+                              } catch (err) { toastUtils.error(err.message || 'Failed'); }
+                              finally { setSavingDashboardManager((s) => { const n = new Set(s); n.delete(selectedJob._id); return n; }); }
+                            }} className="p-0.5 rounded hover:bg-primary/20 text-primary" aria-label={`Remove ${name}`}>×</button>
+                          </span>
+                        ))}
+                        <select
+                          value=""
+                          onChange={async (e) => {
+                            const addName = e.target.value;
+                            if (!addName || !selectedJob?._id || savingDashboardManager.has(selectedJob._id)) return;
+                            e.target.value = '';
+                            const current = selectedJob.taggedDashboardManagerNames || [];
+                            const primary = (selectedJob.dashboardManagerName || '').trim();
+                            if (current.includes(addName) || addName === primary) return;
+                            const next = [...current, addName];
+                            setSavingDashboardManager((s) => new Set(s).add(selectedJob._id));
+                            try {
+                              const res = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, { method: 'PATCH', headers: AUTH_HEADERS(), body: JSON.stringify({ taggedDashboardManagerNames: next }) });
+                              if (!res.ok) throw new Error('Failed');
+                              const data = await res.json();
+                              onUpdateJob(data.job);
+                              toastUtils.success('Manager added to visibility');
+                            } catch (err) { toastUtils.error(err.message || 'Failed'); }
+                            finally { setSavingDashboardManager((s) => { const n = new Set(s); n.delete(selectedJob._id); return n; }); }
+                          }}
+                          className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50"
+                          disabled={savingDashboardManager.has(selectedJob._id)}
+                        >
+                          <option value="">+ Add visibility for...</option>
+                          {dashboardManagerNames.filter((n) => n && n !== (selectedJob.dashboardManagerName || '').trim() && !(selectedJob.taggedDashboardManagerNames || []).includes(n)).map((name) => (
+                            <option key={name} value={name}>{name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <p className="text-[10px] text-gray-500 mt-1">Tagged managers will also see this ticket in their view.</p>
+                    </div>
+                  )}
                   <div>
                     <span className="block text-xs font-semibold text-gray-700 mb-1">Assigned Email</span>
                     <span className="text-sm text-gray-900 font-mono bg-white px-2 py-1 rounded border border-gray-200">{selectedJob.clientEmail}</span>
@@ -896,12 +956,16 @@ const JobDetailModal = React.memo(({
                       if (actionType === 'assignment') { const roleLabel = move.targetRole === 'dashboard_manager' ? 'Dashboard Manager' : move.targetRole === 'linkedin_member' ? 'LinkedIn member' : move.targetRole || 'assignee'; label = `${roleLabel} assigned: ${move.targetName || '—'}`; }
                       else if (actionType === 'client_paused') label = 'Client paused';
                       else if (actionType === 'client_unpaused') label = 'Client unpaused';
-                      else if (actionType === 'client_phase_set') label = 'Client set to New (onboarding phase)';
+                      else if (actionType === 'client_phase_set') label = 'Status set to New (onboarding phase)';
                       else { label = move.fromStatus === 'created' ? 'Job card created' : `Moved from ${STATUS_LABELS[move.fromStatus] || move.fromStatus}` + (move.toStatus ? ` → ${STATUS_LABELS[move.toStatus] || move.toStatus}` : ''); }
+                      const byEmail = (move.movedBy || '').trim().toLowerCase();
+                      const byName = (move.movedByName || '').trim();
+                      const isSystem = !byEmail || byEmail === 'system' || byEmail === 'unknown';
+                      const whoText = isSystem ? 'System' : byName && byName !== byEmail ? `${byName} (${move.movedBy})` : move.movedBy;
                       return (
                         <div key={i} className="flex gap-3">
                           <div className="flex flex-col items-center pt-1"><div className="w-2 h-2 rounded-full bg-primary"></div>{i < (selectedJob.moveHistory || []).length - 1 && (<div className="w-px h-full bg-gray-200 mt-1 min-h-[20px]"></div>)}</div>
-                          <div className="flex-1 pb-2"><p className="text-xs text-gray-700"><span className="font-semibold text-gray-900">{label}</span></p><p className="text-[10px] text-gray-400 mt-0.5">by {move.movedBy || 'System'} • {new Date(move.movedAt).toLocaleString()}</p></div>
+                          <div className="flex-1 pb-2"><p className="text-xs text-gray-700"><span className="font-semibold text-gray-900">{label}</span></p><p className="text-[10px] text-gray-400 mt-0.5">by {whoText} • {new Date(move.movedAt).toLocaleString()}</p></div>
                         </div>
                       );
                     })
@@ -971,11 +1035,11 @@ const JobDetailModal = React.memo(({
         </div>
       )}
 
-      {/* Edit Client Details Modal */}
+      {/* Edit Client Details Modal — only close via Cancel or X, not backdrop */}
       {showEditClientNumberModal && editingClientNumberEmail && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget && !savingClientNumber && !savingClientName) { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); setEditingClientNameJobId(null); setEditingClientNameValue(''); } }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between"><h2 className="text-lg font-bold text-gray-900">Edit Client Details</h2><button type="button" onClick={() => { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); setEditingClientNameJobId(null); setEditingClientNameValue(''); }} disabled={savingClientNumber || savingClientName} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 disabled:opacity-50"><X className="w-5 h-5" /></button></div>
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="edit-client-details-title">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between"><h2 id="edit-client-details-title" className="text-lg font-bold text-gray-900">Edit Client Details</h2><button type="button" onClick={() => { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); setEditingClientNameJobId(null); setEditingClientNameValue(''); }} disabled={savingClientNumber || savingClientName} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 disabled:opacity-50"><X className="w-5 h-5" /></button></div>
             <div className="p-6 space-y-4">
               <div><label className="block text-sm font-semibold text-gray-700 mb-1.5">Client Name</label><input type="text" value={editingClientNameValue} onChange={(e) => setEditingClientNameValue(e.target.value)} placeholder="Client name" className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary text-sm" autoFocus /></div>
               <div><label className="block text-sm font-semibold text-gray-700 mb-1.5">Client Number</label><input type="number" min={1} value={editingClientNumberValue} onChange={(e) => setEditingClientNumberValue(e.target.value)} placeholder="e.g. 5810" className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary focus:border-primary text-sm" /><p className="text-xs text-gray-500 mt-1">Leave empty to clear the number</p></div>

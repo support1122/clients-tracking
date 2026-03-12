@@ -375,7 +375,7 @@ export default function ClientOnboarding() {
       const url = isAdminUser
         ? `${API_BASE}/api/onboarding/issues/non-resolved?admin=1`
         : `${API_BASE}/api/onboarding/issues/non-resolved`;
-      const res = await fetch(url, { headers: AUTH_HEADERS() });
+      const res = await fetch(url, { headers: AUTH_HEADERS(), cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (handleAuthFailure(res, data)) return;
@@ -1342,19 +1342,40 @@ export default function ClientOnboarding() {
                                     onClick={async (e) => {
                                       e.stopPropagation();
                                       setResolvingIssueKey(resolvingKey);
+                                      const commentIdStr = String(item.commentId);
+                                      const jobIdStr = String(item.jobId);
+                                      const prevIssues = nonResolvedIssues;
+                                      setNonResolvedIssues((curr) => {
+                                        const nextItems = (curr.items || []).filter(
+                                          (i) => String(i.commentId) !== commentIdStr || String(i.jobId) !== jobIdStr
+                                        );
+                                        const nextCount = Math.max(0, (curr.count ?? 0) - 1);
+                                        const userCounts = {};
+                                        nextItems.forEach((it) => {
+                                          (it.unresolvedEmails || []).forEach((email) => {
+                                            userCounts[email] = (userCounts[email] || 0) + 1;
+                                          });
+                                        });
+                                        const nextPerUser = Object.entries(userCounts)
+                                          .map(([email, count]) => ({ email, count }))
+                                          .sort((a, b) => b.count - a.count);
+                                        return { ...curr, items: nextItems, count: nextCount, perUser: nextPerUser };
+                                      });
                                       try {
-                                        const res = await fetch(`${API_BASE}/api/onboarding/jobs/${item.jobId}/comments/${String(item.commentId)}/resolve`, {
+                                        const res = await fetch(`${API_BASE}/api/onboarding/jobs/${item.jobId}/comments/${commentIdStr}/resolve`, {
                                           method: 'PATCH',
                                           headers: AUTH_HEADERS()
                                         });
                                         const data = await res.json();
                                         if (!res.ok) throw new Error(data.error || 'Failed to mark as resolved');
-                                        setJobs(prev => prev.map(j => j._id === String(item.jobId) ? data.job : j));
-                                        if (selectedJob?._id === String(item.jobId)) setSelectedJob(data.job);
+                                        setJobs((prev) => prev.map((j) => (j._id === jobIdStr ? data.job : j)));
+                                        if (selectedJob?._id === jobIdStr) setSelectedJob(data.job);
                                         toastUtils.success('Marked as resolved');
-                                        fetchNonResolvedIssues();
+                                        await fetchNonResolvedIssues();
                                       } catch (err) {
                                         toastUtils.error(err.message || 'Failed to mark as resolved');
+                                        setNonResolvedIssues(prevIssues);
+                                        await fetchNonResolvedIssues();
                                       } finally {
                                         setResolvingIssueKey(null);
                                       }
