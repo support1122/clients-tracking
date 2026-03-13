@@ -542,18 +542,6 @@ export default function ClientOnboarding() {
       return;
     }
 
-    // Require at least one resume attachment before moving to LinkedIn / Cover / Applications
-    const requireResumeStatuses = ['linkedin_in_progress', 'linkedin_done', 'cover_letter_in_progress', 'cover_letter_done', 'applications_ready', 'applications_in_progress'];
-    if (requireResumeStatuses.includes(newStatus)) {
-      const attachmentNames = (job.attachments || []).map((a) => (typeof a === 'object' && a?.name != null ? String(a.name).trim() : '')).filter(Boolean);
-      const hasResumeAttachment = attachmentNames.some((n) => /^resume$/i.test(n));
-      if (!hasResumeAttachment) {
-        toastUtils.error('Please upload a resume attachment before moving to this stage.');
-        if (selectedJob?._id !== jobId) setSelectedJob(job);
-        return;
-      }
-    }
-
     const originalJob = { ...job };
     setMovingStatus(jobId);
 
