@@ -285,11 +285,38 @@ export default function ClientJobAnalysis() {
     });
   }, [rows, date, sortDir, lastAppliedByFilter, getSortingNumber]);
 
-  console.log('Processed rows count:', processedRows.length, 'Rows include newtest?', processedRows.some(r => r.email === 'newtest@gmail.com'));
+  // Summary counts: active, inactive, paused, unpaused (above Client Job Analysis)
+  const summaryCounts = useMemo(() => {
+    let active = 0, inactive = 0, paused = 0, unpaused = 0;
+    for (const r of processedRows) {
+      if (r.status === 'active') active++;
+      else inactive++;
+      const phaseValue = r.onboardingPhase ? 'new' : r.isPaused ? 'paused' : 'unpaused';
+      if (phaseValue === 'paused') paused++;
+      else if (phaseValue === 'unpaused') unpaused++;
+    }
+    return { active, inactive, paused, unpaused };
+  }, [processedRows]);
 
   return (
     <Layout>
       <div className="p-6 w-full">
+
+        {/* Summary counts above Client Job Analysis */}
+        <div className="px-4 py-2 flex items-center gap-6 flex-wrap">
+          <span className="text-sm font-medium text-gray-700">
+            <span className="text-green-600 font-semibold">{summaryCounts.active}</span> Active
+          </span>
+          <span className="text-sm font-medium text-gray-700">
+            <span className="text-red-600 font-semibold">{summaryCounts.inactive}</span> Inactive
+          </span>
+          <span className="text-sm font-medium text-gray-700">
+            <span className="text-yellow-600 font-semibold">{summaryCounts.paused}</span> Paused
+          </span>
+          <span className="text-sm font-medium text-gray-700">
+            <span className="text-emerald-600 font-semibold">{summaryCounts.unpaused}</span> Unpaused
+          </span>
+        </div>
 
         <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-3 flex-wrap">
           <h1 className="text-xl font-semibold text-gray-900">Client Job Analysis</h1>
