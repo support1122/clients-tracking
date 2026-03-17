@@ -306,9 +306,37 @@ export async function listOnboardingJobs(req, res) {
   }
 }
 
+/** Lightweight endpoint: returns only comments. Use with getOnboardingJobById?excludeComments=1 for parallel load. */
+export async function getOnboardingJobComments(req, res) {
+  try {
+    const { id } = req.params;
+    if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) return res.status(400).json({ error: 'Invalid job ID' });
+    const job = await OnboardingJobModel.findById(id).select('comments dashboardManagerName taggedDashboardManagerNames').lean();
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const userRole = req.user?.role || '';
+    if (userRole === 'team_lead') {
+      const userEmail = (req.user?.email || '').toLowerCase().trim();
+      let effectiveManagerName = '';
+      if (userEmail) {
+        const dbUser = await UserModel.findOne({ email: userEmail }).select('linkedDashboardManagerName name').lean();
+        effectiveManagerName = ((dbUser?.linkedDashboardManagerName || dbUser?.name || req.user?.name || '').trim()).toLowerCase();
+      }
+      const primary = (job.dashboardManagerName || '').trim().toLowerCase();
+      const tagged = (job.taggedDashboardManagerNames || []).map((n) => (n || '').trim().toLowerCase()).filter(Boolean);
+      const canView = (primary && primary === effectiveManagerName) || tagged.includes(effectiveManagerName);
+      if (!effectiveManagerName || !canView) return res.status(403).json({ error: 'Not authorized' });
+    }
+    return res.status(200).json({ comments: job.comments || [] });
+  } catch (e) {
+    console.error('getOnboardingJobComments:', e);
+    res.status(500).json({ error: e.message || 'Failed to fetch comments' });
+  }
+}
+
 export async function getOnboardingJobById(req, res) {
   try {
     const { id } = req.params;
+    const excludeComments = req.query?.excludeComments === '1';
     const cacheKey = `job:${id}`;
     let job = jobDetailCache.get(cacheKey);
     if (job) {
@@ -332,10 +360,16 @@ export async function getOnboardingJobById(req, res) {
       if (!canSeeCredentials && job.dashboardCredentials?.password) {
         job.dashboardCredentials = { ...job.dashboardCredentials, password: '********' };
       }
+      if (excludeComments) {
+        const { comments: _c, ...rest } = job;
+        return res.status(200).json({ job: rest });
+      }
       return res.status(200).json({ job });
     }
 
-    job = await OnboardingJobModel.findById(id).lean();
+    const query = OnboardingJobModel.findById(id);
+    if (excludeComments) query.select('-comments');
+    job = await query.lean();
     if (!job) return res.status(404).json({ error: 'Onboarding job not found' });
 
     // Restrict Team Leads to tickets where they are primary or tagged dashboard manager
@@ -398,6 +432,10 @@ export async function getOnboardingJobById(req, res) {
     job.daysInPipeline = Math.max(0, Math.floor((new Date(endDate) - new Date(startDate)) / (24 * 60 * 60 * 1000)));
 
     jobDetailCache.set(cacheKey, job);
+    if (excludeComments) {
+      const { comments: _c, ...rest } = job;
+      return res.status(200).json({ job: rest });
+    }
     res.status(200).json({ job });
   } catch (e) {
     console.error('getOnboardingJobById:', e);

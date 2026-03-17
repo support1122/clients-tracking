@@ -70,6 +70,7 @@ export default function ClientOnboarding() {
   const [filteredClientEmail, setFilteredClientEmail] = useState(null);
   const [clientJobAnalysis, setClientJobAnalysis] = useState({});
   const [loadingJobDetails, setLoadingJobDetails] = useState(false);
+  const [loadingComments, setLoadingComments] = useState(false);
 
   // ── Add Client modal state ──
   const [showAddModal, setShowAddModal] = useState(false);
@@ -692,32 +693,46 @@ export default function ClientOnboarding() {
       LOG('Job details from cache:', job._id);
       setSelectedJob(prefetched);
       setJobs(prev => prev.map(j => j._id === job._id ? { ...j, ...prefetched } : j));
+      setLoadingJobDetails(false);
+      setLoadingComments(false);
       return;
     }
 
-    // Otherwise open panel with lightweight card data and fetch full details in background
+    // Otherwise open panel with card data and fetch job + comments in parallel (faster perceived load)
     setSelectedJob(job);
     setLoadingJobDetails(true);
+    setLoadingComments(true);
     LOG('Job details fetch start:', job._id);
-    fetch(`${API_BASE}/api/onboarding/jobs/${job._id}`, { headers: AUTH_HEADERS() })
+    const jobId = job._id;
+    const headers = AUTH_HEADERS();
+    const jobPromise = fetch(`${API_BASE}/api/onboarding/jobs/${jobId}?excludeComments=1`, { headers })
       .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data?.job) {
-          prefetchCacheRef.current.set(job._id, data.job);
-          const current = useOnboardingStore.getState().selectedJob;
-          if (current?._id === job._id) {
-            setSelectedJob(data.job);
-            setJobs(prev => prev.map(j => j._id === job._id ? { ...j, ...data.job } : j));
-          }
-          LOG('Job details loaded:', job._id);
-        } else {
-          LOG('Job details empty response:', job._id);
-        }
-      })
-      .catch((err) => {
-        console.error('[ClientOnboarding] Job details fetch error:', err?.message || err, job._id);
-      })
+      .then(data => data?.job || null);
+    const commentsPromise = fetch(`${API_BASE}/api/onboarding/jobs/${jobId}/comments`, { headers })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => data?.comments ?? null);
+    jobPromise.then((jobData) => {
+      if (!jobData) { LOG('Job details empty response:', jobId); return; }
+      const current = useOnboardingStore.getState().selectedJob;
+      if (current?._id === jobId) {
+        setSelectedJob((prev) => prev?._id === jobId ? { ...prev, ...jobData, comments: prev.comments ?? jobData.comments } : prev);
+        setJobs(prev => prev.map(j => j._id === jobId ? { ...j, ...jobData } : j));
+      }
+      const cached = prefetchCacheRef.current.get(jobId);
+      prefetchCacheRef.current.set(jobId, { ...jobData, comments: cached?.comments ?? jobData.comments });
+      LOG('Job details loaded:', jobId);
+    }).catch((err) => console.error('[ClientOnboarding] Job details fetch error:', err?.message || err, jobId))
       .finally(() => setLoadingJobDetails(false));
+    commentsPromise.then((comments) => {
+      const current = useOnboardingStore.getState().selectedJob;
+      if (current?._id === jobId) {
+        setSelectedJob((prev) => prev?._id === jobId ? { ...prev, comments: comments ?? [] } : prev);
+        const cached = prefetchCacheRef.current.get(jobId);
+        if (cached) prefetchCacheRef.current.set(jobId, { ...cached, comments: comments ?? [] });
+      }
+      LOG('Comments loaded:', jobId);
+    }).catch((err) => console.error('[ClientOnboarding] Comments fetch error:', err?.message || err, jobId))
+      .finally(() => setLoadingComments(false));
   }, [setSelectedJob, setJobs, user]);
 
   // Prefetch full job on hover
@@ -726,11 +741,17 @@ export default function ClientOnboarding() {
     clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
       if (prefetchCacheRef.current.has(job._id)) return;
-      fetch(`${API_BASE}/api/onboarding/jobs/${job._id}`, { headers: AUTH_HEADERS() })
-        .then(r => r.ok ? r.json() : null)
-        .then(data => { if (data?.job) prefetchCacheRef.current.set(job._id, data.job); })
-        .catch(() => {});
-    }, 200);
+      const jobId = job._id;
+      const headers = AUTH_HEADERS();
+      Promise.all([
+        fetch(`${API_BASE}/api/onboarding/jobs/${jobId}?excludeComments=1`, { headers }).then(r => r.ok ? r.json() : null),
+        fetch(`${API_BASE}/api/onboarding/jobs/${jobId}/comments`, { headers }).then(r => r.ok ? r.json() : null)
+      ]).then(([jobRes, commentsRes]) => {
+        const jobData = jobRes?.job;
+        const comments = commentsRes?.comments ?? [];
+        if (jobData) prefetchCacheRef.current.set(jobId, { ...jobData, comments });
+      }).catch(() => {});
+    }, 80);
   }, []);
 
   const handleCardHoverEnd = useCallback(() => {
@@ -818,9 +839,12 @@ export default function ClientOnboarding() {
   };
 
   // ── New callbacks for the modal ──
-  const handleUpdateJob = useCallback((jobId, updatedJob) => {
-    setSelectedJob(updatedJob);
-    setJobs(prev => prev.map(j => j._id === jobId ? updatedJob : j));
+  const handleUpdateJob = useCallback((jobIdOrJob, updatedJob) => {
+    const job = updatedJob ?? jobIdOrJob;
+    const jobId = job?._id;
+    if (!jobId || !job) return;
+    setSelectedJob(job);
+    setJobs(prev => prev.map(j => j._id === jobId ? job : j));
     prefetchCacheRef.current.delete(jobId);
   }, [setSelectedJob, setJobs]);
 
@@ -831,6 +855,8 @@ export default function ClientOnboarding() {
   const handleCloseModal = useCallback(() => {
     clearSelected();
     setSelectedJob(null);
+    setLoadingJobDetails(false);
+    setLoadingComments(false);
   }, [clearSelected, setSelectedJob]);
 
   // ── Notification helpers ──
@@ -1580,6 +1606,7 @@ export default function ClientOnboarding() {
           user={user}
           roles={roles}
           loadingJobDetails={loadingJobDetails}
+          loadingComments={loadingComments}
           onClose={handleCloseModal}
           onUpdateJob={handleUpdateJob}
           onMoveJob={handleMoveForModal}

@@ -31,6 +31,7 @@ const JobDetailModal = React.memo(({
   user,
   roles,
   loadingJobDetails,
+  loadingComments = false,
   onClose,
   onUpdateJob,
   onMoveJob,
@@ -981,6 +982,7 @@ const JobDetailModal = React.memo(({
             user={user}
             roles={roles}
             loadingJobDetails={loadingJobDetails}
+            loadingComments={loadingComments}
             onUpdateJob={onUpdateJob}
             onMoveJob={onMoveJob}
             canMoveAny={canMoveAny}
