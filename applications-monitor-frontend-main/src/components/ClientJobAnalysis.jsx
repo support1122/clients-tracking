@@ -44,6 +44,7 @@ export default function ClientJobAnalysis() {
   const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
   const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
   const [savingClientNumber, setSavingClientNumber] = useState(false);
+  const [summaryCounts, setSummaryCounts] = useState({ active: 0, inactive: 0, new: 0, paused: 0, unpaused: 0 });
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -72,6 +73,7 @@ export default function ClientJobAnalysis() {
       if (!resp.ok) throw new Error('Failed');
       const data = await resp.json();
       setRows(data.rows || []);
+      if (data.summary) setSummaryCounts(data.summary);
     } catch (e) {
       toast.error('Failed to load client job analysis');
     } finally {
@@ -191,10 +193,10 @@ export default function ClientJobAnalysis() {
       if (!resp.ok) throw new Error('Failed to save');
       const data = await resp.json();
       if (data.message || data.updatedClientsTracking) {
-        // Update the row in state
         setRows(prev => prev.map(r =>
           r.email === email ? { ...r, status } : r
         ));
+        fetchAnalysis();
         toast.success('Client status updated successfully');
       }
     } catch (e) {
@@ -230,6 +232,7 @@ export default function ClientJobAnalysis() {
         setRows(prev => prev.map(r =>
           r.email === email ? { ...r, isPaused, onboardingPhase } : r
         ));
+        fetchAnalysis();
         const msg = value === 'new' ? 'Client set to New (onboarding phase)' : value === 'paused' ? 'Client paused' : 'Client unpaused';
         toast.success(msg);
       }
@@ -285,30 +288,20 @@ export default function ClientJobAnalysis() {
     });
   }, [rows, date, sortDir, lastAppliedByFilter, getSortingNumber]);
 
-  // Summary counts: active, inactive, paused, unpaused (above Client Job Analysis)
-  const summaryCounts = useMemo(() => {
-    let active = 0, inactive = 0, paused = 0, unpaused = 0;
-    for (const r of processedRows) {
-      if (r.status === 'active') active++;
-      else inactive++;
-      const phaseValue = r.onboardingPhase ? 'new' : r.isPaused ? 'paused' : 'unpaused';
-      if (phaseValue === 'paused') paused++;
-      else if (phaseValue === 'unpaused') unpaused++;
-    }
-    return { active, inactive, paused, unpaused };
-  }, [processedRows]);
-
   return (
     <Layout>
       <div className="p-6 w-full">
 
-        {/* Summary counts above Client Job Analysis */}
+        {/* Summary from DB (dashboardtrackings): Active, Inactive, New, Paused, Unpaused */}
         <div className="px-4 py-2 flex items-center gap-6 flex-wrap">
           <span className="text-sm font-medium text-gray-700">
             <span className="text-green-600 font-semibold">{summaryCounts.active}</span> Active
           </span>
           <span className="text-sm font-medium text-gray-700">
             <span className="text-red-600 font-semibold">{summaryCounts.inactive}</span> Inactive
+          </span>
+          <span className="text-sm font-medium text-gray-700">
+            <span className="text-slate-600 font-semibold">{summaryCounts.new}</span> New
           </span>
           <span className="text-sm font-medium text-gray-700">
             <span className="text-yellow-600 font-semibold">{summaryCounts.paused}</span> Paused
