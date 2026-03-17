@@ -25,6 +25,7 @@ const CommentsSection = React.memo(({
   user,
   roles,
   loadingJobDetails,
+  loadingComments = false,
   onUpdateJob,
   onMoveJob,
   canMoveAny,
@@ -46,6 +47,7 @@ const CommentsSection = React.memo(({
   const commentImageInputRef = useRef(null);
   const mentionStartRef = useRef(0);
   const mentionEndRef = useRef(0);
+  const uploadBatchIdRef = useRef(0);
 
   const effectiveMentionableUsers = useMemo(() => {
     const base = roles?.mentionableUsers || [];
@@ -67,28 +69,42 @@ const CommentsSection = React.memo(({
     const current = commentImages.length;
     const toAdd = Math.min(maxImages - current, imageFiles.length);
     if (toAdd <= 0) { toastUtils.error(`Maximum ${maxImages} images per comment.`); return; }
+    const filesToUpload = imageFiles.slice(0, toAdd);
+    const batchId = ++uploadBatchIdRef.current;
+    // Instant: show blob preview immediately (no wait for upload)
+    const placeholders = filesToUpload.map((f) => ({
+      url: URL.createObjectURL(f),
+      filename: f.name || 'image',
+      pending: true,
+      batchId
+    }));
+    setCommentImages((prev) => [...prev, ...placeholders]);
     setUploadingCommentImage(true);
     try {
       const token = localStorage.getItem('authToken') || '';
-      const added = [];
-      for (let i = 0; i < toAdd; i++) {
-        const form = new FormData();
-        form.append('file', imageFiles[i]);
-        const uploadRes = await fetch(`${base}/api/upload/onboarding-attachment`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-          body: form
-        });
-        const uploadData = await uploadRes.json().catch(() => ({}));
-        if (!uploadRes.ok || !uploadData.url) {
-          toastUtils.error(uploadData.message || 'Image upload failed');
-          break;
-        }
-        added.push({ url: uploadData.url, filename: uploadData.filename || imageFiles[i].name });
-      }
-      if (added.length) setCommentImages((prev) => [...prev, ...added]);
+      const results = await Promise.all(
+        filesToUpload.map(async (file) => {
+          const form = new FormData();
+          form.append('file', file);
+          const res = await fetch(`${base}/api/upload/onboarding-attachment`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: form
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.url) throw new Error(data.message || 'Upload failed');
+          return { url: data.url, filename: data.filename || file.name };
+        })
+      );
+      setCommentImages((prev) => {
+        const toRemove = prev.filter((x) => x.pending && x.batchId === batchId);
+        toRemove.forEach((x) => URL.revokeObjectURL(x.url));
+        const rest = prev.filter((x) => !(x.pending && x.batchId === batchId));
+        return [...rest, ...results.map((r) => ({ ...r, pending: false }))];
+      });
     } catch (err) {
       toastUtils.error(err?.message || 'Upload failed');
+      setCommentImages((prev) => prev.filter((x) => !x.pending));
     } finally {
       setUploadingCommentImage(false);
     }
@@ -163,7 +179,8 @@ const CommentsSection = React.memo(({
     const text = commentTextRef.current;
     const hasText = text.trim().length > 0;
     const hasImages = commentImages.length > 0;
-    if (!selectedJob || (!hasText && !hasImages) || addingComment) return;
+    const hasPendingImages = commentImages.some((x) => x.pending);
+    if (!selectedJob || (!hasText && !hasImages) || addingComment || hasPendingImages) return;
     if (!commentMoveTarget) {
       toastUtils.error('Please select a move location before sending a comment');
       return;
@@ -179,12 +196,15 @@ const CommentsSection = React.memo(({
             body: text.trim() || '(image)',
             taggedUserIds,
             taggedNames,
-            images: commentImages
+            images: commentImages.filter((x) => !x.pending).map(({ url, filename }) => ({ url, filename }))
           }
         })
       });
       if (!res.ok) throw new Error('Failed to add comment');
       const data = await res.json();
+
+      // Always update immediately so new comment appears without refresh
+      onUpdateJob(data.job);
 
       if (commentMoveTarget !== selectedJob.status) {
         if (canMoveAny) {
@@ -196,12 +216,8 @@ const CommentsSection = React.memo(({
             body: JSON.stringify({ targetStatus: commentMoveTarget })
           });
           const moveData = await moveRes.json();
-          if (moveRes.ok) {
-            onUpdateJob(moveData.job);
-          }
+          if (moveRes.ok) onUpdateJob(moveData.job);
         }
-      } else {
-        onUpdateJob(data.job);
       }
 
       commentTextRef.current = '';
@@ -291,11 +307,16 @@ const CommentsSection = React.memo(({
 
       {/* Comments List */}
       <div className="flex-1 overflow-y-auto min-h-0 px-5 py-4 space-y-4">
-        {loadingJobDetails ? (
-          <div className="text-center py-12">
-            <Loader2 className="w-10 h-10 mx-auto mb-3 text-primary animate-spin" />
-            <p className="text-sm text-gray-600 font-medium">Loading details...</p>
-            <p className="text-xs text-gray-400 mt-1">Comments will appear shortly</p>
+        {loadingComments ? (
+          <div className="space-y-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex gap-3 animate-pulse">
+                <div className="w-9 h-9 rounded-full bg-gray-200 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="bg-gray-100 rounded-xl rounded-tl-none p-3.5 h-20" />
+                </div>
+              </div>
+            ))}
           </div>
         ) : comments.length === 0 ? (
           <div className="text-center py-12 opacity-50">
@@ -322,7 +343,7 @@ const CommentsSection = React.memo(({
                     <div className="mt-2 flex flex-wrap gap-2">
                       {comment.images.map((img, idx) => (
                         <a key={idx} href={img.url} target="_blank" rel="noopener noreferrer" className="block rounded-lg overflow-hidden border border-gray-200 hover:border-primary/40">
-                          <img src={img.url} alt={img.filename || 'Image'} className="max-h-40 max-w-[200px] object-cover w-auto h-auto" />
+                          <img src={img.url} alt={img.filename || 'Image'} className="max-h-40 max-w-[200px] object-cover w-auto h-auto" loading="lazy" decoding="async" />
                         </a>
                       ))}
                     </div>
@@ -403,7 +424,12 @@ const CommentsSection = React.memo(({
           <div className="mb-2 flex flex-wrap gap-2">
             {commentImages.map((img, idx) => (
               <div key={idx} className="relative group">
-                <img src={img.url} alt={img.filename || 'Preview'} className="h-14 w-14 object-cover rounded-lg border border-gray-200" />
+                <img src={img.url} alt={img.filename || 'Preview'} className="h-14 w-14 object-cover rounded-lg border border-gray-200" loading="eager" decoding="async" />
+                {img.pending && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded-lg">
+                    <Loader2 className="w-5 h-5 text-white animate-spin" />
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => setCommentImages((prev) => prev.filter((_, i) => i !== idx))}
@@ -617,9 +643,9 @@ const CommentsSection = React.memo(({
             </button>
             <button
               onClick={handleAddComment}
-              disabled={(!commentHasContent && commentImages.length === 0) || addingComment || !commentMoveTarget}
+              disabled={(!commentHasContent && commentImages.length === 0) || addingComment || !commentMoveTarget || commentImages.some((x) => x.pending)}
               className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-primary text-white rounded-lg disabled:opacity-50 disabled:bg-gray-300 hover:bg-[#c94a28] transition-colors shadow-md disabled:shadow-none flex items-center justify-center"
-              title={commentMoveTarget ? 'Send comment (Enter)' : 'Select a move location first'}
+              title={commentImages.some((x) => x.pending) ? 'Wait for images to upload' : commentMoveTarget ? 'Send comment (Enter)' : 'Select a move location first'}
             >
               {addingComment ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>

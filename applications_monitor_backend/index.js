@@ -40,6 +40,7 @@ import {
   getCurrentClientNumber,
   listOnboardingJobs,
   getOnboardingJobById,
+  getOnboardingJobComments,
   patchOnboardingJob,
   resolveOnboardingComment,
   postOnboardingJob,
@@ -3975,6 +3976,7 @@ app.get('/api/onboarding/notifications', verifyToken, getOnboardingNotifications
 app.patch('/api/onboarding/notifications/:id/read', verifyToken, markOnboardingNotificationRead);
 app.post('/api/onboarding/jobs', verifyToken, postOnboardingJob);
 app.get('/api/onboarding/jobs/:id', verifyToken, getOnboardingJobById);
+app.get('/api/onboarding/jobs/:id/comments', verifyToken, getOnboardingJobComments);
 app.patch('/api/onboarding/jobs/:id/comments/:commentId/resolve', verifyToken, resolveOnboardingComment);
 app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
 app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
@@ -5451,6 +5453,90 @@ app.put('/api/client-optimizations/:email', async (req, res) => {
   } catch (error) {
     console.error('Error updating optimizations:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Internal sync: when client uploads resume/cover letter in Flashfire Documents (2+ days after dashboard creation)
+// Auth: X-API-Key header must match INTERNAL_SYNC_API_KEY
+app.post('/api/internal/sync-document-upload', express.json(), async (req, res) => {
+  try {
+    const apiKey = req.headers['x-api-key'];
+    const expectedKey = process.env.INTERNAL_SYNC_API_KEY;
+    if (!expectedKey || apiKey !== expectedKey) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    const { email, documentType, url, fileName } = req.body || {};
+    if (!email || !documentType || !['resume', 'coverLetter'].includes(documentType)) {
+      return res.status(400).json({ success: false, error: 'email and documentType (resume|coverLetter) required' });
+    }
+    const emailLower = (email || '').toLowerCase().trim();
+    const client = await ClientModel.findOne({ email: emailLower }).lean();
+    if (!client) {
+      return res.status(200).json({ updated: false, reason: 'client_not_in_tracking' });
+    }
+    // Resolve dashboard creation date (prefer Client.createdAt, then OnboardingJob, then Profile)
+    let dashboardCreated = null;
+    const clientCreated = parseFlexibleDate(client.createdAt);
+    if (clientCreated) dashboardCreated = clientCreated;
+    if (!dashboardCreated) {
+      const job = await OnboardingJobModel.findOne({ clientEmail: emailLower }).select('createdAt').lean();
+      if (job?.createdAt) dashboardCreated = job.createdAt instanceof Date ? job.createdAt : new Date(job.createdAt);
+    }
+    if (!dashboardCreated) {
+      const Profile = getProfileModel();
+      const profile = await Profile.findOne({ email: emailLower }).select('createdAt').lean();
+      if (profile?.createdAt) dashboardCreated = profile.createdAt instanceof Date ? profile.createdAt : new Date(profile.createdAt);
+    }
+    if (!dashboardCreated) {
+      dashboardCreated = new Date(0); // treat as very old to avoid blocking
+    }
+    const now = new Date();
+    const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+    if (now.getTime() - dashboardCreated.getTime() < twoDaysMs) {
+      return res.status(200).json({ updated: false, reason: 'within_2_day_window' });
+    }
+    let updated = false;
+    const dateStr = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+    if (documentType === 'resume' && !client.resumeSent) {
+      await ClientModel.updateOne(
+        { email: emailLower },
+        { $set: { resumeSent: true, resumeSentDate: dateStr, updatedAt: dateStr } }
+      );
+      updated = true;
+    }
+    if (documentType === 'coverLetter' && !client.coverLetterSent) {
+      await ClientModel.updateOne(
+        { email: emailLower },
+        { $set: { coverLetterSent: true, coverLetterSentDate: dateStr, updatedAt: dateStr } }
+      );
+      updated = true;
+    }
+    // Add attachment to OnboardingJob if not already present (for JobCard badges)
+    const job = await OnboardingJobModel.findOne({ clientEmail: emailLower });
+    if (job) {
+      const attachments = job.attachments || [];
+      const resumeMatch = documentType === 'resume' && attachments.some((a) => /^resume$/i.test((a.name || '').trim()));
+      const coverMatch = documentType === 'coverLetter' && attachments.some((a) => /cover\s*letter/i.test((a.name || '').trim()));
+      if (!resumeMatch && !coverMatch && url && String(url).trim()) {
+        const attName = documentType === 'resume' ? 'resume' : 'cover letter';
+        job.attachments = job.attachments || [];
+        job.attachments.push({
+          url: String(url).trim(),
+          filename: fileName || attName,
+          name: attName,
+          uploadedAt: new Date(),
+          uploadedBy: 'auto-sync'
+        });
+        job.updatedAt = new Date();
+        await job.save();
+        invalidateJobListCache();
+        updated = true;
+      }
+    }
+    return res.status(200).json({ updated });
+  } catch (e) {
+    console.error('[sync-document-upload]', e);
+    return res.status(500).json({ success: false, error: e.message });
   }
 });
 
