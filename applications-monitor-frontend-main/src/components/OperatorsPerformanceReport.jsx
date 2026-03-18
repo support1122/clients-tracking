@@ -26,6 +26,11 @@ export default function OperatorsPerformanceReport() {
   const [incentiveStructureExpanded, setIncentiveStructureExpanded] = useState(false);
   const [notDownloadedMap, setNotDownloadedMap] = useState({});
   const [notDownloadedByStatusMap, setNotDownloadedByStatusMap] = useState({});
+  const [jobsAddedMap, setJobsAddedMap] = useState({});
+  const [totalJobsAdded, setTotalJobsAdded] = useState(0);
+  const [jobsAddedModal, setJobsAddedModal] = useState({ open: false, email: '', name: '' });
+  const [jobsAddedList, setJobsAddedList] = useState([]);
+  const [jobsAddedLoading, setJobsAddedLoading] = useState(false);
 
   useEffect(() => {
     fetchOperations();
@@ -64,17 +69,23 @@ export default function OperatorsPerformanceReport() {
         setTotalApplied(data.totalApplied || 0);
         setNotDownloadedMap(data.notDownloadedMap || {});
         setNotDownloadedByStatusMap(data.notDownloadedByStatusMap || {});
+        setJobsAddedMap(data.jobsAddedMap || {});
+        setTotalJobsAdded(data.totalJobsAdded || 0);
       } else {
         console.error('Error fetching performance report');
         setOperationsPerformance({});
         setTotalApplied(0);
         setNotDownloadedByStatusMap({});
+        setJobsAddedMap({});
+        setTotalJobsAdded(0);
       }
     } catch (error) {
       console.error('Error fetching performance report:', error);
       setOperationsPerformance({});
       setTotalApplied(0);
       setNotDownloadedByStatusMap({});
+      setJobsAddedMap({});
+      setTotalJobsAdded(0);
     } finally {
       setLoading(false);
     }
@@ -173,11 +184,30 @@ export default function OperatorsPerformanceReport() {
       .map(op => ({
         ...op,
         applications: operationsPerformance[op.email] || 0,
+        jobsAdded: jobsAddedMap[op.email?.toLowerCase()] || 0,
         notDownloaded: notDownloadedMap[op.email] || 0,
         notDownloadedByStatus: notDownloadedByStatusMap[op.email?.toLowerCase()] || { applied: 0, rejected: 0, interviewing: 0, offer: 0 }
       }))
       .sort((a, b) => b.applications - a.applications);
-  }, [operations, operationsPerformance, notDownloadedMap, notDownloadedByStatusMap]);
+  }, [operations, operationsPerformance, jobsAddedMap, notDownloadedMap, notDownloadedByStatusMap]);
+
+  const openJobsAddedModal = async (email, name) => {
+    setJobsAddedModal({ open: true, email, name });
+    setJobsAddedLoading(true);
+    setJobsAddedList([]);
+    try {
+      const params = new URLSearchParams({ startDate, endDate });
+      const response = await fetch(`${API_BASE}/api/operations/${encodeURIComponent(email)}/jobs-added?${params.toString()}`);
+      if (response.ok) {
+        const data = await response.json();
+        setJobsAddedList(data.jobs || []);
+      }
+    } catch (error) {
+      console.error('Error fetching jobs added:', error);
+    } finally {
+      setJobsAddedLoading(false);
+    }
+  };
 
   // Get tier distribution (only show operators who qualify for tiers - 1,000+)
   const getTierDistribution = useMemo(() => {
@@ -379,13 +409,21 @@ export default function OperatorsPerformanceReport() {
                 };
                 const g = gradients[rateColor];
                 return (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-6 border border-blue-200">
                       <div className="text-sm font-semibold text-blue-700 mb-2">Total Applications</div>
                       <div className="text-3xl font-bold text-blue-900">
                         <AnimatedCounter value={totalApplied} loading={loading} />
                       </div>
                       <div className="text-xs text-blue-600 mt-1">In selected date range</div>
+                    </div>
+
+                    <div className="bg-gradient-to-br from-violet-50 to-violet-100 rounded-xl p-6 border border-violet-200">
+                      <div className="text-sm font-semibold text-violet-700 mb-2">Total Jobs Added</div>
+                      <div className="text-3xl font-bold text-violet-900">
+                        <AnimatedCounter value={totalJobsAdded} loading={loading} />
+                      </div>
+                      <div className="text-xs text-violet-600 mt-1">Added via extension</div>
                     </div>
 
                     <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-6 border border-green-200">
@@ -476,6 +514,7 @@ export default function OperatorsPerformanceReport() {
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Rank</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Operator Name</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Email</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-slate-700 uppercase">Jobs Added</th>
                           <th className="px-4 py-3 text-right text-xs font-semibold text-slate-700 uppercase">Applications</th>
                           <th className="px-4 py-3 text-center text-xs font-semibold text-slate-700 uppercase">Processing Rate</th>
                           <th className="px-4 py-3 text-left text-xs font-semibold text-slate-700 uppercase">Current Tier</th>
@@ -506,6 +545,19 @@ export default function OperatorsPerformanceReport() {
                               </td>
                               <td className="px-4 py-3 text-sm text-slate-600">
                                 {operator.email}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-right">
+                                {operator.jobsAdded > 0 ? (
+                                  <button
+                                    onClick={() => openJobsAddedModal(operator.email, operator.name || operator.email.split('@')[0])}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-violet-100 text-violet-700 border border-violet-200 hover:bg-violet-200 transition-colors cursor-pointer"
+                                  >
+                                    {operator.jobsAdded.toLocaleString()}
+                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                  </button>
+                                ) : (
+                                  <span className="text-slate-400">0</span>
+                                )}
                               </td>
                               <td className="px-4 py-3 text-sm font-bold text-slate-900 text-right">
                                 {operator.applications.toLocaleString()}
@@ -613,6 +665,75 @@ export default function OperatorsPerformanceReport() {
           </div>
         ) : null}
       </div>
+
+      {/* Jobs Added Modal */}
+      {jobsAddedModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setJobsAddedModal({ open: false, email: '', name: '' })}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col mx-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-slate-200">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Jobs Added by {jobsAddedModal.name}</h3>
+                <p className="text-sm text-slate-500">{jobsAddedModal.email} &middot; {startDate} to {endDate}</p>
+              </div>
+              <button onClick={() => setJobsAddedModal({ open: false, email: '', name: '' })} className="p-1 hover:bg-slate-100 rounded-lg transition-colors">
+                <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5">
+              {jobsAddedLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-600"></div>
+                  <span className="ml-3 text-slate-500">Loading jobs...</span>
+                </div>
+              ) : jobsAddedList.length === 0 ? (
+                <p className="text-center text-slate-400 py-12">No jobs found for this date range</p>
+              ) : (
+                <>
+                  <div className="text-sm text-slate-500 mb-3">{jobsAddedList.length} job{jobsAddedList.length !== 1 ? 's' : ''} added</div>
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">#</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">Job Title</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">Company</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">Client</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">Date Added</th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {jobsAddedList.map((job, idx) => (
+                        <tr key={job._id || idx} className="hover:bg-slate-50">
+                          <td className="px-3 py-2 text-slate-400">{idx + 1}</td>
+                          <td className="px-3 py-2 font-medium text-slate-900 max-w-[200px] truncate">
+                            {job.joblink ? (
+                              <a href={job.joblink} target="_blank" rel="noopener noreferrer" className="hover:text-violet-600 hover:underline">{job.jobTitle || 'Untitled'}</a>
+                            ) : (job.jobTitle || 'Untitled')}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600">{job.companyName || '-'}</td>
+                          <td className="px-3 py-2 text-slate-600 max-w-[150px] truncate">{job.userID || '-'}</td>
+                          <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{job.dateAdded || '-'}</td>
+                          <td className="px-3 py-2">
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
+                              (job.currentStatus || '').toLowerCase().includes('applied') ? 'bg-blue-100 text-blue-700' :
+                              (job.currentStatus || '').toLowerCase().includes('interview') ? 'bg-yellow-100 text-yellow-700' :
+                              (job.currentStatus || '').toLowerCase().includes('offer') ? 'bg-green-100 text-green-700' :
+                              (job.currentStatus || '').toLowerCase().includes('reject') ? 'bg-red-100 text-red-700' :
+                              'bg-slate-100 text-slate-600'
+                            }`}>
+                              {job.currentStatus || 'saved'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
