@@ -4039,13 +4039,6 @@ function isProfileComplete(profile) {
   return ok && !!profile.confirmAccuracy && !!profile.agreeTos;
 }
 
-// Effective "dashboard details present" = full completion OR profile exists with createdAt
-function hasDashboardDetails(profile) {
-  if (!profile || typeof profile !== 'object') return false;
-  if (isProfileComplete(profile)) return true;
-  return !!(profile.createdAt || profile.updatedAt);
-}
-
 // Escape special regex chars so email is safe for case-insensitive match
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -4093,7 +4086,7 @@ app.get('/api/onboarding/client-profile/:email', verifyToken, async (req, res) =
       return send(null, false, 'Profile not found');
     }
 
-    const complete = hasDashboardDetails(profile);
+    const complete = isProfileComplete(profile);
 
     // Build the update — always sync profileComplete
     const updateFields = { profileComplete: complete };
@@ -4158,7 +4151,7 @@ app.post('/api/onboarding/batch-profile-status', verifyToken, async (req, res) =
 
     for (const email of uniqueEmails) {
       const profile = profileMap.get(email);
-      const complete = profile ? hasDashboardDetails(profile) : false;
+      const complete = profile ? isProfileComplete(profile) : false;
       results[email] = complete;
 
       const updateSet = { profileComplete: complete };
@@ -4717,36 +4710,7 @@ const getOperationsPerformanceReport = async (req, res) => {
       }
     ];
 
-    // Pipeline for counting jobs ADDED by each operator in the date range
-    const addedPipeline = [
-      {
-        $match: {
-          operatorEmail: { $in: operatorEmails },
-          dateAdded: { $exists: true, $nin: [null, ''] },
-          $or: datePatterns.map(pattern => ({ dateAdded: { $regex: pattern } }))
-        }
-      },
-      {
-        $group: {
-          _id: '$operatorEmail',
-          addedCount: { $sum: 1 }
-        }
-      },
-      {
-        $project: {
-          _id: 0,
-          operatorEmail: '$_id',
-          addedCount: 1
-        }
-      }
-    ];
-
-    // Run both aggregations in parallel for speed
-    const [results, addedResults] = await Promise.all([
-      JobModel.aggregate(pipeline).allowDiskUse(true),
-      JobModel.aggregate(addedPipeline).allowDiskUse(true)
-    ]);
-
+    const results = await JobModel.aggregate(pipeline).allowDiskUse(true);
     const performanceMap = {};
     const notDownloadedMap = {};
     const notDownloadedByStatusMap = {};
@@ -4762,35 +4726,26 @@ const getOperationsPerformanceReport = async (req, res) => {
       };
     });
 
-    const jobsAddedMap = {};
-    addedResults.forEach(r => {
-      jobsAddedMap[(r.operatorEmail || '').toLowerCase()] = r.addedCount;
-    });
-
     const performanceData = allOperations.map(op => {
       const emailLower = op.email.toLowerCase();
       return {
         email: op.email,
         name: op.name || op.email.split('@')[0],
         appliedCount: performanceMap[emailLower] || 0,
-        addedCount: jobsAddedMap[emailLower] || 0,
         notDownloadedCount: notDownloadedMap[emailLower] || 0,
         notDownloadedByStatus: notDownloadedByStatusMap[emailLower] || { applied: 0, rejected: 0, interviewing: 0, offer: 0 }
       };
     }).sort((a, b) => b.appliedCount - a.appliedCount);
 
     const totalApplied = performanceData.reduce((sum, op) => sum + op.appliedCount, 0);
-    const totalJobsAdded = performanceData.reduce((sum, op) => sum + op.addedCount, 0);
 
     res.status(200).json({
       success: true,
       startDate,
       endDate,
       totalApplied,
-      totalJobsAdded,
       operators: performanceData,
       performanceMap,
-      jobsAddedMap,
       notDownloadedMap,
       notDownloadedByStatusMap
     });
@@ -4801,55 +4756,6 @@ const getOperationsPerformanceReport = async (req, res) => {
 };
 
 app.get('/api/operations/performance-report', getOperationsPerformanceReport);
-
-// Get jobs added by a specific operator in a date range (drill-down)
-app.get('/api/operations/:email/jobs-added', async (req, res) => {
-  try {
-    const { startDate, endDate } = req.query;
-    const operatorEmail = req.params.email.toLowerCase();
-
-    if (!startDate || !endDate) {
-      return res.status(400).json({ error: 'startDate and endDate are required' });
-    }
-
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
-
-    const datePatterns = [];
-    const currentDate = new Date(start);
-    while (currentDate <= end) {
-      const day = currentDate.getDate();
-      const month = currentDate.getMonth() + 1;
-      const year = currentDate.getFullYear();
-      const dayPattern = day < 10 ? `[0]?${day}` : `${day}`;
-      const monthPattern = month < 10 ? `[0]?${month}` : `${month}`;
-      datePatterns.push(new RegExp(`^${dayPattern}/${monthPattern}/${year}(?=$|\\D)`));
-      currentDate.setDate(currentDate.getDate() + 1);
-    }
-
-    const jobs = await JobModel.find({
-      operatorEmail,
-      dateAdded: { $exists: true, $nin: [null, ''] },
-      $or: datePatterns.map(pattern => ({ dateAdded: { $regex: pattern } }))
-    })
-    .select('jobTitle companyName userID dateAdded currentStatus joblink')
-    .sort({ _id: -1 })
-    .lean();
-
-    res.status(200).json({
-      success: true,
-      operatorEmail,
-      startDate,
-      endDate,
-      count: jobs.length,
-      jobs
-    });
-  } catch (error) {
-    console.error('Error fetching jobs added by operator:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
 
 // Get all operations who have this client in their managedUsers (by client email)
 const getOperationsByClient = async (req, res) => {
@@ -5568,20 +5474,13 @@ app.post('/api/internal/sync-document-upload', express.json(), async (req, res) 
     if (!client) {
       return res.status(200).json({ updated: false, reason: 'client_not_in_tracking' });
     }
-    // Resolve dashboard creation date (fallback chain, backward compatible)
-    // 1. dashboardDetailsCompletedAt = when client completed Flashfire form (education, preferences, resume, etc.)
-    // 2. Client.createdAt, 3. OnboardingJob.createdAt, 4. Profile.createdAt
-    const job = await OnboardingJobModel.findOne({ clientEmail: emailLower });
+    // Resolve dashboard creation date (prefer Client.createdAt, then OnboardingJob, then Profile)
     let dashboardCreated = null;
-    if (job?.dashboardDetailsCompletedAt) {
-      dashboardCreated = job.dashboardDetailsCompletedAt instanceof Date ? job.dashboardDetailsCompletedAt : new Date(job.dashboardDetailsCompletedAt);
-    }
+    const clientCreated = parseFlexibleDate(client.createdAt);
+    if (clientCreated) dashboardCreated = clientCreated;
     if (!dashboardCreated) {
-      const clientCreated = parseFlexibleDate(client.createdAt);
-      if (clientCreated) dashboardCreated = clientCreated;
-    }
-    if (!dashboardCreated && job?.createdAt) {
-      dashboardCreated = job.createdAt instanceof Date ? job.createdAt : new Date(job.createdAt);
+      const job = await OnboardingJobModel.findOne({ clientEmail: emailLower }).select('createdAt').lean();
+      if (job?.createdAt) dashboardCreated = job.createdAt instanceof Date ? job.createdAt : new Date(job.createdAt);
     }
     if (!dashboardCreated) {
       const Profile = getProfileModel();
@@ -5613,6 +5512,7 @@ app.post('/api/internal/sync-document-upload', express.json(), async (req, res) 
       updated = true;
     }
     // Add attachment to OnboardingJob if not already present (for JobCard badges)
+    const job = await OnboardingJobModel.findOne({ clientEmail: emailLower });
     if (job) {
       const attachments = job.attachments || [];
       const resumeMatch = documentType === 'resume' && attachments.some((a) => /^resume$/i.test((a.name || '').trim()));
@@ -5989,50 +5889,17 @@ async function runZeroSavedJobReminder() {
     const savedMap = new Map((savedByUser || []).map((r) => [r._id.toLowerCase(), r.saved || 0]));
     const clientNameMap = new Map((activeUnpausedClients || []).map((c) => [c.email.toLowerCase(), c.name || c.email]));
 
-    // Collect clients with zero saved jobs
-    const zeroSavedEmails = [];
-    for (const client of activeUnpausedClients) {
+    let sentCount = 0;
+    for (const client of activeUnpausedClients || []) {
       const email = (client.email || '').toLowerCase();
       if (!email) continue;
-      if ((savedMap.get(email) || 0) === 0) {
-        zeroSavedEmails.push(email);
-      }
-    }
 
-    if (zeroSavedEmails.length === 0) {
-      console.log('📬 [Zero Saved Reminder] All active clients have saved jobs');
-      return;
-    }
+      const saved = savedMap.get(email) || 0;
+      // Only send message if saved count is 0
+      if (saved !== 0) continue;
 
-    // Single aggregation: get the latest operator name for each zero-saved client
-    const latestOperators = await JobModel.aggregate([
-      {
-        $match: {
-          userID: { $in: zeroSavedEmails },
-          operatorEmail: { $exists: true, $nin: [null, '', 'user@flashfirehq'] }
-        }
-      },
-      { $sort: { _id: -1 } },
-      {
-        $group: {
-          _id: '$userID',
-          operatorName: { $first: '$operatorName' }
-        }
-      }
-    ]);
-    const operatorMap = new Map((latestOperators || []).map((r) => [r._id.toLowerCase(), r.operatorName]));
-
-    let sentCount = 0;
-    for (const email of zeroSavedEmails) {
       const clientName = clientNameMap.get(email) || email;
-      const operatorName = operatorMap.get(email);
-
-      let message;
-      if (operatorName && operatorName !== 'user') {
-        message = `Hey ${operatorName}, ${clientName} has 0 job cards in dashboard please add jobs`;
-      } else {
-        message = `${clientName} have zero jobs in their dashboard please add jobs`;
-      }
+      const message = `${clientName} have zero jobs in their dashboard please add jobs`;
 
       await fetch(DISCORD_ZERO_SAVED_WEBHOOK, {
         method: 'POST',

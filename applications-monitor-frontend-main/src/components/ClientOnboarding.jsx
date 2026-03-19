@@ -278,8 +278,8 @@ export default function ClientOnboarding() {
 
       setJobs(uniqueJobs);
 
-      // Background: sync profileComplete for jobs that haven't been checked yet or were previously false (re-check with fallback)
-      const uncheckedEmails = [...new Set(uniqueJobs.filter(j => j.profileComplete == null || j.profileComplete === false).map(j => (j.clientEmail || '').toLowerCase().trim()).filter(Boolean))];
+      // Background: sync profileComplete for jobs that haven't been checked yet
+      const uncheckedEmails = [...new Set(uniqueJobs.filter(j => j.profileComplete == null).map(j => (j.clientEmail || '').toLowerCase().trim()).filter(Boolean))];
       if (uncheckedEmails.length > 0) {
         fetch(`${API_BASE}/api/onboarding/batch-profile-status`, {
           method: 'POST',
@@ -292,7 +292,7 @@ export default function ClientOnboarding() {
             if (results && typeof results === 'object') {
               setJobs(prev => prev.map(j => {
                 const email = (j.clientEmail || '').toLowerCase().trim();
-                if (email && results[email] !== undefined) {
+                if (email && results[email] !== undefined && j.profileComplete == null) {
                   return { ...j, profileComplete: results[email] };
                 }
                 return j;
