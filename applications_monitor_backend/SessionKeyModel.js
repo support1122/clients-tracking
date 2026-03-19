@@ -24,7 +24,7 @@ export const SessionKeySchema = new mongoose.Schema({
   },
   createdAt: {
     type: String,
-    default: () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+    default: () => new Date().toLocaleString('en-US', 'Asia/Kolkata'),
     required: true,
     immutable: true
   },

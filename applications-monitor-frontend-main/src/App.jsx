@@ -153,11 +153,6 @@ function App() {
                     Performance Report
                   </button>
                 </Link>
-                <Link to="/job-card-analysis">
-                  <button className="px-4 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors text-sm">
-                    Job Card Analysis
-                  </button>
-                </Link>
                 <Link to={location.pathname === "/admin-dashboard" ? "/monitor-clients" : "/admin-dashboard"}>
                   <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm">
                     {location.pathname === "/admin-dashboard" ? "Monitor Clients" : "Admin Dashboard"}
