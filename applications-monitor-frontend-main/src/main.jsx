@@ -27,6 +27,7 @@ const ClientJobAnalysis = React.lazy(() => import('./components/ClientJobAnalysi
 const CallScheduler = React.lazy(() => import('./components/CallScheduler.jsx'));
 const ClientPreferences = React.lazy(() => import('./components/ClientPreferences.jsx'));
 const OperatorsPerformanceReport = React.lazy(() => import('./components/OperatorsPerformanceReport.jsx'));
+const JobCardAnalysis = React.lazy(() => import('./components/JobCardAnalysis.jsx'));
 const ClientOnboarding = React.lazy(() => import('./components/ClientOnboarding.jsx'));
 
 // Minimal fallback shown while a route chunk loads
@@ -56,7 +57,8 @@ const router = createBrowserRouter([
       { path: '/call-scheduler', element: <Lazy><CallScheduler /></Lazy> },
       { path: '/client-preferences', element: <Lazy><ClientPreferences /></Lazy> },
       { path: '/client-onboarding', element: <Lazy><ClientOnboarding /></Lazy> },
-      { path: '/operators-performance-report', element: <Lazy><OperatorsPerformanceReport /></Lazy> }
+      { path: '/operators-performance-report', element: <Lazy><OperatorsPerformanceReport /></Lazy> },
+      { path: '/job-card-analysis', element: <Lazy><JobCardAnalysis /></Lazy> }
     ]
   }
 ]);

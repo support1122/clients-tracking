@@ -995,7 +995,7 @@ const updateClientOperationsName = async (req, res) => {
       { email: email.toLowerCase() },
       {
         operationsName: operationsName || '',
-        updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+        updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
       },
       { new: true }
     ).select('email operationsName').lean();
@@ -1026,7 +1026,7 @@ const updateClientDashboardTeamLead = async (req, res) => {
       { email: emailLower },
       {
         dashboardTeamLeadName: newName,
-        updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+        updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
       },
       { new: true }
     ).select('email dashboardTeamLeadName').lean();
@@ -1079,7 +1079,7 @@ const upgradeClientPlan = async (req, res) => {
             : 'Free Trial';
 
     const planPrice = planPrices[planTypeLower];
-    const currentDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+    const currentDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
     const existingClient = await ClientModel.findOne({ email: emailLower }).lean();
     if (!existingClient) {
@@ -1143,7 +1143,7 @@ const addClientAddon = async (req, res) => {
     }
 
     const emailLower = email.toLowerCase();
-    const currentDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+    const currentDate = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
     const existingClient = await ClientModel.findOne({ email: emailLower }).lean();
     if (!existingClient) {
@@ -1238,7 +1238,7 @@ const addClientAddon = async (req, res) => {
 //             amountPaidDate,
 //             modeOfPayment,
 //             status,
-//             updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+//             updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
 //         };
 // const userData = {
 //       name,
@@ -1339,7 +1339,7 @@ const addClientAddon = async (req, res) => {
 //             amountPaidDate,
 //             modeOfPayment,
 //             status,
-//             updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+//             updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
 //         };
 
 //   const clientTracking = await ClientModel.findOneAndUpdate(
@@ -1546,7 +1546,7 @@ const login = async (req, res) => {
         });
         if (sessionKeyDoc) {
           sessionKeyDoc.isUsed = true;
-          sessionKeyDoc.usedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
+          sessionKeyDoc.usedAt = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
           await sessionKeyDoc.save();
           secondStepOk = true;
         }
@@ -1601,7 +1601,7 @@ const createUser = async (req, res) => {
       password: hashedPassword,
       role,
       name: name || '',
-      updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+      updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
     };
     if (role === 'onboarding_team' && onboardingSubRole) {
       userData.onboardingSubRole = onboardingSubRole;
@@ -1717,8 +1717,8 @@ const createJob = async (req, res) => {
   try {
     const jobData = {
       ...req.body,
-      createdAt: new Date().toLocaleString('en-US', 'Asia/Kolkata'),
-      updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+      createdAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+      updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
     };
 
     const job = new JobModel(jobData);
@@ -1960,7 +1960,7 @@ const changePassword = async (req, res) => {
 
     // Update password
     user.password = hashedPassword;
-    user.updatedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
+    user.updatedAt = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     await user.save();
 
     res.status(200).json({
@@ -1991,7 +1991,7 @@ const resetPasswordByEmail = async (req, res) => {
     }
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     user.password = hashedPassword;
-    user.updatedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
+    user.updatedAt = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     await user.save();
     res.status(200).json({
       message: 'Password reset successfully',
@@ -2034,7 +2034,7 @@ const updateUser = async (req, res) => {
       user.linkedDashboardManagerName = linkedDashboardManagerName.trim();
     }
 
-    user.updatedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
+    user.updatedAt = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     await user.save();
 
     res.status(200).json({
@@ -2084,7 +2084,7 @@ const changeClientPassword = async (req, res) => {
       {
         $set: {
           passwordHashed: encryptedPassword,
-          updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+          updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
         }
       }
     );
@@ -2444,7 +2444,7 @@ const syncClientsFromJobs = async (req, res) => {
         dashboardTeamLeadName: " ",
         planType: "ignite",
         planPrice: 199,
-        onboardingDate: new Date().toLocaleString('en-US', 'Asia/Kolkata'),
+        onboardingDate: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
         whatsappGroupMade: false,
         whatsappGroupMadeDate: " ",
         dashboardCredentialsShared: false,
@@ -2476,8 +2476,8 @@ const syncClientsFromJobs = async (req, res) => {
         companyName: " ",
         lastApplicationDate: " ",
         jobStatus: "still_searching",
-        createdAt: new Date().toLocaleString('en-US', 'Asia/Kolkata'),
-        updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+        createdAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+        updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
       };
 
       const client = new ClientModel(clientData);
@@ -2532,7 +2532,7 @@ const createOrUpdateOperation = async (req, res) => {
       password: password ? await bcrypt.hash(password, 10) : undefined,
       role,
       managedUsers,
-      updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
+      updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
     };
 
     // Remove undefined values
@@ -4534,7 +4534,7 @@ const syncManagerAssignments = async (req, res) => {
           {
             $set: {
               dashboardTeamLeadName: user.dashboardManager,
-              updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
+              updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
             }
           }
         );
@@ -4801,6 +4801,130 @@ const getOperationsPerformanceReport = async (req, res) => {
 };
 
 app.get('/api/operations/performance-report', getOperationsPerformanceReport);
+
+// Job Card Analysis: who added how many job cards, for which clients (admin-only)
+app.get('/api/analytics/job-card-analysis', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    // Build date patterns for dateAdded string matching
+    // dateAdded has MIXED formats: M/D/YYYY (dashboard) and D/M/YYYY (extension)
+    // Generate patterns for both to match all jobs
+    const datePatterns = [];
+    const cursor = new Date(start);
+    while (cursor <= end) {
+      const m = cursor.getMonth() + 1;
+      const d = cursor.getDate();
+      const y = cursor.getFullYear();
+      datePatterns.push(`^${m}/${d}/${y}`);   // M/D/YYYY (dashboard format)
+      if (m !== d) {
+        datePatterns.push(`^${d}/${m}/${y}`); // D/M/YYYY (extension format)
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    if (datePatterns.length === 0) {
+      return res.status(200).json({ success: true, operators: [], totals: { totalAdded: 0, totalOperators: 0, totalClients: 0 } });
+    }
+
+    // Single aggregation: group by operator + client, count only EXTENSION-added jobs
+    // Extension detection: extensionCode is set (new jobs) OR dateAdded uses en-IN locale (lowercase am/pm — historical)
+    const pipeline = [
+      {
+        $match: {
+          operatorEmail: { $exists: true, $nin: [null, '', 'user@flashfirehq'] },
+          dateAdded: { $exists: true, $nin: [null, ''] },
+          $and: [
+            { $or: datePatterns.map(p => ({ dateAdded: { $regex: p } })) },
+            { $or: [
+              { extensionCode: { $exists: true, $nin: [null, ''] } },
+              { dateAdded: { $regex: /\b(am|pm)$/ } }
+            ]}
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: { operatorEmail: '$operatorEmail', clientEmail: '$userID' },
+          count: { $sum: 1 },
+          operatorName: { $first: '$operatorName' }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.operatorEmail',
+          operatorName: { $first: '$operatorName' },
+          totalAdded: { $sum: '$count' },
+          clients: {
+            $push: {
+              clientEmail: '$_id.clientEmail',
+              count: '$count'
+            }
+          }
+        }
+      },
+      { $sort: { totalAdded: -1 } }
+    ];
+
+    const results = await JobModel.aggregate(pipeline).allowDiskUse(true);
+
+    // Collect all unique client emails to fetch their names
+    const allClientEmails = new Set();
+    results.forEach(op => op.clients.forEach(c => allClientEmails.add((c.clientEmail || '').toLowerCase())));
+
+    const clientDocs = await ClientModel.find(
+      { email: { $in: [...allClientEmails] } },
+      { email: 1, name: 1 }
+    ).lean();
+    const clientNameMap = {};
+    clientDocs.forEach(c => { clientNameMap[(c.email || '').toLowerCase()] = c.name || c.email; });
+
+    // Also get operator names from OperationsModel for any missing names
+    const opEmails = results.map(r => r._id);
+    const opDocs = await OperationsModel.find({ email: { $in: opEmails } }, { email: 1, name: 1 }).lean();
+    const opNameMap = {};
+    opDocs.forEach(o => { opNameMap[(o.email || '').toLowerCase()] = o.name || o.email; });
+
+    const operators = results.map(op => ({
+      email: op._id,
+      name: opNameMap[(op._id || '').toLowerCase()] || op.operatorName || op._id.split('@')[0],
+      totalAdded: op.totalAdded,
+      clients: op.clients
+        .map(c => ({
+          email: c.clientEmail,
+          name: clientNameMap[(c.clientEmail || '').toLowerCase()] || c.clientEmail,
+          count: c.count
+        }))
+        .sort((a, b) => b.count - a.count)
+    }));
+
+    const totalAdded = operators.reduce((s, o) => s + o.totalAdded, 0);
+    const uniqueClients = new Set();
+    operators.forEach(op => op.clients.forEach(c => uniqueClients.add(c.email)));
+
+    res.status(200).json({
+      success: true,
+      startDate,
+      endDate,
+      operators,
+      totals: {
+        totalAdded,
+        totalOperators: operators.length,
+        totalClients: uniqueClients.size
+      }
+    });
+  } catch (error) {
+    console.error('Error in job-card-analysis:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Get jobs added by a specific operator in a date range (drill-down)
 app.get('/api/operations/:email/jobs-added', async (req, res) => {
@@ -5597,7 +5721,7 @@ app.post('/api/internal/sync-document-upload', express.json(), async (req, res) 
       return res.status(200).json({ updated: false, reason: 'within_2_day_window' });
     }
     let updated = false;
-    const dateStr = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+    const dateStr = now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     if (documentType === 'resume' && !client.resumeSent) {
       await ClientModel.updateOne(
         { email: emailLower },
