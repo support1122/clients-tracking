@@ -630,7 +630,7 @@ export async function patchOnboardingJob(req, res) {
       // Sync to Client model
       await ClientModel.updateOne(
         { email: (job.clientEmail || '').toLowerCase() },
-        { $set: { dashboardTeamLeadName: job.dashboardManagerName, updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) } }
+        { $set: { dashboardTeamLeadName: job.dashboardManagerName, updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata') } }
       );
     }
     if ((isAdmin || isCsm || isTeamLead) && taggedDashboardManagerNames !== undefined && Array.isArray(taggedDashboardManagerNames)) {

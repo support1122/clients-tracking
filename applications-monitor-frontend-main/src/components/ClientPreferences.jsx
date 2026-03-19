@@ -639,7 +639,7 @@ export default function ClientPreferences() {
       [optimizationType]: {
         ...currentOptimization,
         completed: newCompletedState,
-        updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+        updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
       }
     };
 
@@ -695,8 +695,8 @@ export default function ClientPreferences() {
       notes: '',
       completed: false,
       createdBy: 'admin',
-      createdAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
-      updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      createdAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }),
+      updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' })
     };
 
     setEditingClient({
@@ -712,7 +712,7 @@ export default function ClientPreferences() {
       ...editingClient,
       todos: editingClient.todos.map(todo =>
         todo.id === todoId
-          ? { ...todo, ...updates, updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) }
+          ? { ...todo, ...updates, updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) }
           : todo
       )
     });

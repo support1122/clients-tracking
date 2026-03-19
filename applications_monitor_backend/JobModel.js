@@ -4,12 +4,12 @@ export const JobSchema = new mongoose.Schema({
     type: String,
     required: true,
     // unique: true,
-    default: () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }).toString()
+    default: () => new Date().toLocaleString('en-US', 'Asia/Kolkata').toString()
   },
   dateAdded:{
     type : String,
     required : true,
-    default: () => String(new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }))
+    default: () => String(new Date().toLocaleString('en-US', 'Asia/Kolkata'))
   },
   userID:{
     type: String,
@@ -48,14 +48,14 @@ export const JobSchema = new mongoose.Schema({
   },
   createdAt : {
     type : String,
-    default : () =>new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),
+    default : () =>new Date().toLocaleString('en-US', 'Asia/Kolkata'),
     required : true,
     immutable : true
   },
   updatedAt:{
     type : String,
     required : true ,
-    default : () =>new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })   
+    default : () =>new Date().toLocaleString('en-US', 'Asia/Kolkata')   
   },
   attachments : {
     type : [String],
@@ -95,6 +95,4 @@ JobModel.collection.createIndex({ "userID": 1 });
 JobModel.collection.createIndex({ "operatorEmail": 1 });
 JobModel.collection.createIndex({ "operatorEmail": 1, "appliedDate": 1, "currentStatus": 1 });
 JobModel.collection.createIndex({ "operatorEmail": 1, "appliedDate": 1, "downloaded": 1 });
-JobModel.collection.createIndex({ "operatorEmail": 1, "dateAdded": 1 });
 JobModel.collection.createIndex({ "currentStatus": 1, "appliedDate": 1 });
-JobModel.collection.createIndex({ "appliedByEmail": 1, "appliedDate": 1 });

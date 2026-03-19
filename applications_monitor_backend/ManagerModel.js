@@ -27,23 +27,23 @@ const managerSchema = new mongoose.Schema({
   },
   createdAt: {
     type: String,
-    default: () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+    default: () => new Date().toLocaleString('en-US', 'Asia/Kolkata')
   },
   updatedAt: {
     type: String,
-    default: () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+    default: () => new Date().toLocaleString('en-US', 'Asia/Kolkata')
   }
 });
 
 // Update the updatedAt field before saving
 managerSchema.pre('save', function(next) {
-  this.updatedAt = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+  this.updatedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
   next();
 });
 
 // Update the updatedAt field before updating
 managerSchema.pre('findOneAndUpdate', function(next) {
-  this.set({ updatedAt: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) });
+  this.set({ updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata') });
   next();
 });
 

@@ -209,20 +209,6 @@ export default function Layout({ children }) {
                 Operators Performance
               </button>
             </Link>
-
-            <Link to="/job-card-analysis">
-              <button className={getButtonClasses(
-                'bg-rose-600',
-                'bg-rose-700',
-                '/job-card-analysis',
-                userRole !== 'admin'
-              )}>
-                {isActive('/job-card-analysis') && (
-                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-white rounded-full border-2 border-rose-600"></span>
-                )}
-                Job Card Analysis
-              </button>
-            </Link>
           </div>
         </div>
 
