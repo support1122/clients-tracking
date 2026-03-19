@@ -97,4 +97,3 @@ JobModel.collection.createIndex({ "operatorEmail": 1, "appliedDate": 1, "current
 JobModel.collection.createIndex({ "operatorEmail": 1, "appliedDate": 1, "downloaded": 1 });
 JobModel.collection.createIndex({ "operatorEmail": 1, "dateAdded": 1 });
 JobModel.collection.createIndex({ "currentStatus": 1, "appliedDate": 1 });
-JobModel.collection.createIndex({ "appliedByEmail": 1, "appliedDate": 1 });

@@ -4609,23 +4609,13 @@ const getOperationsPerformanceReport = async (req, res) => {
     const pipeline = [
       {
         $match: {
+          operatorEmail: { $in: operatorEmails },
           appliedDate: { $exists: true, $nin: [null, ''] },
           $or: datePatterns.map(pattern => ({ appliedDate: { $regex: pattern } }))
         }
       },
       {
         $addFields: {
-          // Use appliedByEmail (new field) if set, fall back to operatorEmail (legacy)
-          _applier: {
-            $cond: {
-              if: { $and: [
-                { $ne: [{ $ifNull: ['$appliedByEmail', null] }, null] },
-                { $ne: ['$appliedByEmail', ''] }
-              ]},
-              then: '$appliedByEmail',
-              else: '$operatorEmail'
-            }
-          },
           _statusLower: { $toLower: { $ifNull: ['$currentStatus', ''] } },
           _isIncompleteColumn: {
             $or: [
@@ -4638,13 +4628,8 @@ const getOperationsPerformanceReport = async (req, res) => {
         }
       },
       {
-        $match: {
-          _applier: { $in: operatorEmails }
-        }
-      },
-      {
         $group: {
-          _id: '$_applier',
+          _id: '$operatorEmail',
           appliedCount: { $sum: 1 },
           notDownloadedCount: {
             $sum: {
