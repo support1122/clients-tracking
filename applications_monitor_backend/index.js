@@ -55,7 +55,8 @@ import {
   requestMove,
   approveMove,
   rejectMove,
-  invalidateJobListCache
+  invalidateJobListCache,
+  runHighAppliedJobsNotifications
 } from './controllers/onboardingController.js';
 import { ClientCounterModel } from './ClientCounterModel.js';
 import { OnboardingJobModel } from './OnboardingJobModel.js';
@@ -3137,7 +3138,14 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     // Check cache
     const cacheKey = date || '__all__';
     const cached = getAnalysisCache(cacheKey);
-    if (cached) return res.status(200).json(cached);
+    if (cached) {
+      if (Array.isArray(cached.rows)) {
+        await runHighAppliedJobsNotifications(cached.rows).catch((err) =>
+          console.error('[client-job-analysis] runHighAppliedJobsNotifications (cached):', err?.message || err)
+        );
+      }
+      return res.status(200).json(cached);
+    }
 
     // Build multi-format date regex if provided (for appliedDate)
     let multiFormatDateRegex = null;
@@ -3326,6 +3334,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     });
 
     const result = { success: true, date: date || null, rows };
+    await runHighAppliedJobsNotifications(rows).catch((err) =>
+      console.error('[client-job-analysis] runHighAppliedJobsNotifications:', err?.message || err)
+    );
     setAnalysisCache(cacheKey, result);
     res.status(200).json(result);
   } catch (e) {
@@ -4756,6 +4767,235 @@ const getOperationsPerformanceReport = async (req, res) => {
 };
 
 app.get('/api/operations/performance-report', getOperationsPerformanceReport);
+
+/** Date patterns for IST-style strings like "20/3/2026, 10:15:30 am" (same idea as performance report). */
+const buildJobDatePatternsForRange = (start, end) => {
+  const datePatterns = [];
+  const currentDate = new Date(start);
+  const endDate = new Date(end);
+  endDate.setHours(23, 59, 59, 999);
+  while (currentDate <= endDate) {
+    const day = currentDate.getDate();
+    const month = currentDate.getMonth() + 1;
+    const year = currentDate.getFullYear();
+    const dayPattern = day < 10 ? `[0]?${day}` : `${day}`;
+    const monthPattern = month < 10 ? `[0]?${month}` : `${month}`;
+    datePatterns.push(new RegExp(`^${dayPattern}/${monthPattern}/${year}(?=$|\\D)`));
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+  return datePatterns;
+};
+
+const getExtensionJobsReport = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      return res.status(400).json({ error: 'Invalid date range' });
+    }
+
+    const datePatterns = buildJobDatePatternsForRange(start, end);
+    if (datePatterns.length === 0) {
+      return res.status(400).json({ error: 'Invalid or empty date range' });
+    }
+
+    const dateOr = datePatterns.flatMap((pattern) => [
+      { dateAdded: { $regex: pattern } },
+      { createdAt: { $regex: pattern } },
+    ]);
+
+    const matchStage = {
+      $match: {
+        addedBy: { $exists: true, $nin: [null, ''], $type: 'string' },
+        $or: dateOr,
+      },
+    };
+
+    // Per operator: job count + distinct clients (userID) in range — not limited by sample/pagination.
+    const byAdder = await JobModel.aggregate([
+      matchStage,
+      {
+        $addFields: {
+          _clientKey: {
+            $cond: [
+              {
+                $or: [
+                  { $eq: ['$userID', null] },
+                  { $eq: ['$userID', ''] },
+                ],
+              },
+              null,
+              {
+                $toLower: {
+                  $trim: { input: { $toString: '$userID' } },
+                },
+              },
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: '$addedBy',
+          clientKeys: { $addToSet: '$_clientKey' },
+          count: { $sum: 1 },
+        },
+      },
+      { $match: { _id: { $nin: [null, ''] } } },
+      { $sort: { count: -1 } },
+      {
+        $project: {
+          _id: 0,
+          addedBy: '$_id',
+          count: 1,
+          uniqueClients: {
+            $size: {
+              $filter: {
+                input: '$clientKeys',
+                as: 'k',
+                cond: { $and: [{ $ne: ['$$k', null] }, { $ne: ['$$k', ''] }] },
+              },
+            },
+          },
+        },
+      },
+    ]).allowDiskUse(true);
+
+    const totalJobs = byAdder.reduce((acc, row) => acc + (row.count || 0), 0);
+
+    const matchQuery = {
+      addedBy: { $exists: true, $nin: [null, ''], $type: 'string' },
+      $or: dateOr,
+    };
+
+    const samples = await JobModel.find(matchQuery)
+      .select('jobTitle companyName userID dateAdded createdAt addedBy extensionCode jobID currentStatus')
+      .sort({ updatedAt: -1 })
+      .limit(50)
+      .lean();
+
+    res.status(200).json({
+      success: true,
+      startDate,
+      endDate,
+      totalJobs,
+      byAdder,
+      samples,
+    });
+  } catch (error) {
+    console.error('Error in getExtensionJobsReport:', error);
+    res.status(500).json({ error: error.message || 'Server error' });
+  }
+};
+
+/** Paginated jobs for one extension operator (addedBy) within the report date range. */
+const getExtensionJobsReportJobsByAdder = async (req, res) => {
+  try {
+    const { startDate, endDate, addedBy, page = '1', limit = '20' } = req.query;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required' });
+    }
+    const adderTrim = typeof addedBy === 'string' ? addedBy.trim() : '';
+    if (!adderTrim) {
+      return res.status(400).json({ error: 'addedBy is required' });
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      return res.status(400).json({ error: 'Invalid date range' });
+    }
+
+    const datePatterns = buildJobDatePatternsForRange(start, end);
+    if (datePatterns.length === 0) {
+      return res.status(400).json({ error: 'Invalid or empty date range' });
+    }
+
+    const dateOr = datePatterns.flatMap((pattern) => [
+      { dateAdded: { $regex: pattern } },
+      { createdAt: { $regex: pattern } },
+    ]);
+
+    const matchQuery = {
+      addedBy: adderTrim,
+      $or: dateOr,
+    };
+
+    const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 20));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [total, uniqueClientsAgg, jobs] = await Promise.all([
+      JobModel.countDocuments(matchQuery),
+      JobModel.aggregate([
+        { $match: matchQuery },
+        {
+          $addFields: {
+            _clientKey: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$userID', null] },
+                    { $eq: ['$userID', ''] },
+                  ],
+                },
+                null,
+                {
+                  $toLower: {
+                    $trim: { input: { $toString: '$userID' } },
+                  },
+                },
+              ],
+            },
+          },
+        },
+        { $group: { _id: '$_clientKey' } },
+        { $match: { _id: { $nin: [null, ''] } } },
+        { $count: 'n' },
+      ]).allowDiskUse(true),
+      JobModel.find(matchQuery)
+        .select(
+          'jobTitle companyName userID dateAdded createdAt addedBy extensionCode jobID currentStatus updatedAt appliedDate'
+        )
+        .sort({ updatedAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+    ]);
+
+    const uniqueClients = uniqueClientsAgg[0]?.n ?? 0;
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limitNum);
+
+    res.status(200).json({
+      success: true,
+      addedBy: adderTrim,
+      jobs,
+      total,
+      uniqueClients,
+      page: pageNum,
+      pageSize: limitNum,
+      totalPages,
+    });
+  } catch (error) {
+    console.error('Error in getExtensionJobsReportJobsByAdder:', error);
+    res.status(500).json({ error: error.message || 'Server error' });
+  }
+};
+
+app.get('/api/admin/extension-jobs-report', verifyToken, verifyAdmin, getExtensionJobsReport);
+app.get(
+  '/api/admin/extension-jobs-report/jobs',
+  verifyToken,
+  verifyAdmin,
+  getExtensionJobsReportJobsByAdder
+);
 
 // Get all operations who have this client in their managedUsers (by client email)
 const getOperationsByClient = async (req, res) => {

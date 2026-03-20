@@ -142,7 +142,7 @@ function App() {
                   <p className="text-sm text-gray-600">Admin: {user.email}</p>
                 </div>
               </div>
-              <div className="flex gap-3">
+              <div className="flex flex-wrap gap-2 sm:gap-3 justify-end">
                 <Link to="/client-onboarding">
                   <button className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors text-sm">
                     Client Onboarding
@@ -151,6 +151,11 @@ function App() {
                 <Link to="/operators-performance-report">
                   <button className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm">
                     Performance Report
+                  </button>
+                </Link>
+                <Link to="/extension-jobs-report">
+                  <button className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm">
+                    Extension Report
                   </button>
                 </Link>
                 <Link to={location.pathname === "/admin-dashboard" ? "/monitor-clients" : "/admin-dashboard"}>
