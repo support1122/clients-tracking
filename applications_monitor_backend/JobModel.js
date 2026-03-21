@@ -106,3 +106,4 @@ JobModel.collection.createIndex({ "operatorEmail": 1 });
 JobModel.collection.createIndex({ "operatorEmail": 1, "appliedDate": 1, "currentStatus": 1 });
 JobModel.collection.createIndex({ "operatorEmail": 1, "appliedDate": 1, "downloaded": 1 });
 JobModel.collection.createIndex({ "currentStatus": 1, "appliedDate": 1 });
+JobModel.collection.createIndex({ "userID": 1, "operatorName": 1, "appliedDate": 1 });

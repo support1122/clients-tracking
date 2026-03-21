@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import Layout from './Layout';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
@@ -45,6 +45,7 @@ export default function ClientJobAnalysis() {
   const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
   const [savingClientNumber, setSavingClientNumber] = useState(false);
   const [summaryCounts, setSummaryCounts] = useState({ active: 0, inactive: 0, new: 0, paused: 0, unpaused: 0 });
+  const lastAppliedRef = useRef({}); // Canonical lastAppliedOperatorName from initial (no-date) load
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -72,7 +73,22 @@ export default function ClientJobAnalysis() {
       });
       if (!resp.ok) throw new Error('Failed');
       const data = await resp.json();
-      setRows(data.rows || []);
+      const newRows = data.rows || [];
+
+      if (!selected) {
+        // Initial load (no date filter): capture canonical lastAppliedOperatorName
+        const map = {};
+        newRows.forEach(r => { map[r.email] = r.lastAppliedOperatorName || ''; });
+        lastAppliedRef.current = map;
+        setRows(newRows);
+      } else {
+        // Date-filtered refresh: preserve lastAppliedOperatorName from initial load
+        setRows(newRows.map(r => ({
+          ...r,
+          lastAppliedOperatorName: lastAppliedRef.current[r.email] ?? r.lastAppliedOperatorName ?? ''
+        })));
+      }
+
       if (data.summary) setSummaryCounts(data.summary);
     } catch (e) {
       toast.error('Failed to load client job analysis');
@@ -402,8 +418,33 @@ export default function ClientJobAnalysis() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
-              {processedRows.map((r, idx) => {
+            <tbody className={`divide-y divide-gray-100 ${loading && processedRows.length > 0 ? 'opacity-50 pointer-events-none' : ''}`}>
+              {loading && processedRows.length === 0 ? (
+                Array.from({ length: 8 }).map((_, i) => (
+                  <tr key={`skel-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                    <td className="px-2 py-2"><div className="space-y-1.5"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-28" /><div className="h-2.5 bg-gray-100 rounded animate-pulse w-36" /></div></td>
+                    <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-16" /></td>
+                    <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-20" /></td>
+                    <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-16" /></td>
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-20" /></td>
+                    <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-24" /></td>
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-10 ml-auto" /></td>
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-10 ml-auto" /></td>
+                  </tr>
+                ))
+              ) : processedRows.length === 0 ? (
+                <tr>
+                  <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">
+                    {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
+                  </td>
+                </tr>
+              ) : processedRows.map((r, idx) => {
                 // Total applications = saved + applied + interviewing + offer + rejected (removed is excluded)
                 const totalApplications = (Number(r.saved || 0) + Number(r.applied || 0) + Number(r.interviewing || 0) + Number(r.offer || 0) + Number(r.rejected || 0));
                 const plan = String(r.planType || '').trim().toLowerCase();
@@ -418,7 +459,16 @@ export default function ClientJobAnalysis() {
                 const totalLimit = planLimit + addonLimit + referralBonus;
                 const exceeded = totalLimit !== Infinity && totalApplications > totalLimit;
 
-                const isActiveWithNoSaved = r.status === 'active' && Number(r.saved || 0) === 0;
+                // Normalize status: API/legacy rows may omit status or use different casing — must match select value and colors.
+                const normalizedClientStatus = (() => {
+                  const s = r.status;
+                  if (s === undefined || s === null || String(s).trim() === '') return 'active';
+                  const low = String(s).toLowerCase().trim();
+                  return low === 'inactive' ? 'inactive' : 'active';
+                })();
+                const isClientRowActive = normalizedClientStatus === 'active';
+
+                const isActiveWithNoSaved = isClientRowActive && Number(r.saved || 0) === 0;
 
                 let rowColor;
                 if (exceeded) {
@@ -442,23 +492,27 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1">
                       {userRole === 'admin' ? (
                         <select
-                          value={r.status || 'active'}
+                          value={normalizedClientStatus}
                           onChange={(e) => handleStatusChange(r.email, e.target.value)}
                           disabled={savingStatus.has(r.email)}
-                          className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${r.status === 'active' ? 'bg-green-100 text-green-700 border-green-300' :
+                          className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${isClientRowActive ? 'bg-green-100 text-green-700 border-green-300' :
                             'bg-red-100 text-red-700 border-red-300'
                             }`}
                         >
                           <option value="active">Active</option>
                           <option value="inactive">Inactive</option>
                         </select>
-                      ) : r.status ? (
-                        <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${r.status === 'active' ? 'bg-green-100 text-green-700' :
+                      ) : r.status !== undefined && r.status !== null && String(r.status).trim() !== '' ? (
+                        <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${isClientRowActive ? 'bg-green-100 text-green-700' :
                           'bg-red-100 text-red-700'
                           }`}>
-                          {r.status.charAt(0).toUpperCase() + r.status.slice(1)}
+                          {isClientRowActive ? 'Active' : 'Inactive'}
                         </span>
-                      ) : '-'}
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold bg-green-100 text-green-700">
+                          Active
+                        </span>
+                      )}
                     </td>
                     <td className="px-2 py-1">
                       {(() => {
@@ -561,13 +615,6 @@ export default function ClientJobAnalysis() {
                   </tr>
                 )
               })}
-              {processedRows.length === 0 && (
-                <tr>
-                  <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">
-                    {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
         </div>

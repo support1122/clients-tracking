@@ -327,7 +327,7 @@ export async function listOnboardingJobs(req, res) {
     // Batch: fetch earliest job card date per client from client dashboard (JobModel)
     const [clients, managers, firstJobAgg] = await Promise.all([
       clientEmails.length
-        ? ClientModel.find({ email: { $in: clientEmails } }).select('email status isPaused clientNumber').lean()
+        ? ClientModel.find({ email: { $in: clientEmails } }).select('email status isPaused onboardingPhase clientNumber pausedAt').lean()
         : Promise.resolve([]),
       managerNames.length
         ? ManagerModel.find({ fullName: { $in: managerNames }, isActive: true }).select('fullName email').lean()
@@ -343,7 +343,16 @@ export async function listOnboardingJobs(req, res) {
     ]);
 
     const clientStatusMap = new Map(
-      clients.map(c => [c.email.toLowerCase(), { status: c.status || 'active', isPaused: c.isPaused || false, clientNumber: c.clientNumber }])
+      clients.map(c => [
+        c.email.toLowerCase(),
+        {
+          status: c.status || 'active',
+          isPaused: c.isPaused || false,
+          onboardingPhase: c.onboardingPhase || false,
+          clientNumber: c.clientNumber,
+          pausedAt: c.pausedAt || null
+        }
+      ])
     );
     const managerEmailByName = new Map(managers.map(m => [m.fullName, m.email]));
     // Map: clientEmail → earliest job card creation date (from MongoDB ObjectId timestamp)
@@ -357,7 +366,13 @@ export async function listOnboardingJobs(req, res) {
     const now = new Date();
     const enrichedJobs = jobs.map(job => {
       const clientEmail = (job.clientEmail || '').toLowerCase();
-      const clientInfo = clientStatusMap.get(clientEmail) || { status: 'active', isPaused: false, clientNumber: null };
+      const clientInfo = clientStatusMap.get(clientEmail) || {
+        status: 'active',
+        isPaused: false,
+        onboardingPhase: false,
+        clientNumber: null,
+        pausedAt: null
+      };
       const dashboardManagerEmail = (job.dashboardManagerName && managerEmailByName.get(job.dashboardManagerName)) || '';
       const clientNumber = clientInfo.clientNumber != null ? clientInfo.clientNumber : job.clientNumber;
       const attachmentNames = (job.attachments || []).map(a => ({ name: a.name || '' }));
@@ -372,12 +387,18 @@ export async function listOnboardingJobs(req, res) {
       }
       if (!endDate) endDate = now;
       const daysInPipeline = Math.max(0, Math.floor((new Date(endDate) - new Date(startDate)) / (24 * 60 * 60 * 1000)));
+      const pausedOnly = clientInfo.isPaused === true && clientInfo.onboardingPhase !== true;
+      let clientPausedDays = null;
+      if (pausedOnly && clientInfo.pausedAt) {
+        clientPausedDays = Math.max(0, Math.floor((now - new Date(clientInfo.pausedAt)) / (24 * 60 * 60 * 1000)));
+      }
       return {
         ...rest,
         attachments: attachmentNames,
         clientNumber,
         clientStatus: clientInfo.status,
         clientIsPaused: clientInfo.isPaused,
+        clientPausedDays,
         dashboardManagerEmail,
         daysInPipeline
       };
@@ -480,11 +501,13 @@ export async function getOnboardingJobById(req, res) {
       job.dashboardCredentials = { ...job.dashboardCredentials, password: '********' };
     }
 
+    const now = new Date();
+
     // Parallel: fetch client status + manager email at the same time
     const clientEmail = (job.clientEmail || '').toLowerCase();
     const [client, manager] = await Promise.all([
       clientEmail
-        ? ClientModel.findOne({ email: clientEmail }).select('status isPaused clientNumber').lean()
+        ? ClientModel.findOne({ email: clientEmail }).select('status isPaused onboardingPhase clientNumber pausedAt').lean()
         : Promise.resolve(null),
       job.dashboardManagerName
         ? ManagerModel.findOne({ fullName: job.dashboardManagerName, isActive: true }).select('email').lean()
@@ -493,12 +516,16 @@ export async function getOnboardingJobById(req, res) {
 
     job.clientStatus = client?.status || 'active';
     job.clientIsPaused = client?.isPaused || false;
+    const pausedOnlyDetail = job.clientIsPaused === true && client?.onboardingPhase !== true;
+    job.clientPausedDays =
+      pausedOnlyDetail && client?.pausedAt
+        ? Math.max(0, Math.floor((now - new Date(client.pausedAt)) / (24 * 60 * 60 * 1000)))
+        : null;
     job.dashboardManagerEmail = manager?.email || '';
     // Client model is source of truth for clientNumber
     if (client?.clientNumber != null) job.clientNumber = client.clientNumber;
 
     // Days = from the first job card added in client dashboard to now (or applicationsCompletedAt).
-    const now = new Date();
     const clientEmailLower = (job.clientEmail || '').toLowerCase();
     let firstJobDate = null;
     if (clientEmailLower) {
@@ -846,7 +873,7 @@ export async function patchOnboardingJob(req, res) {
         try {
           await ClientModel.updateOne(
             { email: clientEmail },
-            { $set: { onboardingPhase: false, isPaused: false } }
+            { $set: { onboardingPhase: false, isPaused: false, pausedAt: null } }
           );
           const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
           await addClientActionToJobMoveHistory(clientEmail, 'client_unpaused', movedBy);
@@ -862,12 +889,13 @@ export async function patchOnboardingJob(req, res) {
     jobDetailCache.del(`job:${id}`);
 
     const updated = jobForResponse.toObject();
+    const patchEnrichNow = new Date();
 
     // Parallel: fetch client status + manager email at the same time
     const enrichClientEmail = (updated.clientEmail || '').toLowerCase();
     const [clientDoc, managerDoc] = await Promise.all([
       enrichClientEmail
-        ? ClientModel.findOne({ email: enrichClientEmail }).select('status isPaused').lean()
+        ? ClientModel.findOne({ email: enrichClientEmail }).select('status isPaused onboardingPhase pausedAt').lean()
         : Promise.resolve(null),
       updated.dashboardManagerName
         ? ManagerModel.findOne({ fullName: updated.dashboardManagerName, isActive: true }).select('email').lean()
@@ -876,6 +904,15 @@ export async function patchOnboardingJob(req, res) {
 
     updated.clientStatus = clientDoc?.status || 'active';
     updated.clientIsPaused = clientDoc?.isPaused || false;
+    const patchPausedOnly =
+      updated.clientIsPaused === true && clientDoc?.onboardingPhase !== true;
+    updated.clientPausedDays =
+      patchPausedOnly && clientDoc?.pausedAt
+        ? Math.max(
+            0,
+            Math.floor((patchEnrichNow - new Date(clientDoc.pausedAt)) / (24 * 60 * 60 * 1000))
+          )
+        : null;
     updated.dashboardManagerEmail = managerDoc?.email || '';
 
     res.status(200).json({ job: updated });

@@ -691,6 +691,29 @@ const getClientStats = async (req, res) => {
 
 // (Auth routes removed)
 
+/** Sets/clears pausedAt when pause/onboarding phase changes (explicit Paused = isPaused && !onboardingPhase). */
+async function mergePausedAtIntoClientUpdate(emailLower, clientUpdate) {
+  delete clientUpdate.pausedAt;
+  const touchesPause =
+    Object.prototype.hasOwnProperty.call(clientUpdate, 'isPaused') ||
+    Object.prototype.hasOwnProperty.call(clientUpdate, 'onboardingPhase');
+  if (!touchesPause) return;
+  const existing = await ClientModel.findOne({ email: emailLower }).select('isPaused onboardingPhase pausedAt').lean();
+  const nextPaused = Object.prototype.hasOwnProperty.call(clientUpdate, 'isPaused')
+    ? !!clientUpdate.isPaused
+    : !!(existing?.isPaused);
+  const nextOnboarding = Object.prototype.hasOwnProperty.call(clientUpdate, 'onboardingPhase')
+    ? !!clientUpdate.onboardingPhase
+    : !!(existing?.onboardingPhase);
+  const effectivelyPausedOnly = nextPaused === true && nextOnboarding !== true;
+  const wasPausedOnly = !!(existing?.isPaused) && existing?.onboardingPhase !== true;
+  if (effectivelyPausedOnly && !wasPausedOnly) {
+    clientUpdate.pausedAt = new Date();
+  } else if (!effectivelyPausedOnly) {
+    clientUpdate.pausedAt = null;
+  }
+}
+
 export const createOrUpdateClient = async (req, res) => {
   try {
     const {
@@ -831,6 +854,7 @@ export const createOrUpdateClient = async (req, res) => {
         status: status !== undefined && status !== null && status !== '' ? status : "active",
         isPaused: true,
         onboardingPhase: true,
+        pausedAt: null,
         updatedAt: new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
       };
 
@@ -879,6 +903,7 @@ export const createOrUpdateClient = async (req, res) => {
     if (!existingUser) {
       const clientUpdate = { ...req.body };
       delete clientUpdate.currentPath;
+      await mergePausedAtIntoClientUpdate(emailLower, clientUpdate);
       await ClientModel.updateOne(
         { email: emailLower },
         { $set: clientUpdate },
@@ -917,6 +942,7 @@ export const createOrUpdateClient = async (req, res) => {
     // Only set client fields on ClientModel (exclude currentPath and other non-schema keys if needed)
     const clientUpdate = { ...req.body };
     delete clientUpdate.currentPath;
+    await mergePausedAtIntoClientUpdate(emailLower, clientUpdate);
     await ClientModel.updateOne(
       { email: emailLower },
       { $set: clientUpdate },
@@ -3118,16 +3144,17 @@ const getJobsByDate = async (req, res) => {
 // Add the job analytics route after function definition
 app.post('/api/jobs/by-date', getJobsByDate);
 
-// In-memory TTL cache for client-job-analysis (30s). Cleared when client isPaused/onboardingPhase updated so status always comes from DB.
+// In-memory TTL cache for client-job-analysis (2min). Cleared when client isPaused/onboardingPhase updated so status always comes from DB.
 const _analysisCacheStore = new Map();
-const ANALYSIS_CACHE_TTL = 30_000;
+const ANALYSIS_CACHE_TTL = 120_000;
+const LAST_APPLIED_CACHE_TTL = 300_000; // 5 min — last applied operator rarely changes
 function getAnalysisCache(key) {
   const e = _analysisCacheStore.get(key);
   if (!e) return null;
   if (Date.now() > e.exp) { _analysisCacheStore.delete(key); return null; }
   return e.val;
 }
-function setAnalysisCache(key, val) { _analysisCacheStore.set(key, { val, exp: Date.now() + ANALYSIS_CACHE_TTL }); }
+function setAnalysisCache(key, val, ttl) { _analysisCacheStore.set(key, { val, exp: Date.now() + (ttl || ANALYSIS_CACHE_TTL) }); }
 function clearAnalysisCache() { _analysisCacheStore.clear(); }
 
 // Client Job Analysis (Recent Activity) - per active client status counts and applied-on-date
@@ -3140,7 +3167,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const cached = getAnalysisCache(cacheKey);
     if (cached) {
       if (Array.isArray(cached.rows)) {
-        await runHighAppliedJobsNotifications(cached.rows).catch((err) =>
+        runHighAppliedJobsNotifications(cached.rows).catch((err) =>
           console.error('[client-job-analysis] runHighAppliedJobsNotifications (cached):', err?.message || err)
         );
       }
@@ -3178,8 +3205,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       }
     };
 
-    // ── Phase 1: Run ALL aggregations in parallel ──
-    const [overall, appliedOnDate, removedOnDate, lastAppliedAgg] = await Promise.all([
+    // ── Phase 1: Run ALL aggregations + client query in parallel ──
+    const cachedLastApplied = getAnalysisCache('__lastAppliedOperator__');
+    const [overall, appliedOnDate, removedOnDate, lastAppliedAgg, clientInfo] = await Promise.all([
       // 1) Overall status counts per client
       JobModel.aggregate([
         { $group: { _id: { userID: "$userID", status: statusCase }, count: { $sum: 1 } } },
@@ -3209,42 +3237,48 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
           { $project: { _id: 0, userID: "$_id", count: 1 } }
         ])
         : Promise.resolve([]),
-      // 4) Last applied operator per client — server-side aggregation (replaces full-collection scan)
-      JobModel.aggregate([
-        {
-          $match: {
-            operatorName: { $exists: true, $nin: [null, '', 'user'] },
-            appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ }
-          }
-        },
-        { $addFields: { _dp: { $split: [{ $trim: { input: '$appliedDate' } }, '/'] } } },
-        {
-          $addFields: {
-            _sd: {
-              $add: [
-                { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } }, 10000] },
-                { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 0, onNull: 0 } }, 100] },
-                { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 0, onNull: 0 } }
-              ]
+      // 4) Last applied operator per client — use dedicated 5-min cache; skip heavy aggregation if cached
+      cachedLastApplied
+        ? Promise.resolve(cachedLastApplied)
+        : JobModel.aggregate([
+          {
+            $match: {
+              operatorName: { $exists: true, $nin: [null, '', 'user'] },
+              appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ }
             }
-          }
-        },
-        { $sort: { _sd: -1 } },
-        { $group: { _id: '$userID', operatorName: { $first: '$operatorName' } } },
-        { $project: { _id: 0, userID: '$_id', operatorName: 1 } }
-      ])
+          },
+          { $addFields: { _dp: { $split: [{ $trim: { input: '$appliedDate' } }, '/'] } } },
+          {
+            $addFields: {
+              _sd: {
+                $add: [
+                  { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } }, 10000] },
+                  { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 0, onNull: 0 } }, 100] },
+                  { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 0, onNull: 0 } }
+                ]
+              }
+            }
+          },
+          { $sort: { _sd: -1 } },
+          { $group: { _id: '$userID', operatorName: { $first: '$operatorName' } } },
+          { $project: { _id: 0, userID: '$_id', operatorName: 1 } }
+        ]),
+      // 5) Client info — runs in parallel with aggregations (no dependency)
+      ClientModel.find({})
+        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons')
+        .lean()
     ]);
+
+    // Cache last-applied operator separately with longer TTL (5 min)
+    if (!cachedLastApplied) {
+      setAnalysisCache('__lastAppliedOperator__', lastAppliedAgg, LAST_APPLIED_CACHE_TTL);
+    }
 
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const overallMap = new Map(overall.map(r => [r.userID, r.counts]));
     const lastAppliedOperatorMap = new Map(lastAppliedAgg.map(r => [(r.userID || '').toLowerCase(), r.operatorName]));
     const jobUserIDs = Array.from(new Set([...overallMap.keys(), ...appliedMap.keys(), ...removedMap.keys()]));
-
-    // ── Phase 2: Fetch client + referral data in parallel ──
-    const clientInfo = await ClientModel.find({})
-      .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons')
-      .lean();
 
     const allUserIDs = Array.from(new Set([...jobUserIDs, ...clientInfo.map(c => c.email)]));
 
@@ -3344,8 +3378,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return numA - numB;
     });
 
-    const result = { success: true, date: date || null, rows };
-    await runHighAppliedJobsNotifications(rows).catch((err) =>
+    const result = { success: true, date: date || null, rows, summary };
+    runHighAppliedJobsNotifications(rows).catch((err) =>
       console.error('[client-job-analysis] runHighAppliedJobsNotifications:', err?.message || err)
     );
     setAnalysisCache(cacheKey, result);
@@ -6040,18 +6074,49 @@ function capitalizeOperatorName(name) {
   return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
 }
 
+/** Active + Unpaused only (excludes Paused and New/onboarding — same as Client Job Analysis "Unpaused"). */
+function clientFilterActiveUnpaused() {
+  return {
+    status: 'active',
+    $nor: [{ isPaused: true }, { onboardingPhase: true }]
+  };
+}
+
+/** Display name for who last added job cards (extension addedBy / operator / code). */
+function formatLastJobAdderName({ addedBy, operatorName, extensionCode }) {
+  const a = (addedBy || '').trim();
+  if (a) {
+    if (/\s/.test(a)) return a;
+    return capitalizeOperatorName(a) || a;
+  }
+  const o = (operatorName || '').trim();
+  if (o && o.toLowerCase() !== 'user') return capitalizeOperatorName(o) || o;
+  const e = (extensionCode || '').trim();
+  if (e) return e;
+  return '';
+}
+
 async function runJobCardReminder() {
   if (!DISCORD_JOBCARD_REMINDER_WEBHOOK) return;
   try {
     const savedByUser = await JobModel.aggregate([
       { $match: { currentStatus: { $regex: /save/i } } },
-      { $group: { _id: '$userID', saved: { $sum: 1 } } },
+      { $addFields: { _userLower: { $toLower: { $trim: { input: { $ifNull: ['$userID', ''] } } } } } },
+      { $match: { _userLower: { $ne: '' } } },
+      { $group: { _id: '$_userLower', saved: { $sum: 1 } } },
       { $match: { saved: { $gt: 0 } } }
     ]);
     const userIDsWithSaved = (savedByUser || []).map((r) => (r._id || '').toLowerCase()).filter(Boolean);
     if (userIDsWithSaved.length === 0) return;
 
-    const allJobs = await JobModel.find({ userID: { $in: userIDsWithSaved } })
+    const allJobs = await JobModel.find({
+      $expr: {
+        $in: [
+          { $toLower: { $trim: { input: { $ifNull: ['$userID', ''] } } } },
+          userIDsWithSaved
+        ]
+      }
+    })
       .select('userID operatorName appliedDate')
       .lean();
     const parseDateString = (dateStr) => {
@@ -6078,7 +6143,10 @@ async function runJobCardReminder() {
       if (!cur || d > cur.date) lastAppliedByUser.set(email, { date: d, operatorName: j.operatorName });
     }
 
-    const clients = await ClientModel.find({ email: { $in: userIDsWithSaved }, status: 'active' })
+    const clients = await ClientModel.find({
+      email: { $in: userIDsWithSaved },
+      ...clientFilterActiveUnpaused()
+    })
       .select('email name')
       .lean();
     const clientNameMap = new Map((clients || []).map((c) => [c.email.toLowerCase(), c.name || c.email]));
@@ -6111,12 +6179,7 @@ async function runJobCardReminder() {
 async function runZeroSavedJobReminder() {
   if (!DISCORD_ZERO_SAVED_WEBHOOK) return;
   try {
-    // Get all active, unpaused, and not in onboarding-phase clients (no reminders for "new" clients)
-    const activeUnpausedClients = await ClientModel.find({
-      status: 'active',
-      isPaused: { $ne: true },
-      onboardingPhase: { $ne: true }
-    })
+    const activeUnpausedClients = await ClientModel.find(clientFilterActiveUnpaused())
       .select('email name')
       .lean();
 
@@ -6128,16 +6191,39 @@ async function runZeroSavedJobReminder() {
     const clientEmails = activeUnpausedClients.map((c) => (c.email || '').toLowerCase()).filter(Boolean);
 
     const savedByUser = await JobModel.aggregate([
+      { $match: { currentStatus: { $regex: /save/i } } },
       {
-        $match: {
-          userID: { $in: clientEmails },
-          currentStatus: { $regex: /save/i }
+        $addFields: {
+          _userLower: { $toLower: { $trim: { input: { $ifNull: ['$userID', ''] } } } }
         }
       },
-      { $group: { _id: '$userID', saved: { $sum: 1 } } }
+      { $match: { _userLower: { $in: clientEmails } } },
+      { $group: { _id: '$_userLower', saved: { $sum: 1 } } }
     ]);
 
-    const savedMap = new Map((savedByUser || []).map((r) => [r._id.toLowerCase(), r.saved || 0]));
+    const savedMap = new Map((savedByUser || []).map((r) => [(r._id || '').toLowerCase(), r.saved || 0]));
+
+    const lastAdderAgg = await JobModel.aggregate([
+      {
+        $addFields: {
+          _userLower: { $toLower: { $trim: { input: { $ifNull: ['$userID', ''] } } } }
+        }
+      },
+      { $match: { _userLower: { $in: clientEmails } } },
+      { $sort: { _id: -1 } },
+      {
+        $group: {
+          _id: '$_userLower',
+          addedBy: { $first: '$addedBy' },
+          operatorName: { $first: '$operatorName' },
+          extensionCode: { $first: '$extensionCode' }
+        }
+      }
+    ]);
+    const lastAdderMap = new Map(
+      (lastAdderAgg || []).map((r) => [(r._id || '').toLowerCase(), r])
+    );
+
     const clientNameMap = new Map((activeUnpausedClients || []).map((c) => [c.email.toLowerCase(), c.name || c.email]));
 
     let sentCount = 0;
@@ -6146,11 +6232,17 @@ async function runZeroSavedJobReminder() {
       if (!email) continue;
 
       const saved = savedMap.get(email) || 0;
-      // Only send message if saved count is 0
       if (saved !== 0) continue;
 
       const clientName = clientNameMap.get(email) || email;
-      const message = `${clientName} have zero jobs in their dashboard please add jobs`;
+      const adderRow = lastAdderMap.get(email);
+      const adderLabel =
+        formatLastJobAdderName({
+          addedBy: adderRow?.addedBy,
+          operatorName: adderRow?.operatorName,
+          extensionCode: adderRow?.extensionCode
+        }) || 'No job history yet';
+      const message = `${clientName} have zero jobs in their dashboard please add jobs — last job cards added by: ${adderLabel}`;
 
       await fetch(DISCORD_ZERO_SAVED_WEBHOOK, {
         method: 'POST',
