@@ -91,6 +91,14 @@ const JobCard = React.memo(({
               </span>
             )}
           </span>
+          {job.clientIsPaused && job.clientPausedDays != null && (
+            <span
+              className="text-[10px] font-semibold text-yellow-900 bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200 normal-case"
+              title="Days since client was set to Paused (Client Job Analysis)"
+            >
+              Paused · {job.clientPausedDays}d
+            </span>
+          )}
           {isAdmin && job.adminUnreadCount > 0 && (
             <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
               {job.adminUnreadCount > 99 ? '99+' : job.adminUnreadCount}
@@ -249,6 +257,7 @@ const JobCard = React.memo(({
     prevProps.job.jobNumber === nextProps.job.jobNumber &&
     prevProps.job.clientStatus === nextProps.job.clientStatus &&
     prevProps.job.clientIsPaused === nextProps.job.clientIsPaused &&
+    prevProps.job.clientPausedDays === nextProps.job.clientPausedDays &&
     prevProps.job.adminUnreadCount === nextProps.job.adminUnreadCount &&
     prevProps.draggedJobId === nextProps.draggedJobId &&
     prevProps.visibleColumns === nextProps.visibleColumns &&

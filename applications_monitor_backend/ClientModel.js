@@ -177,6 +177,12 @@ export const ClientSchema = new mongoose.Schema({
     required: false,
     default: false
   },
+  /** Set when client enters explicit Paused (not New/onboarding). Cleared on unpause. Used for "days paused" on onboarding cards. */
+  pausedAt: {
+    type: Date,
+    required: false,
+    default: null
+  },
   /** True while client is in onboarding (resume, LinkedIn, etc.). No Discord reminders until ticket reaches Applications In Progress. */
   onboardingPhase: {
     type: Boolean,
