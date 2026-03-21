@@ -76,7 +76,17 @@ export const JobSchema = new mongoose.Schema({
     type: String,
     required: false,
     default: 'user@flashfirehq'
-  }  ,
+  },
+  extensionCode: {
+    type: String,
+    required: false,
+    default: null,
+  },
+  addedBy: {
+    type: String,
+    required: false,
+    default: null,
+  },
   appliedDate: {
     type: String,
     required: false,

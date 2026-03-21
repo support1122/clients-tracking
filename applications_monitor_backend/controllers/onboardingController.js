@@ -148,6 +148,92 @@ export async function getNextLinkedInMember() {
   return { email: u.email, name: u.name || u.email };
 }
 
+const SYSTEM_AUTO_COMMENT_AUTHOR_EMAIL = 'system-auto@flashfire-clients-tracking.internal';
+const HIGH_APPLIED_JOBS_THRESHOLD = 10;
+
+/**
+ * For each analysis row with applied count > threshold, ensure the matching onboarding ticket
+ * has a single system comment tagging the dashboard manager. Runs when client-job-analysis is computed.
+ */
+export async function runHighAppliedJobsNotifications(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return;
+
+  for (const row of rows) {
+    const applied = Number(row.applied) || 0;
+    if (applied <= HIGH_APPLIED_JOBS_THRESHOLD) continue;
+
+    const clientEmail = (row.email || '').toLowerCase().trim();
+    if (!clientEmail) continue;
+
+    const jobPreview = await OnboardingJobModel.findOne({ clientEmail })
+      .select('dashboardManagerName')
+      .lean();
+    if (!jobPreview) continue;
+
+    const dmName = (jobPreview.dashboardManagerName || '').trim();
+    if (!dmName) continue;
+
+    const manager = await ManagerModel.findOne({ fullName: dmName, isActive: true }).select('email').lean();
+    const dmEmail = (manager?.email || '').toLowerCase().trim();
+    if (!dmEmail) continue;
+
+    const now = new Date();
+    const body = `@${dmEmail} inform the client, jobs are being added`;
+    const commentDoc = {
+      body,
+      authorEmail: SYSTEM_AUTO_COMMENT_AUTHOR_EMAIL,
+      authorName: 'System',
+      taggedUserIds: [dmEmail],
+      taggedNames: [dmName],
+      images: [],
+      createdAt: now
+    };
+
+    const updated = await OnboardingJobModel.findOneAndUpdate(
+      { clientEmail, highAppliedJobsNoticeAt: null },
+      {
+        $push: { comments: commentDoc },
+        $set: { highAppliedJobsNoticeAt: now, updatedAt: now }
+      },
+      { new: true }
+    );
+
+    if (!updated) continue;
+
+    jobListCache.clear();
+    jobDetailCache.del(`job:${updated._id}`);
+
+    try {
+      const commentSnippet = body.slice(0, 120);
+      await OnboardingNotificationModel.create({
+        userEmail: dmEmail,
+        jobId: updated._id,
+        jobNumber: updated.jobNumber,
+        clientNumber: updated.clientNumber ?? null,
+        clientName: updated.clientName || 'Client',
+        commentSnippet,
+        authorEmail: SYSTEM_AUTO_COMMENT_AUTHOR_EMAIL,
+        authorName: 'System',
+        read: false
+      });
+      const taggedUser = await UserModel.findOne({ email: dmEmail }).select('email otpEmail name').lean();
+      const toEmail = (taggedUser?.otpEmail || '').trim() || dmEmail;
+      sendTagNotificationEmail({
+        toEmail,
+        recipientName: dmName,
+        authorName: 'System',
+        commentSnippet,
+        jobNumber: updated.jobNumber,
+        clientName: updated.clientName || '',
+        clientNumber: updated.clientNumber ?? null,
+        jobId: String(updated._id)
+      }).catch(() => {});
+    } catch (e) {
+      console.error('[runHighAppliedJobsNotifications] notify error:', e?.message || e);
+    }
+  }
+}
+
 export async function createOnboardingJobPayload(payload) {
   const jobNumber = await getNextJobNumber();
   const clientNumber = payload.clientNumber != null ? payload.clientNumber : await getNextClientNumber();
