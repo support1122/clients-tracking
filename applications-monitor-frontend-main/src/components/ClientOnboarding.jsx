@@ -69,6 +69,7 @@ export default function ClientOnboarding() {
   const [, startSearchTransition] = useTransition();
   const [filteredClientEmail, setFilteredClientEmail] = useState(null);
   const [clientJobAnalysis, setClientJobAnalysis] = useState({});
+  const [clientJobAnalysisLoading, setClientJobAnalysisLoading] = useState(true);
   const [loadingJobDetails, setLoadingJobDetails] = useState(false);
   const [loadingComments, setLoadingComments] = useState(false);
 
@@ -387,6 +388,7 @@ export default function ClientOnboarding() {
   }, [user?.role]);
 
   const fetchClientJobAnalysis = useCallback(async (selectedDate) => {
+    setClientJobAnalysisLoading(true);
     try {
       const body = selectedDate ? { date: convertToDMY(selectedDate) } : {};
       const res = await fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
@@ -405,13 +407,18 @@ export default function ClientOnboarding() {
             offer: row.offer || 0,
             rejected: row.rejected || 0,
             removed: row.removed || 0,
-            lastAppliedOperatorName: row.lastAppliedOperatorName || ''
+            lastAppliedOperatorName: row.lastAppliedOperatorName || '',
+            pausedDays: row.pausedDays ?? null,
+            isPaused: !!row.isPaused,
+            onboardingPhase: !!row.onboardingPhase
           };
         });
         setClientJobAnalysis(analysisMap);
       }
     } catch (e) {
       console.error('Failed to fetch client job analysis:', e);
+    } finally {
+      setClientJobAnalysisLoading(false);
     }
   }, []);
 
@@ -1525,6 +1532,7 @@ export default function ClientOnboarding() {
                     isAdmin={isAdmin}
                     visibleColumns={visibleColumns}
                     clientJobAnalysis={clientJobAnalysis}
+                    clientJobAnalysisLoading={clientJobAnalysisLoading}
                     onMoveTo={handleMoveToChoice}
                     onDragStart={handleDragStart}
                     onDragEnd={handleDragEnd}

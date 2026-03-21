@@ -42,9 +42,12 @@ const moveHistorySchema = new mongoose.Schema({
   movedByName: { type: String, default: '' },
   movedAt: { type: Date, default: Date.now },
   // For assignment events: 'dashboard_manager', 'linkedin_member'. client_phase_set = "New" in Client Job Analysis.
-  actionType: { type: String, default: 'status_change', enum: ['status_change', 'assignment', 'client_paused', 'client_unpaused', 'client_phase_set'] },
+  actionType: { type: String, default: 'status_change', enum: ['status_change', 'assignment', 'client_paused', 'client_unpaused', 'client_phase_set', 'comment_resolved'] },
   targetRole: { type: String },
-  targetName: { type: String }
+  targetName: { type: String },
+  commentId: { type: String, required: false },
+  commentSnippet: { type: String, default: '' },
+  resolvedEmails: [{ type: String }]
 }, { _id: false });
 
 const gmailCredentialHistorySchema = new mongoose.Schema({

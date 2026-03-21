@@ -3185,7 +3185,17 @@ function lastAppliedActorFromTimeline(timeline) {
 
 function resolveLastAppliedOperatorDisplayName(job) {
   const fromTimeline = lastAppliedActorFromTimeline(job?.timeline);
-  return formatLastAppliedOperatorDisplayName(fromTimeline);
+  const raw = fromTimeline || (job?.operatorName || '');
+  return formatLastAppliedOperatorDisplayName(raw);
+}
+
+/** Recompute paused duration from row fields (used on cache hit so days stay current). */
+function freshPausedDaysFromRow(row) {
+  if (!row || !row.isPaused || row.onboardingPhase) return null;
+  if (!row.pausedAt) return null;
+  const t = new Date(row.pausedAt).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.floor((Date.now() - t) / 86400000));
 }
 
 // Client Job Analysis (Recent Activity) - per active client status counts and applied-on-date
@@ -3202,7 +3212,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
             ...cached,
             rows: cached.rows.map((row) => ({
               ...row,
-              lastAppliedOperatorName: formatLastAppliedOperatorDisplayName(row.lastAppliedOperatorName || '')
+              lastAppliedOperatorName: formatLastAppliedOperatorDisplayName(row.lastAppliedOperatorName || ''),
+              pausedDays: freshPausedDaysFromRow(row)
             }))
           }
         : cached;
@@ -3296,7 +3307,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         ]),
       // 5) Client info — runs in parallel with aggregations (no dependency)
       ClientModel.find({})
-        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons')
+        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt')
         .lean()
     ]);
 
@@ -3342,6 +3353,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       dashboardTeamLeadName: c.dashboardTeamLeadName || '',
       isPaused: !!c.isPaused,
       onboardingPhase: !!c.onboardingPhase,
+      pausedAt: c.pausedAt != null ? new Date(c.pausedAt).toISOString() : null,
       addonLimit: (c.addons || []).reduce((sum, a) => {
         const v = parseInt(a.type || a.addonType || 0, 10);
         return sum + (isNaN(v) ? 0 : v);
@@ -3378,6 +3390,12 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         operationsName: client.operationsName || '',
         isPaused: client.isPaused ?? false,
         onboardingPhase: client.onboardingPhase ?? false,
+        pausedAt: client.pausedAt ?? null,
+        pausedDays: freshPausedDaysFromRow({
+          isPaused: client.isPaused ?? false,
+          onboardingPhase: client.onboardingPhase ?? false,
+          pausedAt: client.pausedAt ?? null
+        }),
         dashboardTeamLeadName: client.dashboardTeamLeadName || '',
         lastAppliedOperatorName: lastAppliedOperatorMap.get(email.toLowerCase()) || '',
         referrals: referralMeta.referrals || [],

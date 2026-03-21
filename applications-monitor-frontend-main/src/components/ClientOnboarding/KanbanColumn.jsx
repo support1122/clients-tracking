@@ -11,6 +11,7 @@ const KanbanColumn = React.memo(({
   isAdmin,
   visibleColumns,
   clientJobAnalysis,
+  clientJobAnalysisLoading,
   onMoveTo,
   onDragStart,
   onDragEnd,
@@ -72,7 +73,8 @@ const KanbanColumn = React.memo(({
     prev.dragOverStatus === next.dragOverStatus &&
     prev.isAdmin === next.isAdmin &&
     prev.visibleColumns === next.visibleColumns &&
-    prev.clientJobAnalysis === next.clientJobAnalysis
+    prev.clientJobAnalysis === next.clientJobAnalysis &&
+    prev.clientJobAnalysisLoading === next.clientJobAnalysisLoading
   );
 });
 

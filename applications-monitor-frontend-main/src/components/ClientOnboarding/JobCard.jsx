@@ -25,7 +25,8 @@ const JobCard = React.memo(({
   onHoverStart,
   onHoverEnd,
   jobAnalysis,
-  showJobAnalysis
+  showJobAnalysis,
+  jobAnalysisLoading = false
 }) => {
   const isDragging = draggedJobId === job._id;
   const [moveDropdownOpen, setMoveDropdownOpen] = useState(false);
@@ -156,41 +157,70 @@ const JobCard = React.memo(({
 
       {showJobAnalysis && (
         <div className="mb-3 pb-3 border-b border-gray-100 bg-gray-50/50 rounded-lg px-2 py-2">
+          {job.clientIsPaused && (
+            <div className="mb-2 pb-2 border-b border-amber-100/90 flex flex-col items-center gap-1">
+              <span className="text-[10px] font-semibold text-amber-900 bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200">
+                Paused
+              </span>
+              {jobAnalysisLoading && job.clientPausedDays == null ? (
+                <div className="h-3 w-9 rounded bg-amber-200/80 animate-pulse" title="Loading pause details" />
+              ) : (
+                <span className="text-[10px] font-medium text-amber-800">
+                  {job.clientPausedDays != null ? `${job.clientPausedDays}d` : '—'}
+                </span>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-2 mb-2">
-            <div className="text-center">
-              <div className="text-[10px] text-gray-500 font-medium">Saved</div>
-              <div className="text-xs font-semibold text-gray-700">{jobAnalysis?.saved ?? 0}</div>
-            </div>
-            <div className="text-center">
-              <div className="text-[10px] text-gray-500 font-medium">Applied</div>
-              <div className="text-xs font-semibold text-green-600">{jobAnalysis?.applied ?? 0}</div>
-            </div>
-            <div className="text-center">
-              <div className="text-[10px] text-gray-500 font-medium">Interview</div>
-              <div className="text-xs font-semibold text-yellow-600">{jobAnalysis?.interviewing ?? 0}</div>
-            </div>
-            <div className="text-center">
-              <div className="text-[10px] text-gray-500 font-medium">Offer</div>
-              <div className="text-xs font-semibold text-purple-600">{jobAnalysis?.offer ?? 0}</div>
-            </div>
-            <div className="text-center">
-              <div className="text-[10px] text-gray-500 font-medium">Rejected</div>
-              <div className="text-xs font-semibold text-red-600">{jobAnalysis?.rejected ?? 0}</div>
-            </div>
-            <div className="text-center">
-              <div className="text-[10px] text-gray-500 font-medium">Removed</div>
-              <div className="text-xs font-semibold text-gray-600">{jobAnalysis?.removed ?? 0}</div>
-            </div>
+            {jobAnalysisLoading ? (
+              Array.from({ length: 6 }).map((_, si) => (
+                <div key={`sk-${si}`} className="text-center space-y-1">
+                  <div className="h-2.5 bg-gray-200 rounded animate-pulse w-12 mx-auto" />
+                  <div className="h-3.5 bg-gray-200/90 rounded animate-pulse w-7 mx-auto" />
+                </div>
+              ))
+            ) : (
+              <>
+                <div className="text-center">
+                  <div className="text-[10px] text-gray-500 font-medium">Saved</div>
+                  <div className="text-xs font-semibold text-gray-700">{jobAnalysis?.saved ?? 0}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[10px] text-gray-500 font-medium">Applied</div>
+                  <div className="text-xs font-semibold text-green-600">{jobAnalysis?.applied ?? 0}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[10px] text-gray-500 font-medium">Interview</div>
+                  <div className="text-xs font-semibold text-yellow-600">{jobAnalysis?.interviewing ?? 0}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[10px] text-gray-500 font-medium">Offer</div>
+                  <div className="text-xs font-semibold text-purple-600">{jobAnalysis?.offer ?? 0}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[10px] text-gray-500 font-medium">Rejected</div>
+                  <div className="text-xs font-semibold text-red-600">{jobAnalysis?.rejected ?? 0}</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[10px] text-gray-500 font-medium">Removed</div>
+                  <div className="text-xs font-semibold text-gray-600">{jobAnalysis?.removed ?? 0}</div>
+                </div>
+              </>
+            )}
           </div>
           <div className="mt-2 pt-2 border-t border-gray-200">
             <div className="text-[10px] text-gray-500 font-medium">Last applied by</div>
-            <div className="text-xs font-semibold text-gray-700 mt-0.5">
-              {jobAnalysis?.lastAppliedOperatorName ? (
-                jobAnalysis.lastAppliedOperatorName.charAt(0).toUpperCase() + jobAnalysis.lastAppliedOperatorName.slice(1).toLowerCase()
-              ) : (
-                <span className="italic text-red-700">Not started yet</span>
-              )}
-            </div>
+            {jobAnalysisLoading ? (
+              <div className="h-3.5 mt-1 bg-gray-200 rounded animate-pulse w-24 max-w-full" />
+            ) : (
+              <div className="text-xs font-semibold text-gray-700 mt-0.5">
+                {jobAnalysis?.lastAppliedOperatorName ? (
+                  jobAnalysis.lastAppliedOperatorName.charAt(0).toUpperCase() + jobAnalysis.lastAppliedOperatorName.slice(1).toLowerCase()
+                ) : (
+                  <span className="italic text-red-700">Not started yet</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -269,6 +299,7 @@ const JobCard = React.memo(({
     prevProps.jobAnalysis?.rejected === nextProps.jobAnalysis?.rejected &&
     prevProps.jobAnalysis?.removed === nextProps.jobAnalysis?.removed &&
     prevProps.jobAnalysis?.lastAppliedOperatorName === nextProps.jobAnalysis?.lastAppliedOperatorName &&
+    prevProps.jobAnalysisLoading === nextProps.jobAnalysisLoading &&
     prevProps.job.pendingMoveRequest?.active === nextProps.job.pendingMoveRequest?.active &&
     (prevProps.job.attachments || []).length === (nextProps.job.attachments || []).length &&
     (prevProps.job.attachments || []).every((a, i) => (nextProps.job.attachments || [])[i]?.name === a?.name)

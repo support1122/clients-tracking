@@ -1087,12 +1087,13 @@ export async function resolveOnboardingComment(req, res) {
     const isAdmin = req.user?.role === 'admin';
     const job = await OnboardingJobModel.findById(jobId);
     if (!job) return res.status(404).json({ error: 'Job not found' });
-    const comment = (job.comments || []).find(
+    const commentIndex = job.comments.findIndex(
       c => String(c._id) === commentId || String(c._id) === String(commentId)
     );
-    if (!comment) return res.status(404).json({ error: 'Comment not found' });
-    const taggedEmails = (comment.taggedUserIds || []).map(e => (e || '').toLowerCase().trim()).filter(Boolean);
-    const resolvedByTagged = comment.resolvedByTagged || [];
+    if (commentIndex < 0) return res.status(404).json({ error: 'Comment not found' });
+    const commentRef = job.comments[commentIndex];
+    const taggedEmails = (commentRef.taggedUserIds || []).map(e => (e || '').toLowerCase().trim()).filter(Boolean);
+    const resolvedByTagged = commentRef.resolvedByTagged || [];
     const alreadyResolvedByUser = resolvedByTagged.some(r => (r.email || '').toLowerCase() === userEmail);
 
     if (!isAdmin) {
@@ -1104,35 +1105,51 @@ export async function resolveOnboardingComment(req, res) {
       }
     }
 
-    const commentIndex = job.comments.findIndex(
-      c => String(c._id) === commentId || String(c._id) === String(commentId)
-    );
-    if (commentIndex < 0) return res.status(404).json({ error: 'Comment not found' });
-    if (!job.comments[commentIndex].resolvedByTagged) {
+    if (!commentRef.resolvedByTagged) {
       job.comments[commentIndex].resolvedByTagged = [];
     }
+
+    const newlyResolved = [];
+    const now = new Date();
+    const snippet = String(commentRef.body || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+
     if (isAdmin) {
-      // Admin resolve: mark as resolved for everyone by adding all tagged users who haven't resolved yet
       const existingResolvedEmails = new Set(
         (job.comments[commentIndex].resolvedByTagged || []).map(r => (r.email || '').toLowerCase())
       );
-      const now = new Date();
       taggedEmails.forEach(email => {
         if (!existingResolvedEmails.has(email)) {
           job.comments[commentIndex].resolvedByTagged.push({ email, resolvedAt: now });
+          newlyResolved.push(email);
           existingResolvedEmails.add(email);
         }
       });
-      // Also add admin so they appear in "Resolved by"
       if (!existingResolvedEmails.has(userEmail)) {
         job.comments[commentIndex].resolvedByTagged.push({ email: userEmail, resolvedAt: now });
+        newlyResolved.push(userEmail);
       }
     } else {
       job.comments[commentIndex].resolvedByTagged.push({
         email: userEmail,
-        resolvedAt: new Date()
+        resolvedAt: now
       });
+      newlyResolved.push(userEmail);
     }
+
+    if (newlyResolved.length > 0) {
+      if (!job.moveHistory) job.moveHistory = [];
+      job.moveHistory.push({
+        actionType: 'comment_resolved',
+        movedBy: userEmail,
+        movedByName: req.user?.name || '',
+        movedAt: now,
+        commentId: String(commentRef._id),
+        commentSnippet: snippet,
+        resolvedEmails: newlyResolved
+      });
+      job.markModified('moveHistory');
+    }
+
     job.updatedAt = new Date();
     job.markModified('comments');
     await job.save();
