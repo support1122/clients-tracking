@@ -556,6 +556,9 @@ export async function patchOnboardingJob(req, res) {
     const isTeamLead = req.user?.role === 'team_lead';
     const canMoveAny = isAdmin || isCsm || isTeamLead;
 
+    /** True only when this PATCH moves the ticket into Applications In Progress (not on every later comment/field update). */
+    let shouldMarkClientReadyForAppIp = false;
+
     if (status && typeof status === 'string') {
       const fromStatus = job.status;
       
@@ -577,6 +580,9 @@ export async function patchOnboardingJob(req, res) {
       const allowed = canMoveAny || canMoveToLinkedIn || validateTransition(fromStatus, status);
       if (!allowed) {
         return res.status(400).json({ error: `Invalid status transition from ${fromStatus} to ${status}` });
+      }
+      if (status === 'applications_in_progress' && fromStatus !== 'applications_in_progress') {
+        shouldMarkClientReadyForAppIp = true;
       }
       job.status = status;
       if (!job.moveHistory) job.moveHistory = [];
@@ -832,22 +838,30 @@ export async function patchOnboardingJob(req, res) {
       await job.save();
     }
 
-    // When ticket reaches Applications In Progress, mark client as ready for reminders (unpaused, out of onboarding phase)
-    if (job.status === 'applications_in_progress') {
+    // When ticket first reaches Applications In Progress, mark client as ready for reminders (unpaused, out of onboarding phase)
+    let jobForResponse = job;
+    if (shouldMarkClientReadyForAppIp) {
       const clientEmail = (job.clientEmail || '').toLowerCase().trim();
       if (clientEmail) {
-        await ClientModel.updateOne(
-          { email: clientEmail },
-          { $set: { onboardingPhase: false, isPaused: false } }
-        ).catch(err => console.error('Onboarding: client phase update failed', err?.message));
+        try {
+          await ClientModel.updateOne(
+            { email: clientEmail },
+            { $set: { onboardingPhase: false, isPaused: false } }
+          );
+          const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
+          await addClientActionToJobMoveHistory(clientEmail, 'client_unpaused', movedBy);
+          const refetched = await OnboardingJobModel.findById(id);
+          if (refetched) jobForResponse = refetched;
+        } catch (err) {
+          console.error('Onboarding: client ready-for-AppIP update failed', err?.message || err);
+        }
       }
     }
 
     jobListCache.clear(); // invalidate list cache after any mutation
     jobDetailCache.del(`job:${id}`);
 
-    // Use the already-mutated job object — avoids an extra findById round-trip
-    const updated = job.toObject();
+    const updated = jobForResponse.toObject();
 
     // Parallel: fetch client status + manager email at the same time
     const enrichClientEmail = (updated.clientEmail || '').toLowerCase();
