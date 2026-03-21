@@ -3250,6 +3250,17 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     const referralUsers = await NewUserModel.find({ email: { $in: allUserIDs } }, 'email referrals').lean();
 
+    // Summary from dashboardtrackings: status (active/inactive), isPaused, onboardingPhase (new/paused/unpaused)
+    const summary = { active: 0, inactive: 0, new: 0, paused: 0, unpaused: 0 };
+    for (const c of clientInfo) {
+      const s = (c.status || '').toLowerCase();
+      if (s === 'active') summary.active++;
+      else summary.inactive++;
+      if (c.onboardingPhase) summary.new++;
+      else if (c.isPaused) summary.paused++;
+      else summary.unpaused++;
+    }
+
     const clientMap = new Map(clientInfo.map(c => [c.email, {
       name: c.name,
       clientNumber: c.clientNumber,
