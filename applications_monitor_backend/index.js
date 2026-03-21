@@ -3157,6 +3157,37 @@ function getAnalysisCache(key) {
 function setAnalysisCache(key, val, ttl) { _analysisCacheStore.set(key, { val, exp: Date.now() + (ttl || ANALYSIS_CACHE_TTL) }); }
 function clearAnalysisCache() { _analysisCacheStore.clear(); }
 
+/**
+ * JobDB `operatorName` is sometimes stored as an ops email (e.g. sarah@flashfirehq) instead of a display name.
+ * Strip the domain for Client Job Analysis, todos API, and Discord reminders so UI matches the main dashboard intent.
+ */
+function formatLastAppliedOperatorDisplayName(raw) {
+  if (raw == null || typeof raw !== 'string') return '';
+  const t = raw.trim();
+  if (!t || t.toLowerCase() === 'user') return '';
+  const at = t.indexOf('@');
+  if (at > 0) {
+    const local = t.slice(0, at).trim();
+    if (local) return local;
+  }
+  return t;
+}
+
+/** Same source as main dashboard Application Timeline: `UpdateChanges` pushes `applied by {operationsName}`. */
+function lastAppliedActorFromTimeline(timeline) {
+  if (!Array.isArray(timeline) || timeline.length === 0) return '';
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const m = String(timeline[i] || '').match(/\bapplied\s+by\s+(.+)/i);
+    if (m) return m[1].trim();
+  }
+  return '';
+}
+
+function resolveLastAppliedOperatorDisplayName(job) {
+  const fromTimeline = lastAppliedActorFromTimeline(job?.timeline);
+  return formatLastAppliedOperatorDisplayName(fromTimeline);
+}
+
 // Client Job Analysis (Recent Activity) - per active client status counts and applied-on-date
 app.post('/api/analytics/client-job-analysis', async (req, res) => {
   try {
@@ -3166,12 +3197,21 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const cacheKey = date || '__all__';
     const cached = getAnalysisCache(cacheKey);
     if (cached) {
-      if (Array.isArray(cached.rows)) {
-        runHighAppliedJobsNotifications(cached.rows).catch((err) =>
+      const cachedOut = Array.isArray(cached.rows)
+        ? {
+            ...cached,
+            rows: cached.rows.map((row) => ({
+              ...row,
+              lastAppliedOperatorName: formatLastAppliedOperatorDisplayName(row.lastAppliedOperatorName || '')
+            }))
+          }
+        : cached;
+      if (Array.isArray(cachedOut.rows)) {
+        runHighAppliedJobsNotifications(cachedOut.rows).catch((err) =>
           console.error('[client-job-analysis] runHighAppliedJobsNotifications (cached):', err?.message || err)
         );
       }
-      return res.status(200).json(cached);
+      return res.status(200).json(cachedOut);
     }
 
     // Build multi-format date regex if provided (for appliedDate)
@@ -3243,25 +3283,16 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         : JobModel.aggregate([
           {
             $match: {
-              operatorName: { $exists: true, $nin: [null, '', 'user'] },
-              appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ }
+              appliedDate: { $ne: null },
+              timeline: { $elemMatch: {
+                $regex: /applied\s+by\s/i,
+                $not: /applied\s+by\s+user\s*$/i
+              }}
             }
           },
-          { $addFields: { _dp: { $split: [{ $trim: { input: '$appliedDate' } }, '/'] } } },
-          {
-            $addFields: {
-              _sd: {
-                $add: [
-                  { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } }, 10000] },
-                  { $multiply: [{ $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 0, onNull: 0 } }, 100] },
-                  { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 0, onNull: 0 } }
-                ]
-              }
-            }
-          },
-          { $sort: { _sd: -1 } },
-          { $group: { _id: '$userID', operatorName: { $first: '$operatorName' } } },
-          { $project: { _id: 0, userID: '$_id', operatorName: 1 } }
+          { $sort: { _id: -1 } },
+          { $group: { _id: '$userID', timeline: { $first: '$timeline' } } },
+          { $project: { _id: 0, userID: '$_id', timeline: 1 } }
         ]),
       // 5) Client info — runs in parallel with aggregations (no dependency)
       ClientModel.find({})
@@ -3277,7 +3308,12 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const overallMap = new Map(overall.map(r => [r.userID, r.counts]));
-    const lastAppliedOperatorMap = new Map(lastAppliedAgg.map(r => [(r.userID || '').toLowerCase(), r.operatorName]));
+    const lastAppliedOperatorMap = new Map(
+      lastAppliedAgg.map((r) => [
+        (r.userID || '').toLowerCase(),
+        resolveLastAppliedOperatorDisplayName(r)
+      ])
+    );
     const jobUserIDs = Array.from(new Set([...overallMap.keys(), ...appliedMap.keys(), ...removedMap.keys()]));
 
     const allUserIDs = Array.from(new Set([...jobUserIDs, ...clientInfo.map(c => c.email)]));
@@ -5349,8 +5385,11 @@ app.get('/api/client-todos/all', async (req, res) => {
 
     const lastAppliedJobsQuery = {
       userID: { $in: clientEmailList },
-      operatorName: { $ne: 'user', $exists: true },
-      appliedDate: { $exists: true, $ne: null }
+      appliedDate: { $exists: true, $ne: null },
+      $or: [
+        { operatorName: { $exists: true, $nin: [null, '', 'user'] } },
+        { timeline: { $regex: /applied\s+by\s/i } }
+      ]
     };
 
     const dashboardJobCountPipeline = [
@@ -5360,7 +5399,7 @@ app.get('/api/client-todos/all', async (req, res) => {
 
     const [jobAnalysis, allAppliedJobs, dashboardJobCounts] = await Promise.all([
       JobModel.aggregate(jobAnalysisPipeline),
-      JobModel.find(lastAppliedJobsQuery).select('userID companyName appliedDate operatorName').lean(),
+      JobModel.find(lastAppliedJobsQuery).select('userID companyName appliedDate operatorName timeline').lean(),
       JobModel.aggregate(dashboardJobCountPipeline)
     ]);
 
@@ -5388,7 +5427,7 @@ app.get('/api/client-todos/all', async (req, res) => {
         jobsByUser.set(emailLower, {
           companyName: job.companyName,
           appliedDate: job.appliedDate,
-          operatorName: job.operatorName,
+          operatorName: resolveLastAppliedOperatorDisplayName(job),
           date: jobDate
         });
       }
@@ -6117,7 +6156,7 @@ async function runJobCardReminder() {
         ]
       }
     })
-      .select('userID operatorName appliedDate')
+      .select('userID operatorName appliedDate timeline')
       .lean();
     const parseDateString = (dateStr) => {
       if (!dateStr) return null;
@@ -6134,13 +6173,20 @@ async function runJobCardReminder() {
     };
     const lastAppliedByUser = new Map();
     for (const j of allJobs || []) {
-      if (!j.operatorName || j.operatorName === 'user' || !j.appliedDate) continue;
+      if (!j.appliedDate) continue;
+      const displayName = resolveLastAppliedOperatorDisplayName(j);
+      if (!displayName) continue;
       const email = (j.userID || '').toLowerCase();
       if (!email) continue;
       const d = parseDateString(j.appliedDate);
       if (!d) continue;
       const cur = lastAppliedByUser.get(email);
-      if (!cur || d > cur.date) lastAppliedByUser.set(email, { date: d, operatorName: j.operatorName });
+      if (!cur || d > cur.date) {
+        lastAppliedByUser.set(email, {
+          date: d,
+          operatorName: displayName
+        });
+      }
     }
 
     const clients = await ClientModel.find({
