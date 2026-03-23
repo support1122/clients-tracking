@@ -63,6 +63,14 @@ import { OnboardingJobModel } from './OnboardingJobModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
 import { setOtp, getOtp, deleteOtp, decrementAttempts, otpHash } from './utils/otpCache.js';
 import { sendOtpEmail } from './utils/sendOtpEmail.js';
+import {
+  getAnalysisCache,
+  setAnalysisCache,
+  clearAnalysisCache,
+  ANALYSIS_CACHE_TTL,
+  LAST_APPLIED_CACHE_TTL
+} from './utils/analysisCache.js';
+import { ensureDbIndexes } from './utils/ensureDbIndexes.js';
 import multer from 'multer';
 import FormData from 'form-data';
 import cron from 'node-cron';
@@ -418,22 +426,32 @@ const verifyOperationsManage = (req, res, next) => {
   return res.status(403).json({ error: 'Access denied. Only admin, CSM, or team lead can manage operations.' });
 };
 
-const ConnectDB = () => mongoose.connect(process.env.MONGODB_URI, {
-  maxPoolSize: 10,
-  minPoolSize: 1,
-  // Keep idle pooled connections up to 24h before pool closes them
-  maxIdleTimeMS: 86_400_000,
-  // Allow long-running operations / idle socket without killing it
-  socketTimeoutMS: 86_400_000,     // (0 means "no timeout" but can mask hangs; 24h is safer)
-  // How long to try to find a server if cluster momentarily unavailable
-  serverSelectionTimeoutMS: 10_000,
-  // (optional) heartbeatFrequencyMS: 10000,
-})
-  .then(() => { })
-  .catch((error) => {
-    console.error("❌ Database connection failed:", error);
+const ConnectDB = () => {
+  if (!process.env.MONGODB_URI || String(process.env.MONGODB_URI).trim() === '') {
+    console.error('❌ MONGODB_URI is not set. Add it to .env (e.g. mongodb+srv://... or mongodb://localhost:27017/dbname)');
     process.exit(1);
-  });
+  }
+  return mongoose.connect(process.env.MONGODB_URI, {
+    maxPoolSize: 10,
+    minPoolSize: 1,
+    maxIdleTimeMS: 86_400_000,
+    socketTimeoutMS: 86_400_000,
+    serverSelectionTimeoutMS: 30_000,
+  })
+    .then(async () => {
+      try {
+        await ensureDbIndexes();
+        console.log('✅ MongoDB connected and indexes ensured');
+      } catch (idxErr) {
+        console.error('❌ Failed to ensure DB indexes:', idxErr?.message || idxErr);
+        throw idxErr;
+      }
+    })
+    .catch((error) => {
+      console.error('❌ Database connection failed:', error?.message || error);
+      process.exit(1);
+    });
+};
 ConnectDB();
 
 // Admin users are managed manually in the database
@@ -919,7 +937,9 @@ export const createOrUpdateClient = async (req, res) => {
         await addClientActionToJobMoveHistory(emailLower, 'client_unpaused', movedBy);
       }
       const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
-      if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined) clearAnalysisCache();
+      if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined) {
+        clearAnalysisCache();
+      }
       return res.status(200).json({
         message: "🔄 Client fields updated successfully",
         updatedClientsTracking,
@@ -976,7 +996,9 @@ export const createOrUpdateClient = async (req, res) => {
       );
     }
     const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
-    if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined) clearAnalysisCache();
+    if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined) {
+      clearAnalysisCache();
+    }
 
     return res
       .status(200)
@@ -1067,6 +1089,17 @@ const updateClientDashboardTeamLead = async (req, res) => {
       { clientEmail: emailLower },
       { $set: { dashboardManagerName: newName } }
     );
+
+    // Keep portal user record aligned with Client (same as createOrUpdateClient partial update)
+    await NewUserModel.updateOne(
+      { email: emailLower },
+      { $set: { dashboardManager: newName } },
+      { runValidators: false }
+    ).catch(() => {});
+
+    // Invalidate onboarding list/detail caches so GET /api/onboarding/jobs/:id is not stale
+    invalidateJobListCache();
+    clearAnalysisCache();
 
     res.status(200).json({ success: true, client });
   } catch (error) {
@@ -3144,19 +3177,6 @@ const getJobsByDate = async (req, res) => {
 // Add the job analytics route after function definition
 app.post('/api/jobs/by-date', getJobsByDate);
 
-// In-memory TTL cache for client-job-analysis (2min). Cleared when client isPaused/onboardingPhase updated so status always comes from DB.
-const _analysisCacheStore = new Map();
-const ANALYSIS_CACHE_TTL = 120_000;
-const LAST_APPLIED_CACHE_TTL = 300_000; // 5 min — last applied operator rarely changes
-function getAnalysisCache(key) {
-  const e = _analysisCacheStore.get(key);
-  if (!e) return null;
-  if (Date.now() > e.exp) { _analysisCacheStore.delete(key); return null; }
-  return e.val;
-}
-function setAnalysisCache(key, val, ttl) { _analysisCacheStore.set(key, { val, exp: Date.now() + (ttl || ANALYSIS_CACHE_TTL) }); }
-function clearAnalysisCache() { _analysisCacheStore.clear(); }
-
 /**
  * JobDB `operatorName` is sometimes stored as an ops email (e.g. sarah@flashfirehq) instead of a display name.
  * Strip the domain for Client Job Analysis, todos API, and Discord reminders so UI matches the main dashboard intent.
@@ -3185,7 +3205,17 @@ function lastAppliedActorFromTimeline(timeline) {
 
 function resolveLastAppliedOperatorDisplayName(job) {
   const fromTimeline = lastAppliedActorFromTimeline(job?.timeline);
-  return formatLastAppliedOperatorDisplayName(fromTimeline);
+  const raw = fromTimeline || (job?.operatorName || '');
+  return formatLastAppliedOperatorDisplayName(raw);
+}
+
+/** Recompute paused duration from row fields (used on cache hit so days stay current). */
+function freshPausedDaysFromRow(row) {
+  if (!row || !row.isPaused || row.onboardingPhase) return null;
+  if (!row.pausedAt) return null;
+  const t = new Date(row.pausedAt).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.floor((Date.now() - t) / 86400000));
 }
 
 // Client Job Analysis (Recent Activity) - per active client status counts and applied-on-date
@@ -3202,7 +3232,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
             ...cached,
             rows: cached.rows.map((row) => ({
               ...row,
-              lastAppliedOperatorName: formatLastAppliedOperatorDisplayName(row.lastAppliedOperatorName || '')
+              lastAppliedOperatorName: formatLastAppliedOperatorDisplayName(row.lastAppliedOperatorName || ''),
+              pausedDays: freshPausedDaysFromRow(row)
             }))
           }
         : cached;
@@ -3296,7 +3327,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         ]),
       // 5) Client info — runs in parallel with aggregations (no dependency)
       ClientModel.find({})
-        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons')
+        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt')
         .lean()
     ]);
 
@@ -3342,6 +3373,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       dashboardTeamLeadName: c.dashboardTeamLeadName || '',
       isPaused: !!c.isPaused,
       onboardingPhase: !!c.onboardingPhase,
+      pausedAt: c.pausedAt != null ? new Date(c.pausedAt).toISOString() : null,
       addonLimit: (c.addons || []).reduce((sum, a) => {
         const v = parseInt(a.type || a.addonType || 0, 10);
         return sum + (isNaN(v) ? 0 : v);
@@ -3378,6 +3410,12 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         operationsName: client.operationsName || '',
         isPaused: client.isPaused ?? false,
         onboardingPhase: client.onboardingPhase ?? false,
+        pausedAt: client.pausedAt ?? null,
+        pausedDays: freshPausedDaysFromRow({
+          isPaused: client.isPaused ?? false,
+          onboardingPhase: client.onboardingPhase ?? false,
+          pausedAt: client.pausedAt ?? null
+        }),
         dashboardTeamLeadName: client.dashboardTeamLeadName || '',
         lastAppliedOperatorName: lastAppliedOperatorMap.get(email.toLowerCase()) || '',
         referrals: referralMeta.referrals || [],

@@ -360,6 +360,7 @@ export default function ClientJobAnalysis() {
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Status</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Pause/Unpause/New</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Paused</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Plan</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                   <div className="flex items-center gap-2">
@@ -425,6 +426,7 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-2"><div className="space-y-1.5"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-28" /><div className="h-2.5 bg-gray-100 rounded animate-pulse w-36" /></div></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-16" /></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-20" /></td>
+                    <td className="px-2 py-2"><div className="h-5 bg-amber-200/80 rounded animate-pulse w-14" /></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-16" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-20" /></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-24" /></td>
@@ -440,7 +442,7 @@ export default function ClientJobAnalysis() {
                 ))
               ) : processedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={14} className="px-2 py-8 text-center text-gray-500 text-sm">
+                  <td colSpan={15} className="px-2 py-8 text-center text-gray-500 text-sm">
                     {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
                   </td>
                 </tr>
@@ -541,6 +543,18 @@ export default function ClientJobAnalysis() {
                           </span>
                         );
                       })()}
+                    </td>
+                    <td className="px-2 py-1">
+                      {loading && r.isPaused && !r.onboardingPhase ? (
+                        <div className="h-4 w-12 rounded bg-amber-100 animate-pulse" />
+                      ) : r.isPaused && !r.onboardingPhase ? (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="inline-flex w-fit text-[10px] font-semibold text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-200">Paused</span>
+                          <span className="text-[10px] text-amber-800">{r.pausedDays != null ? `${r.pausedDays}d` : '—'}</span>
+                        </div>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="px-2 py-1">
                       {r.planType ? (

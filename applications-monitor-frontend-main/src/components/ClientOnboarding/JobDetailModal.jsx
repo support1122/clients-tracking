@@ -958,15 +958,30 @@ const JobDetailModal = React.memo(({
                       else if (actionType === 'client_paused') label = 'Client paused';
                       else if (actionType === 'client_unpaused') label = 'Client unpaused';
                       else if (actionType === 'client_phase_set') label = 'Status set to New (onboarding phase)';
+                      else if (actionType === 'comment_resolved') label = 'Tagged comment resolved';
                       else { label = move.fromStatus === 'created' ? 'Job card created' : `Moved from ${STATUS_LABELS[move.fromStatus] || move.fromStatus}` + (move.toStatus ? ` → ${STATUS_LABELS[move.toStatus] || move.toStatus}` : ''); }
                       const byEmail = (move.movedBy || '').trim().toLowerCase();
                       const byName = (move.movedByName || '').trim();
                       const isSystem = !byEmail || byEmail === 'system' || byEmail === 'unknown';
                       const whoText = isSystem ? 'System' : byName && byName !== byEmail ? `${byName} (${move.movedBy})` : move.movedBy;
+                      const resolvedList = Array.isArray(move.resolvedEmails) ? move.resolvedEmails.filter(Boolean).join(', ') : '';
+                      const metaLine = actionType === 'comment_resolved'
+                        ? (resolvedList ? `Resolved by ${resolvedList}` : `Resolved (${whoText})`)
+                        : `by ${whoText}`;
+                      const actorNote = actionType === 'comment_resolved' && resolvedList && !isSystem
+                        ? ` · action by ${whoText}`
+                        : '';
+                      const snippet = (move.commentSnippet || '').trim();
                       return (
                         <div key={i} className="flex gap-3">
-                          <div className="flex flex-col items-center pt-1"><div className="w-2 h-2 rounded-full bg-primary"></div>{i < (selectedJob.moveHistory || []).length - 1 && (<div className="w-px h-full bg-gray-200 mt-1 min-h-[20px]"></div>)}</div>
-                          <div className="flex-1 pb-2"><p className="text-xs text-gray-700"><span className="font-semibold text-gray-900">{label}</span></p><p className="text-[10px] text-gray-400 mt-0.5">by {whoText} • {new Date(move.movedAt).toLocaleString()}</p></div>
+                          <div className="flex flex-col items-center pt-1"><div className={`w-2 h-2 rounded-full ${actionType === 'comment_resolved' ? 'bg-emerald-500' : 'bg-primary'}`}></div>{i < (selectedJob.moveHistory || []).length - 1 && (<div className="w-px h-full bg-gray-200 mt-1 min-h-[20px]"></div>)}</div>
+                          <div className="flex-1 pb-2">
+                            <p className="text-xs text-gray-700"><span className="font-semibold text-gray-900">{label}</span></p>
+                            {actionType === 'comment_resolved' && snippet ? (
+                              <p className="text-[10px] text-gray-500 mt-0.5 line-clamp-2" title={snippet}>{snippet.length >= 120 ? `${snippet}…` : snippet}</p>
+                            ) : null}
+                            <p className="text-[10px] text-gray-400 mt-0.5">{metaLine}{actorNote} • {new Date(move.movedAt).toLocaleString()}</p>
+                          </div>
                         </div>
                       );
                     })
