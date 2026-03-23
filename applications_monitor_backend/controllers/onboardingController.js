@@ -9,6 +9,7 @@ import { ManagerModel } from '../ManagerModel.js';
 import OperationsModel from '../OperationsModel.js';
 import { NewUserModel } from '../schema_models/UserModel.js';
 import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
+import { clearAnalysisCache } from '../utils/analysisCache.js';
 
 // When true, all resume-maker assignments go to rachna077@gmail.com (no round-robin) remevee this later
 const rachana = true;
@@ -747,10 +748,17 @@ export async function patchOnboardingJob(req, res) {
         });
       }
       // Sync to Client model
+      const clientEmailLower = (job.clientEmail || '').toLowerCase();
       await ClientModel.updateOne(
-        { email: (job.clientEmail || '').toLowerCase() },
+        { email: clientEmailLower },
         { $set: { dashboardTeamLeadName: job.dashboardManagerName, updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata') } }
       );
+      await NewUserModel.updateOne(
+        { email: clientEmailLower },
+        { $set: { dashboardManager: job.dashboardManagerName } },
+        { runValidators: false }
+      ).catch(() => {});
+      clearAnalysisCache();
     }
     if ((isAdmin || isCsm || isTeamLead) && taggedDashboardManagerNames !== undefined && Array.isArray(taggedDashboardManagerNames)) {
       job.taggedDashboardManagerNames = taggedDashboardManagerNames.map((n) => (n && String(n).trim()) || '').filter(Boolean);
