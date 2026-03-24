@@ -10,6 +10,9 @@ import OperationsModel from '../OperationsModel.js';
 import { NewUserModel } from '../schema_models/UserModel.js';
 import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
 import { clearAnalysisCache } from '../utils/analysisCache.js';
+import { useServerMemoryCache } from '../utils/serverMemoryCache.js';
+
+const ONBOARDING_MEMORY_CACHE_ENABLED = useServerMemoryCache();
 
 // When true, all resume-maker assignments go to rachna077@gmail.com (no round-robin) remevee this later
 const rachana = true;
@@ -307,9 +310,9 @@ export async function listOnboardingJobs(req, res) {
       return res.status(200).json({ jobs: visibleJobs });
     };
 
-    // Serve from cache when available (5 s TTL, invalidated on any write)
+    // Serve from cache when available (5 s TTL, invalidated on any write). Off in prod multi-instance by default.
     const cacheKey = `jobs:${status || 'all'}`;
-    const cached = jobListCache.get(cacheKey);
+    const cached = ONBOARDING_MEMORY_CACHE_ENABLED ? jobListCache.get(cacheKey) : null;
     if (cached) {
       const cachedJobs = cached.jobs || [];
       return sendJobsForUser(cachedJobs);
@@ -406,7 +409,7 @@ export async function listOnboardingJobs(req, res) {
     });
 
     const payload = { jobs: enrichedJobs };
-    jobListCache.set(cacheKey, payload);
+    if (ONBOARDING_MEMORY_CACHE_ENABLED) jobListCache.set(cacheKey, payload);
     return sendJobsForUser(enrichedJobs);
   } catch (e) {
     console.error('listOnboardingJobs:', e);
@@ -446,7 +449,7 @@ export async function getOnboardingJobById(req, res) {
     const { id } = req.params;
     const excludeComments = req.query?.excludeComments === '1';
     const cacheKey = `job:${id}`;
-    let job = jobDetailCache.get(cacheKey);
+    let job = ONBOARDING_MEMORY_CACHE_ENABLED ? jobDetailCache.get(cacheKey) : null;
     if (job) {
       job = { ...job };
       const userRole = req.user?.role || '';
@@ -545,7 +548,7 @@ export async function getOnboardingJobById(req, res) {
     if (!endDate) endDate = now;
     job.daysInPipeline = Math.max(0, Math.floor((new Date(endDate) - new Date(startDate)) / (24 * 60 * 60 * 1000)));
 
-    jobDetailCache.set(cacheKey, job);
+    if (ONBOARDING_MEMORY_CACHE_ENABLED) jobDetailCache.set(cacheKey, job);
     if (excludeComments) {
       const { comments: _c, ...rest } = job;
       return res.status(200).json({ job: rest });
