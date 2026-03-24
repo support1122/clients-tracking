@@ -49,6 +49,7 @@ import {
   convertToDMY
 } from './ClientOnboarding/helpers';
 import { API_BASE, AUTH_HEADERS, LOG, LONG_PRESS_MS } from './ClientOnboarding/constants';
+import { fetchDashboardManagerFullNames } from '../utils/fetchDashboardManagerCatalog.js';
 
 export default function ClientOnboarding() {
   const { jobs, setJobs, selectedJob, setSelectedJob, loading, setLoading, roles, setRoles, getJobsByStatus, clearSelected } = useOnboardingStore();
@@ -473,10 +474,9 @@ export default function ClientOnboarding() {
   }, [fetchJobs, fetchRoles, fetchClientJobAnalysis, fetchClients]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/managers/names`)
-      .then((r) => r.ok ? r.json() : { success: false, names: [] })
-      .then((data) => { if (data.success) setDashboardManagerNames(data.names || []); })
-      .catch(() => {});
+    fetchDashboardManagerFullNames(API_BASE, AUTH_HEADERS)
+      .then(setDashboardManagerNames)
+      .catch(() => setDashboardManagerNames([]));
   }, []);
 
   useEffect(() => {

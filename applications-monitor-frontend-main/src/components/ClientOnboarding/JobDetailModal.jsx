@@ -25,6 +25,10 @@ import { toastUtils } from '../../utils/toastUtils';
 import { handleAuthFailure } from '../../utils/authUtils';
 import { ClientProfileSection } from '../JobDetail/ClientProfileSection';
 import CommentsSection from './CommentsSection';
+import {
+  buildDashboardManagerSelectOptions,
+  selectValueMatchingOption
+} from '../../utils/dashboardManagerSelect.js';
 
 const JobDetailModal = React.memo(({
   selectedJob,
@@ -99,6 +103,15 @@ const JobDetailModal = React.memo(({
   const isTeamLead = user?.role === 'team_lead';
   const canViewOperations = isAdmin || isCsm || isTeamLead;
   const canManageOperations = isAdmin || isCsm || isTeamLead;
+
+  const dashboardManagerSelectOptions = useMemo(
+    () =>
+      buildDashboardManagerSelectOptions(dashboardManagerNames, [
+        selectedJob?.dashboardManagerName,
+        ...(selectedJob?.taggedDashboardManagerNames || [])
+      ]),
+    [dashboardManagerNames, selectedJob?.dashboardManagerName, selectedJob?.taggedDashboardManagerNames]
+  );
 
   // Reset modal sections on job change
   useEffect(() => {
@@ -695,7 +708,7 @@ const JobDetailModal = React.memo(({
                   <div>
                     <span className="block text-xs font-semibold text-gray-700 mb-1">Dashboard Manager</span>
                     {isAdmin ? (
-                      <select value={selectedJob.dashboardManagerName || ''} onChange={async (e) => {
+                      <select value={selectValueMatchingOption(selectedJob.dashboardManagerName, dashboardManagerSelectOptions)} onChange={async (e) => {
                         const val = e.target.value;
                         if (!selectedJob?._id || savingDashboardManager.has(selectedJob._id)) return;
                         setSavingDashboardManager((s) => new Set(s).add(selectedJob._id));
@@ -708,8 +721,8 @@ const JobDetailModal = React.memo(({
                         } catch (err) { toastUtils.error(err.message || 'Failed'); }
                         finally { setSavingDashboardManager((s) => { const n = new Set(s); n.delete(selectedJob._id); return n; }); }
                       }} disabled={savingDashboardManager.has(selectedJob._id)} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white disabled:opacity-50">
-                        <option value="">— Select —</option>
-                        {dashboardManagerNames.map((name) => (<option key={name} value={name}>{name}</option>))}
+                        <option value="">Not assigned</option>
+                        {dashboardManagerSelectOptions.map((name) => (<option key={name} value={name}>{name}</option>))}
                       </select>
                     ) : (<span className="text-sm text-gray-900 font-medium">{selectedJob.dashboardManagerName || '—'}</span>)}
                   </div>

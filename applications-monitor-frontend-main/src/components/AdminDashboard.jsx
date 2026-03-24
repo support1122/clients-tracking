@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { handleAuthFailure } from '../utils/authUtils.js';
+import { fetchDashboardManagerFullNames } from '../utils/fetchDashboardManagerCatalog.js';
 
 const API_BASE = import.meta.env.VITE_BASE ;
 
@@ -290,10 +291,12 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/managers/names`)
-      .then((r) => r.ok ? r.json() : { success: false, names: [] })
-      .then((data) => { if (data.success) setDashboardManagerNames(data.names || []); })
-      .catch(() => {});
+    fetchDashboardManagerFullNames(API_BASE, () => ({
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getAuthToken()}`
+    }))
+      .then(setDashboardManagerNames)
+      .catch(() => setDashboardManagerNames([]));
   }, []);
 
   const handleLogout = () => {

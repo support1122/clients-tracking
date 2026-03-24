@@ -3,6 +3,11 @@ import Layout from './Layout';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
 import { Pencil, X, Loader2 } from 'lucide-react';
+import {
+  buildDashboardManagerSelectOptions,
+  selectValueMatchingOption
+} from '../utils/dashboardManagerSelect.js';
+import { fetchDashboardManagerFullNames } from '../utils/fetchDashboardManagerCatalog.js';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
 const AUTH_HEADERS = () => ({
@@ -121,24 +126,28 @@ export default function ClientJobAnalysis() {
   }, [editingClientNumberEmail, editingClientNumberValue, userRole, date, fetchAnalysis]);
 
   useEffect(() => {
-    const fetchDashboardManagerNames = async () => {
+    (async () => {
       try {
-        const resp = await fetch(`${API_BASE}/api/managers/names`);
-        if (!resp.ok) throw new Error('Failed to fetch dashboard manager names');
-        const data = await resp.json();
-        if (data.success) {
-          setDashboardManagerNames(data.names || []);
-        }
+        const names = await fetchDashboardManagerFullNames(API_BASE, AUTH_HEADERS);
+        setDashboardManagerNames(names);
       } catch (e) {
-        console.error('Failed to load dashboard manager names:', e);
+        console.error('Failed to load dashboard managers (same source as Manager Dashboard):', e);
       }
-    };
-    fetchDashboardManagerNames();
+    })();
   }, []);
 
   useEffect(() => {
     fetchAnalysis();
   }, [fetchAnalysis]);
+
+  const dashboardSelectOptions = useMemo(
+    () =>
+      buildDashboardManagerSelectOptions(
+        dashboardManagerNames,
+        rows.map((r) => r.dashboardTeamLeadName)
+      ),
+    [dashboardManagerNames, rows]
+  );
 
   const onRefresh = () => fetchAnalysis(date);
 
@@ -594,13 +603,13 @@ export default function ClientJobAnalysis() {
                     </td>
                     <td className="px-2 py-1">
                       <select
-                        value={r.dashboardTeamLeadName || ''}
+                        value={selectValueMatchingOption(r.dashboardTeamLeadName, dashboardSelectOptions)}
                         onChange={(e) => handleDashboardManagerChange(r.email, e.target.value)}
                         disabled={savingDashboardManager.has(r.email)}
                         className="px-2 py-1 text-[11px] border border-slate-300 rounded-full bg-white shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <option value="">-- Select --</option>
-                        {dashboardManagerNames.map((name) => (
+                        <option value="">Not assigned</option>
+                        {dashboardSelectOptions.map((name) => (
                           <option key={name} value={name}>
                             {name}
                           </option>

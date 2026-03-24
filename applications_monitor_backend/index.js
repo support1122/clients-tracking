@@ -452,7 +452,8 @@ const ConnectDB = () => {
       process.exit(1);
     });
 };
-ConnectDB();
+/** Wait for this before listen() — avoids buffered query timeouts (10s) while MongoDB is still connecting. */
+const dbReady = ConnectDB();
 
 // Admin users are managed manually in the database
 // No automatic admin user creation
@@ -474,10 +475,7 @@ const cleanupSessionKeys = async () => {
   }
 };
 
-// Clean up session keys after database connection
-setTimeout(async () => {
-  await cleanupSessionKeys();
-}, 2000);
+// Session cleanup runs after dbReady (see server start below), not on a blind timer
 //get all the jobdatabase data..
 const getAllJobs = async (req, res) => {
   const jobDB = await JobModel.find().select('-jobDescription').lean();
@@ -1020,7 +1018,7 @@ const getOperationsNames = async (req, res) => {
   }
 };
 
-// Get dashboard manager names for dropdown
+// Same roster as GET /api/managers (Manager Dashboard) — fullName list only; kept for older clients.
 const getDashboardManagerNames = async (req, res) => {
   try {
     const managers = await ManagerModel.find({ isActive: true }).select('fullName').lean();
@@ -6357,29 +6355,39 @@ const syncClientNumbersToOnboardingJobs = async () => {
   return updated;
 };
 
-// Start the server
-app.listen(process.env.PORT, () => {
-  console.log(`✅ Server is live at port: ${process.env.PORT}`);
-  console.log(`📡 Dashboard Backend URL: ${FLASHFIRE_API_BASE_URL}`);
+// Start HTTP server only after MongoDB is connected (prevents startup tasks from hitting buffer timeout)
+dbReady
+  .then(async () => {
+    await cleanupSessionKeys();
 
-  // Sync client numbers on startup (Client model → OnboardingJob)
-  syncClientNumbersToOnboardingJobs().catch((err) => console.error('❌ [Client Numbers] Startup sync error:', err));
+    app.listen(process.env.PORT, () => {
+      console.log(`✅ Server is live at port: ${process.env.PORT}`);
+      console.log(`📡 Dashboard Backend URL: ${FLASHFIRE_API_BASE_URL}`);
 
-  // Start the automated call sweep job
-  startCallSweepJob();
+      // Sync client numbers on startup (Client model → OnboardingJob)
+      syncClientNumbersToOnboardingJobs().catch((err) =>
+        console.error('❌ [Client Numbers] Startup sync error:', err)
+      );
 
-  // Job card reminder: 8:00 PM IST daily (14:30 UTC)
-  if (DISCORD_JOBCARD_REMINDER_WEBHOOK) {
-    cron.schedule('30 14 * * *', runJobCardReminder);
-    console.log('📬 [JobCard Reminder] Cron scheduled for 8:00 PM IST daily');
-  }
+      // Start the automated call sweep job
+      startCallSweepJob();
 
-  // Zero saved jobs reminder: 1 PM IST daily (07:30 UTC)
-  if (DISCORD_ZERO_SAVED_WEBHOOK) {
-    cron.schedule('30 7 * * *', runZeroSavedJobReminder);
-    console.log('📬 [Zero Saved Reminder] Cron scheduled for 1 PM IST daily');
-  }
-});
+      // Job card reminder: 8:00 PM IST daily (14:30 UTC)
+      if (DISCORD_JOBCARD_REMINDER_WEBHOOK) {
+        cron.schedule('30 14 * * *', runJobCardReminder);
+        console.log('📬 [JobCard Reminder] Cron scheduled for 8:00 PM IST daily');
+      }
+
+      // Zero saved jobs reminder: 1 PM IST daily (07:30 UTC)
+      if (DISCORD_ZERO_SAVED_WEBHOOK) {
+        cron.schedule('30 7 * * *', runZeroSavedJobReminder);
+        console.log('📬 [Zero Saved Reminder] Cron scheduled for 1 PM IST daily');
+      }
+    });
+  })
+  .catch(() => {
+    // ConnectDB already logged and process.exit(1) on failure
+  });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
