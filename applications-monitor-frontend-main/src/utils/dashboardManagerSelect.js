@@ -1,7 +1,7 @@
 /**
  * HTML <select> only shows the current value if it matches an <option>.
- * Assigned names may exist on Client/OnboardingJob but not in /api/managers/names
- * (inactive manager doc, legacy data, or first name only vs fullName mismatch).
+ * Catalog should come from GET /api/managers (same as Manager Dashboard). Assigned
+ * values may still be missing from that list (inactive/legacy/typo) — merge fixes display.
  */
 
 export function buildDashboardManagerSelectOptions(catalogNames, extraAssigned) {

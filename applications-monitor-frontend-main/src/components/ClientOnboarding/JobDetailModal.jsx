@@ -721,7 +721,7 @@ const JobDetailModal = React.memo(({
                         } catch (err) { toastUtils.error(err.message || 'Failed'); }
                         finally { setSavingDashboardManager((s) => { const n = new Set(s); n.delete(selectedJob._id); return n; }); }
                       }} disabled={savingDashboardManager.has(selectedJob._id)} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white disabled:opacity-50">
-                        <option value="">— Select —</option>
+                        <option value="">Not assigned</option>
                         {dashboardManagerSelectOptions.map((name) => (<option key={name} value={name}>{name}</option>))}
                       </select>
                     ) : (<span className="text-sm text-gray-900 font-medium">{selectedJob.dashboardManagerName || '—'}</span>)}

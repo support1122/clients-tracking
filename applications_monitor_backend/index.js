@@ -1018,7 +1018,7 @@ const getOperationsNames = async (req, res) => {
   }
 };
 
-// Get dashboard manager names for dropdown
+// Same roster as GET /api/managers (Manager Dashboard) — fullName list only; kept for older clients.
 const getDashboardManagerNames = async (req, res) => {
   try {
     const managers = await ManagerModel.find({ isActive: true }).select('fullName').lean();
