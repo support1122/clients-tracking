@@ -4266,8 +4266,16 @@ app.post('/api/onboarding/batch-profile-status', verifyToken, async (req, res) =
     if (!Array.isArray(emails) || emails.length === 0) return res.status(200).json({ results: {} });
     const uniqueEmails = [...new Set(emails.map(e => (e || '').toLowerCase().trim()).filter(Boolean))].slice(0, 100);
     const Profile = getProfileModel();
-    const profiles = await Profile.find({ email: { $in: uniqueEmails } }).select('email firstName lastName contactNumber dob bachelorsUniDegree bachelorsGradMonthYear visaStatus address preferredRoles experienceLevel expectedSalaryRange preferredLocations targetCompanies linkedinUrl resumeUrl confirmAccuracy agreeTos createdAt updatedAt').lean();
+    const profileSelect = 'email firstName lastName contactNumber dob bachelorsUniDegree bachelorsGradMonthYear visaStatus address preferredRoles experienceLevel expectedSalaryRange preferredLocations targetCompanies linkedinUrl resumeUrl confirmAccuracy agreeTos createdAt updatedAt';
+    const profiles = await Profile.find({ email: { $in: uniqueEmails } }).select(profileSelect).lean();
     const profileMap = new Map(profiles.map(p => [(p.email || '').toLowerCase(), p]));
+    // Case-insensitive fallback (profiles collection may store mixed-case emails)
+    for (const email of uniqueEmails) {
+      if (profileMap.has(email)) continue;
+      const re = new RegExp(`^${escapeRegex(email)}$`, 'i');
+      const p = await Profile.findOne({ email: re }).select(profileSelect).lean().catch(() => null);
+      if (p) profileMap.set(email, p);
+    }
     const results = {};
     const bulkUpdates = [];
 
@@ -4432,10 +4440,19 @@ const assignClientToOperator = async (req, res) => {
       return res.status(400).json({ error: 'Both clientEmail and operatorEmail are required' });
     }
 
-    // Find the client by email to get their userID
-    const client = await NewUserModel.findOne({ email: clientEmail.toLowerCase() }).lean();
+    // Find the client by email (case-insensitive; users collection may not be normalized)
+    const rawClientEmail = String(clientEmail || '').trim();
+    const clientEmailLower = rawClientEmail.toLowerCase();
+    let client = await NewUserModel.findOne({ email: clientEmailLower }).lean();
     if (!client) {
-      return res.status(404).json({ error: 'Client not found' });
+      const re = new RegExp(`^${escapeRegex(rawClientEmail)}$`, 'i');
+      client = await NewUserModel.findOne({ email: re }).lean();
+    }
+    if (!client) {
+      return res.status(404).json({
+        error: 'Client not found',
+        message: 'No user account matches this email in the operations database. The client may need to sign up or use the same email as in the dashboard.'
+      });
     }
 
     // Find the operator by email (support both @flashfirehq and @flashfirehq.com)

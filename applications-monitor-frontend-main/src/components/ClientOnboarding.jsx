@@ -280,13 +280,15 @@ export default function ClientOnboarding() {
 
       setJobs(uniqueJobs);
 
-      // Background: sync profileComplete for jobs that haven't been checked yet
-      const uncheckedEmails = [...new Set(uniqueJobs.filter(j => j.profileComplete == null).map(j => (j.clientEmail || '').toLowerCase().trim()).filter(Boolean))];
-      if (uncheckedEmails.length > 0) {
+      // Background: re-sync profileComplete from profiles collection for every visible client.
+      // Stale jobs used to keep profileComplete: true forever because we only batched emails where profileComplete == null.
+      const allClientEmails = [...new Set(uniqueJobs.map(j => (j.clientEmail || '').toLowerCase().trim()).filter(Boolean))];
+      const batchSlice = allClientEmails.slice(0, 100);
+      if (batchSlice.length > 0) {
         fetch(`${API_BASE}/api/onboarding/batch-profile-status`, {
           method: 'POST',
           headers: { ...AUTH_HEADERS(), 'Content-Type': 'application/json' },
-          body: JSON.stringify({ emails: uncheckedEmails })
+          body: JSON.stringify({ emails: batchSlice })
         })
           .then(r => r.json().catch(() => ({})))
           .then(data => {
@@ -294,7 +296,7 @@ export default function ClientOnboarding() {
             if (results && typeof results === 'object') {
               setJobs(prev => prev.map(j => {
                 const email = (j.clientEmail || '').toLowerCase().trim();
-                if (email && results[email] !== undefined && j.profileComplete == null) {
+                if (email && results[email] !== undefined) {
                   return { ...j, profileComplete: results[email] };
                 }
                 return j;
