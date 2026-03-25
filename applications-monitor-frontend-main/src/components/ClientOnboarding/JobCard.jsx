@@ -8,7 +8,7 @@ import {
   AlertCircle,
   CheckCircle
 } from 'lucide-react';
-import { STATUS_LABELS } from '../../store/onboardingStore';
+import { STATUS_LABELS, useClientProfileStore } from '../../store/onboardingStore';
 import { getAllowedStatusesForPlan, clientDisplayName } from './helpers';
 
 const JobCard = React.memo(({
@@ -47,8 +47,14 @@ const JobCard = React.memo(({
   const planLower = (job.planType || '').toLowerCase();
   const isExecutive = planLower === 'executive' || planLower.includes('executive');
   const hasLinkedInCoverLetter = ['professional', 'executive'].includes(planLower);
-  const hasDashboard = job.profileComplete === true;
-  const dashboardUnchecked = job.profileComplete == null;
+  const emailKey = (job.clientEmail || '').toLowerCase().trim();
+  const profileCacheEntry = useClientProfileStore((s) => (emailKey ? s.profiles[emailKey] : undefined));
+  const dashboardFromStore =
+    profileCacheEntry != null && typeof profileCacheEntry.profileComplete === 'boolean';
+  const hasDashboard = dashboardFromStore
+    ? profileCacheEntry.profileComplete === true
+    : job.profileComplete === true;
+  const dashboardUnchecked = dashboardFromStore ? false : job.profileComplete == null;
   const attachmentNames = (job.attachments || []).map((a) => (a.name || '').trim()).filter(Boolean);
   const hasResume = attachmentNames.some((n) => /^resume$/i.test(n));
   const hasCoverLetter = attachmentNames.some((n) => /cover\s*letter/i.test(n));

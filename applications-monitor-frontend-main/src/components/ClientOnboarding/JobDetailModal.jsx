@@ -270,11 +270,19 @@ const JobDetailModal = React.memo(({
           setProfileError(null);
           setClientProfileData(profileObj);
           setProfileLoading(false);
+          if (jobId) {
+            useOnboardingStore.getState().setJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, profileComplete: complete } : j)));
+            useOnboardingStore.getState().setSelectedJob((prev) => (prev && prev._id === jobId ? { ...prev, profileComplete: complete } : prev));
+          }
         } else {
           useClientProfileStore.getState().setProfileError(emailLower, data?.message || 'Profile not found');
           setProfileError(data?.message || data?.error || 'Profile not found');
           setClientProfileData(null);
           setProfileLoading(false);
+          if (jobId) {
+            useOnboardingStore.getState().setJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, profileComplete: false } : j)));
+            useOnboardingStore.getState().setSelectedJob((prev) => (prev && prev._id === jobId ? { ...prev, profileComplete: false } : prev));
+          }
         }
       })
       .catch((err) => {
@@ -485,7 +493,12 @@ const JobDetailModal = React.memo(({
     setAddingOperatorToClient(true);
     try {
       const res = await fetch(`${API_BASE}/api/operations/assign-client`, { method: 'POST', headers: AUTH_HEADERS(), body: JSON.stringify({ clientEmail, operatorEmail }) });
-      if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error || 'Failed'); }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const primary = data.error || data.message || `Could not add intern (${res.status})`;
+        const msg = data.error && data.message && data.message !== data.error ? `${data.error}: ${data.message}` : primary;
+        throw new Error(msg);
+      }
       toastUtils.success('Operations intern added');
       setShowAddOperatorModal(false);
       fetchOperationsForClient(clientEmail);
@@ -516,7 +529,12 @@ const JobDetailModal = React.memo(({
     setAddingClientToOperator(true);
     try {
       const res = await fetch(`${API_BASE}/api/operations/assign-client`, { method: 'POST', headers: AUTH_HEADERS(), body: JSON.stringify({ clientEmail, operatorEmail }) });
-      if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error || 'Failed'); }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const primary = data.error || data.message || `Could not assign client (${res.status})`;
+        const msg = data.error && data.message && data.message !== data.error ? `${data.error}: ${data.message}` : primary;
+        throw new Error(msg);
+      }
       toastUtils.success('Client added');
       setShowAddManagedUserModal(false);
       fetchOperatorManagedUsers(operatorEmail);

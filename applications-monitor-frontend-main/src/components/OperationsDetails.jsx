@@ -162,11 +162,21 @@ const OperationsDetails = ({ operationEmail, onClose, userRole = 'admin' }) => {
         setSelectedClientToAssign('');
         alert('Client assigned successfully!');
       } else {
-        const errorData = await response.json();
-        alert(`Failed to assign client: ${errorData.error || 'Please try again.'}`);
+        let errorData = {};
+        try {
+          errorData = await response.json();
+        } catch (_) {
+          errorData = {};
+        }
+        const primary = errorData.error || errorData.message || response.statusText || 'Please try again.';
+        const detail =
+          errorData.error && errorData.message && errorData.message !== errorData.error
+            ? `${errorData.error}: ${errorData.message}`
+            : primary;
+        alert(`Failed to assign client: ${detail}`);
       }
     } catch (error) {
-      alert('Network error. Please try again.');
+      alert(error?.message ? `Failed to assign client: ${error.message}` : 'Network error. Please try again.');
     } finally {
       setAssignLoading(false);
     }
