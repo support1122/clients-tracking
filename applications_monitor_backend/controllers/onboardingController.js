@@ -153,18 +153,23 @@ export async function getNextLinkedInMember() {
 }
 
 const SYSTEM_AUTO_COMMENT_AUTHOR_EMAIL = 'system-auto@flashfire-clients-tracking.internal';
+/** Notify when pipeline job-card count (saved+applied+interviewing+offer) reaches this; covers applied+saved-only and “whole” board. */
 const HIGH_APPLIED_JOBS_THRESHOLD = 10;
 
 /**
- * For each analysis row with applied count > threshold, ensure the matching onboarding ticket
+ * For each analysis row that reaches the job-card threshold, ensure the matching onboarding ticket
  * has a single system comment tagging the dashboard manager. Runs when client-job-analysis is computed.
  */
 export async function runHighAppliedJobsNotifications(rows) {
   if (!Array.isArray(rows) || rows.length === 0) return;
 
   for (const row of rows) {
+    const saved = Number(row.saved) || 0;
     const applied = Number(row.applied) || 0;
-    if (applied <= HIGH_APPLIED_JOBS_THRESHOLD) continue;
+    const interviewing = Number(row.interviewing) || 0;
+    const offer = Number(row.offer) || 0;
+    const pipelineJobCards = saved + applied + interviewing + offer;
+    if (pipelineJobCards < HIGH_APPLIED_JOBS_THRESHOLD) continue;
 
     const clientEmail = (row.email || '').toLowerCase().trim();
     if (!clientEmail) continue;
@@ -174,7 +179,10 @@ export async function runHighAppliedJobsNotifications(rows) {
       .lean();
     if (!jobPreview) continue;
 
-    const dmName = (jobPreview.dashboardManagerName || '').trim();
+    const dmName = (
+      (jobPreview.dashboardManagerName || '').trim() ||
+      (row.dashboardTeamLeadName || '').trim()
+    );
     if (!dmName) continue;
 
     const manager = await ManagerModel.findOne({ fullName: dmName, isActive: true }).select('email').lean();

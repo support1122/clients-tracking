@@ -114,7 +114,7 @@ const onboardingJobSchema = new mongoose.Schema({
   applicationsCompletedAt: { type: Date, default: null },
   // Profile complete = client filled dashboard form (Personal, Education, Preferences, etc.). Set when we fetch profile.
   profileComplete: { type: Boolean, default: null },
-  // One-time auto-comment when client has >10 applied jobs (see runHighAppliedJobsNotifications).
+  // One-time auto-comment when client reaches 10+ pipeline job cards (saved+applied+interviewing+offer; see runHighAppliedJobsNotifications).
   highAppliedJobsNoticeAt: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
