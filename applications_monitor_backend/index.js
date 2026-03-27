@@ -71,6 +71,12 @@ import {
   LAST_APPLIED_CACHE_TTL
 } from './utils/analysisCache.js';
 import { ensureDbIndexes } from './utils/ensureDbIndexes.js';
+import { ExtensionIncentiveComplaintModel } from './ExtensionIncentiveComplaintModel.js';
+import {
+  istYmdRangeToUtcBounds,
+  incentiveSlabFromTotalJobs,
+  MONGO_PARSE_JOB_DATETIME_BODY,
+} from './utils/extensionReportHelpers.js';
 import multer from 'multer';
 import FormData from 'form-data';
 import cron from 'node-cron';
@@ -4902,23 +4908,76 @@ const getOperationsPerformanceReport = async (req, res) => {
 
 app.get('/api/operations/performance-report', getOperationsPerformanceReport);
 
-/** Date patterns for IST-style strings like "20/3/2026, 10:15:30 am" (same idea as performance report). */
-const buildJobDatePatternsForRange = (start, end) => {
-  const datePatterns = [];
-  const currentDate = new Date(start);
-  const endDate = new Date(end);
-  endDate.setHours(23, 59, 59, 999);
-  while (currentDate <= endDate) {
-    const day = currentDate.getDate();
-    const month = currentDate.getMonth() + 1;
-    const year = currentDate.getFullYear();
-    const dayPattern = day < 10 ? `[0]?${day}` : `${day}`;
-    const monthPattern = month < 10 ? `[0]?${month}` : `${month}`;
-    datePatterns.push(new RegExp(`^${dayPattern}/${monthPattern}/${year}(?=$|\\D)`));
-    currentDate.setDate(currentDate.getDate() + 1);
+/** Shared stages: parse IST job timestamp and filter to inclusive [startDate,endDate] in IST (YYYY-MM-DD). */
+const buildExtensionJobsParsedRangeStages = (bounds) => [
+  {
+    $match: {
+      addedBy: { $exists: true, $nin: [null, ''], $type: 'string' },
+    },
+  },
+  {
+    $addFields: {
+      parsedAt: {
+        $function: {
+          body: MONGO_PARSE_JOB_DATETIME_BODY,
+          args: ['$dateAdded', '$createdAt'],
+          lang: 'js',
+        },
+      },
+    },
+  },
+  {
+    $match: {
+      parsedAt: { $ne: null, $gte: bounds.start, $lte: bounds.end },
+    },
+  },
+];
+
+function buildIncentiveDailyRows(dailyMetrics, complaintSet) {
+  const byAdderMap = new Map();
+  for (const row of dailyMetrics || []) {
+    const addedBy = row.addedBy;
+    const dateYmd = row.dateYmd;
+    const totalJobs = row.totalJobs || 0;
+    const uniqueClients = row.uniqueClients || 0;
+    const before1pm = row.before1pm || 0;
+    const avgPerClient = uniqueClients > 0 ? totalJobs / uniqueClients : 0;
+    const allBefore1pm = totalJobs > 0 && before1pm === totalJobs;
+    const avgAtLeast20 = avgPerClient >= 20;
+    const key = `${dateYmd}|${addedBy}`;
+    const hasComplaint = complaintSet.has(key);
+    const gateReasons = [];
+    if (!allBefore1pm) gateReasons.push('Some jobs added at/after 1:00 PM IST');
+    if (!avgAtLeast20) gateReasons.push('Average applications per client is below 20');
+    if (hasComplaint) gateReasons.push('Complaint recorded for this day');
+    if (uniqueClients === 0 && totalJobs > 0) gateReasons.push('No valid client (userID) on some rows');
+    const eligible = allBefore1pm && avgAtLeast20 && !hasComplaint && uniqueClients > 0;
+    const incentive = eligible ? incentiveSlabFromTotalJobs(totalJobs) : 0;
+    const day = {
+      dateYmd,
+      totalJobs,
+      uniqueClients,
+      avgPerClient: Math.round(avgPerClient * 100) / 100,
+      jobsBefore1pm: before1pm,
+      allBefore1pm,
+      hasComplaint,
+      avgAtLeast20,
+      eligible,
+      incentive,
+      gateReasons,
+    };
+    if (!byAdderMap.has(addedBy)) {
+      byAdderMap.set(addedBy, { addedBy, totalIncentive: 0, daily: [] });
+    }
+    const entry = byAdderMap.get(addedBy);
+    entry.daily.push(day);
+    entry.totalIncentive += incentive;
   }
-  return datePatterns;
-};
+  for (const v of byAdderMap.values()) {
+    v.daily.sort((a, b) => a.dateYmd.localeCompare(b.dateYmd));
+  }
+  return Array.from(byAdderMap.values()).sort((a, b) => b.totalIncentive - a.totalIncentive);
+}
 
 const getExtensionJobsReport = async (req, res) => {
   try {
@@ -4928,98 +4987,164 @@ const getExtensionJobsReport = async (req, res) => {
       return res.status(400).json({ error: 'startDate and endDate are required' });
     }
 
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    const bounds = istYmdRangeToUtcBounds(String(startDate), String(endDate));
+    if (!bounds) {
       return res.status(400).json({ error: 'Invalid date range' });
     }
 
-    const datePatterns = buildJobDatePatternsForRange(start, end);
-    if (datePatterns.length === 0) {
-      return res.status(400).json({ error: 'Invalid or empty date range' });
-    }
-
-    const dateOr = datePatterns.flatMap((pattern) => [
-      { dateAdded: { $regex: pattern } },
-      { createdAt: { $regex: pattern } },
-    ]);
-
-    const matchStage = {
-      $match: {
-        addedBy: { $exists: true, $nin: [null, ''], $type: 'string' },
-        $or: dateOr,
-      },
-    };
-
-    // Per operator: job count + distinct clients (userID) in range — not limited by sample/pagination.
-    const byAdder = await JobModel.aggregate([
-      matchStage,
-      {
-        $addFields: {
-          _clientKey: {
-            $cond: [
+    const [complaints, facetResult] = await Promise.all([
+      ExtensionIncentiveComplaintModel.find({
+        dateYmd: { $gte: String(startDate), $lte: String(endDate) },
+      })
+        .select('dateYmd addedBy')
+        .lean(),
+      JobModel.aggregate([
+        ...buildExtensionJobsParsedRangeStages(bounds),
+        {
+          $facet: {
+            byAdderAgg: [
               {
-                $or: [
-                  { $eq: ['$userID', null] },
-                  { $eq: ['$userID', ''] },
-                ],
+                $addFields: {
+                  _clientKey: {
+                    $cond: [
+                      {
+                        $or: [{ $eq: ['$userID', null] }, { $eq: ['$userID', ''] }],
+                      },
+                      null,
+                      {
+                        $toLower: {
+                          $trim: { input: { $toString: '$userID' } },
+                        },
+                      },
+                    ],
+                  },
+                },
               },
-              null,
               {
-                $toLower: {
-                  $trim: { input: { $toString: '$userID' } },
+                $group: {
+                  _id: '$addedBy',
+                  clientKeys: { $addToSet: '$_clientKey' },
+                  count: { $sum: 1 },
+                },
+              },
+              { $match: { _id: { $nin: [null, ''] } } },
+              { $sort: { count: -1 } },
+              {
+                $project: {
+                  _id: 0,
+                  addedBy: '$_id',
+                  count: 1,
+                  uniqueClients: {
+                    $size: {
+                      $filter: {
+                        input: '$clientKeys',
+                        as: 'k',
+                        cond: { $and: [{ $ne: ['$$k', null] }, { $ne: ['$$k', ''] }] },
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+            samples: [
+              { $sort: { parsedAt: -1 } },
+              { $limit: 50 },
+              {
+                $project: {
+                  jobTitle: 1,
+                  companyName: 1,
+                  userID: 1,
+                  dateAdded: 1,
+                  createdAt: 1,
+                  addedBy: 1,
+                  extensionCode: 1,
+                  jobID: 1,
+                  currentStatus: 1,
+                },
+              },
+            ],
+            dailyMetrics: [
+              {
+                $addFields: {
+                  dayKey: {
+                    $dateToString: {
+                      format: '%Y-%m-%d',
+                      date: '$parsedAt',
+                      timezone: 'Asia/Kolkata',
+                    },
+                  },
+                  hourIST: {
+                    $hour: { date: '$parsedAt', timezone: 'Asia/Kolkata' },
+                  },
+                },
+              },
+              {
+                $group: {
+                  _id: { addedBy: '$addedBy', day: '$dayKey' },
+                  totalJobs: { $sum: 1 },
+                  before1pm: {
+                    $sum: {
+                      $cond: [{ $lt: ['$hourIST', 13] }, 1, 0],
+                    },
+                  },
+                  clientKeys: {
+                    $addToSet: {
+                      $toLower: {
+                        $trim: { input: { $toString: '$userID' } },
+                      },
+                    },
+                  },
+                },
+              },
+              {
+                $project: {
+                  _id: 0,
+                  addedBy: '$_id.addedBy',
+                  dateYmd: '$_id.day',
+                  totalJobs: 1,
+                  before1pm: 1,
+                  uniqueClients: {
+                    $size: {
+                      $filter: {
+                        input: '$clientKeys',
+                        as: 'k',
+                        cond: { $and: [{ $ne: ['$$k', null] }, { $ne: ['$$k', ''] }] },
+                      },
+                    },
+                  },
                 },
               },
             ],
           },
         },
-      },
-      {
-        $group: {
-          _id: '$addedBy',
-          clientKeys: { $addToSet: '$_clientKey' },
-          count: { $sum: 1 },
-        },
-      },
-      { $match: { _id: { $nin: [null, ''] } } },
-      { $sort: { count: -1 } },
-      {
-        $project: {
-          _id: 0,
-          addedBy: '$_id',
-          count: 1,
-          uniqueClients: {
-            $size: {
-              $filter: {
-                input: '$clientKeys',
-                as: 'k',
-                cond: { $and: [{ $ne: ['$$k', null] }, { $ne: ['$$k', ''] }] },
-              },
-            },
-          },
-        },
-      },
-    ]).allowDiskUse(true);
+      ]).allowDiskUse(true),
+    ]);
 
+    const byAdder = facetResult[0]?.byAdderAgg || [];
+    const samples = facetResult[0]?.samples || [];
+    const dailyMetrics = facetResult[0]?.dailyMetrics || [];
     const totalJobs = byAdder.reduce((acc, row) => acc + (row.count || 0), 0);
 
-    const matchQuery = {
-      addedBy: { $exists: true, $nin: [null, ''], $type: 'string' },
-      $or: dateOr,
-    };
+    const complaintSet = new Set(
+      (complaints || []).map((c) => `${c.dateYmd}|${c.addedBy}`)
+    );
+    const incentiveByAdder = buildIncentiveDailyRows(dailyMetrics, complaintSet);
+    const incentiveTotals = new Map(incentiveByAdder.map((x) => [x.addedBy, x.totalIncentive]));
+    const incentiveDailyByAdder = new Map(incentiveByAdder.map((x) => [x.addedBy, x.daily]));
 
-    const samples = await JobModel.find(matchQuery)
-      .select('jobTitle companyName userID dateAdded createdAt addedBy extensionCode jobID currentStatus')
-      .sort({ updatedAt: -1 })
-      .limit(50)
-      .lean();
+    const byAdderEnriched = byAdder.map((row) => ({
+      ...row,
+      incentiveTotal: incentiveTotals.get(row.addedBy) ?? 0,
+      incentiveDaily: incentiveDailyByAdder.get(row.addedBy) ?? [],
+    }));
 
     res.status(200).json({
       success: true,
       startDate,
       endDate,
       totalJobs,
-      byAdder,
+      byAdder: byAdderEnriched,
+      incentiveByAdder,
       samples,
     });
   } catch (error) {
@@ -5041,44 +5166,27 @@ const getExtensionJobsReportJobsByAdder = async (req, res) => {
       return res.status(400).json({ error: 'addedBy is required' });
     }
 
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    const bounds = istYmdRangeToUtcBounds(String(startDate), String(endDate));
+    if (!bounds) {
       return res.status(400).json({ error: 'Invalid date range' });
     }
-
-    const datePatterns = buildJobDatePatternsForRange(start, end);
-    if (datePatterns.length === 0) {
-      return res.status(400).json({ error: 'Invalid or empty date range' });
-    }
-
-    const dateOr = datePatterns.flatMap((pattern) => [
-      { dateAdded: { $regex: pattern } },
-      { createdAt: { $regex: pattern } },
-    ]);
-
-    const matchQuery = {
-      addedBy: adderTrim,
-      $or: dateOr,
-    };
 
     const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 20));
     const skip = (pageNum - 1) * limitNum;
 
-    const [total, uniqueClientsAgg, jobs] = await Promise.all([
-      JobModel.countDocuments(matchQuery),
+    const base = [...buildExtensionJobsParsedRangeStages(bounds), { $match: { addedBy: adderTrim } }];
+
+    const [countAgg, uniqueClientsAgg, jobs] = await Promise.all([
+      JobModel.aggregate([...base, { $count: 'n' }]).allowDiskUse(true),
       JobModel.aggregate([
-        { $match: matchQuery },
+        ...base,
         {
           $addFields: {
             _clientKey: {
               $cond: [
                 {
-                  $or: [
-                    { $eq: ['$userID', null] },
-                    { $eq: ['$userID', ''] },
-                  ],
+                  $or: [{ $eq: ['$userID', null] }, { $eq: ['$userID', ''] }],
                 },
                 null,
                 {
@@ -5094,16 +5202,30 @@ const getExtensionJobsReportJobsByAdder = async (req, res) => {
         { $match: { _id: { $nin: [null, ''] } } },
         { $count: 'n' },
       ]).allowDiskUse(true),
-      JobModel.find(matchQuery)
-        .select(
-          'jobTitle companyName userID dateAdded createdAt addedBy extensionCode jobID currentStatus updatedAt appliedDate'
-        )
-        .sort({ updatedAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
+      JobModel.aggregate([
+        ...base,
+        { $sort: { parsedAt: -1 } },
+        { $skip: skip },
+        { $limit: limitNum },
+        {
+          $project: {
+            jobTitle: 1,
+            companyName: 1,
+            userID: 1,
+            dateAdded: 1,
+            createdAt: 1,
+            addedBy: 1,
+            extensionCode: 1,
+            jobID: 1,
+            currentStatus: 1,
+            updatedAt: 1,
+            appliedDate: 1,
+          },
+        },
+      ]).allowDiskUse(true),
     ]);
 
+    const total = countAgg[0]?.n ?? 0;
     const uniqueClients = uniqueClientsAgg[0]?.n ?? 0;
     const totalPages = total === 0 ? 0 : Math.ceil(total / limitNum);
 
@@ -5123,12 +5245,84 @@ const getExtensionJobsReportJobsByAdder = async (req, res) => {
   }
 };
 
+const postExtensionIncentiveComplaint = async (req, res) => {
+  try {
+    const { dateYmd, addedBy, note, clientEmail } = req.body || {};
+    if (!dateYmd || !addedBy) {
+      return res.status(400).json({ error: 'dateYmd and addedBy are required' });
+    }
+    const doc = await ExtensionIncentiveComplaintModel.create({
+      dateYmd: String(dateYmd).trim(),
+      addedBy: String(addedBy).trim(),
+      note: typeof note === 'string' ? note : '',
+      clientEmail: clientEmail ? String(clientEmail).trim().toLowerCase() : '',
+      createdBy: (req.user && req.user.email) || '',
+    });
+    res.status(201).json({ success: true, complaint: doc });
+  } catch (error) {
+    console.error('postExtensionIncentiveComplaint:', error);
+    res.status(500).json({ error: error.message || 'Server error' });
+  }
+};
+
+const listExtensionIncentiveComplaints = async (req, res) => {
+  try {
+    const { startYmd, endYmd } = req.query;
+    if (!startYmd || !endYmd) {
+      return res.status(400).json({ error: 'startYmd and endYmd are required' });
+    }
+    const complaints = await ExtensionIncentiveComplaintModel.find({
+      dateYmd: { $gte: String(startYmd), $lte: String(endYmd) },
+    })
+      .sort({ dateYmd: -1, createdAt: -1 })
+      .limit(500)
+      .lean();
+    res.status(200).json({ success: true, complaints });
+  } catch (error) {
+    console.error('listExtensionIncentiveComplaints:', error);
+    res.status(500).json({ error: error.message || 'Server error' });
+  }
+};
+
+const deleteExtensionIncentiveComplaint = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
+    const deleted = await ExtensionIncentiveComplaintModel.findByIdAndDelete(id);
+    if (!deleted) return res.status(404).json({ error: 'Not found' });
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('deleteExtensionIncentiveComplaint:', error);
+    res.status(500).json({ error: error.message || 'Server error' });
+  }
+};
+
 app.get('/api/admin/extension-jobs-report', verifyToken, verifyAdmin, getExtensionJobsReport);
 app.get(
   '/api/admin/extension-jobs-report/jobs',
   verifyToken,
   verifyAdmin,
   getExtensionJobsReportJobsByAdder
+);
+app.post(
+  '/api/admin/extension-incentive-complaints',
+  verifyToken,
+  verifyAdmin,
+  postExtensionIncentiveComplaint
+);
+app.get(
+  '/api/admin/extension-incentive-complaints',
+  verifyToken,
+  verifyAdmin,
+  listExtensionIncentiveComplaints
+);
+app.delete(
+  '/api/admin/extension-incentive-complaints/:id',
+  verifyToken,
+  verifyAdmin,
+  deleteExtensionIncentiveComplaint
 );
 
 // Get all operations who have this client in their managedUsers (by client email)
