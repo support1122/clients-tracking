@@ -1,0 +1,138 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1774695274287,
+  "projectRoot": "/home/bsc/Codding/DEPLOY/deploy v1/DASH/clients-tracking/applications-monitor-frontend-main",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "react",
+        "version": "19.1.1",
+        "category": "frontend"
+      },
+      {
+        "name": "react-dom",
+        "version": "19.1.1",
+        "category": "frontend"
+      },
+      {
+        "name": "vite",
+        "version": "7.1.2",
+        "category": "build"
+      }
+    ],
+    "packageManager": "npm",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "npm run build",
+    "testCommand": null,
+    "lintCommand": "npm run lint",
+    "devCommand": "npm run dev",
+    "scripts": {
+      "dev": "vite",
+      "build": "vite build",
+      "lint": "eslint .",
+      "preview": "vite preview",
+      "prod": "vite build && vite preview --port 3000"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": "type-based"
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "public",
+      "src"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "dist": {
+      "path": "dist",
+      "purpose": "Distribution/build output",
+      "fileCount": 3,
+      "lastAccessed": 1774695274271,
+      "keyFiles": [
+        "discord-notification.mp3",
+        "index.html",
+        "vite.svg"
+      ]
+    },
+    "public": {
+      "path": "public",
+      "purpose": "Public files",
+      "fileCount": 2,
+      "lastAccessed": 1774695274272,
+      "keyFiles": [
+        "discord-notification.mp3",
+        "vite.svg"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 4,
+      "lastAccessed": 1774695274279,
+      "keyFiles": [
+        "App.css",
+        "App.jsx",
+        "index.css",
+        "main.jsx"
+      ]
+    },
+    "dist/assets": {
+      "path": "dist/assets",
+      "purpose": "Static assets",
+      "fileCount": 24,
+      "lastAccessed": 1774695274280,
+      "keyFiles": [
+        "AdminDashboard-lznWryc_.js",
+        "CallScheduler-B1TIf0yg.js",
+        "ClientDashboard-DkngGgNQ.js"
+      ]
+    },
+    "src/components": {
+      "path": "src/components",
+      "purpose": "UI components",
+      "fileCount": 24,
+      "lastAccessed": 1774695274280,
+      "keyFiles": [
+        "AdminDashboard.jsx",
+        "AdminLogin.jsx",
+        "AnimatedCounter.jsx"
+      ]
+    },
+    "src/utils": {
+      "path": "src/utils",
+      "purpose": "Utility functions",
+      "fileCount": 7,
+      "lastAccessed": 1774695274280,
+      "keyFiles": [
+        "authUtils.js",
+        "currencyUtils.js",
+        "dashboardManagerSelect.js"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}

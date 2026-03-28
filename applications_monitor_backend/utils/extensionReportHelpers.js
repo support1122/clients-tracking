@@ -48,6 +48,26 @@ export function incentiveSlabFromTotalJobs(totalJobs) {
   return 100;
 }
 
+/**
+ * Incentive slab based on qualified clients (clients with 20+ jobs).
+ * A client "qualifies" when the operator adds 20+ job cards for them in a day.
+ */
+export function incentiveSlabFromQualifiedClients(qualifiedClients) {
+  const n = Number(qualifiedClients) || 0;
+  if (n < 1) return 0;
+  if (n === 1) return 50;
+  if (n === 2) return 70;
+  if (n === 3) return 80;
+  return 100; // 4+
+}
+
+/**
+ * Get today's IST date as YYYY-MM-DD.
+ */
+export function todayIstYmd() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
 /** Mongo $function body (string): parse dateAdded or createdAt to Date; must be self-contained. */
 export const MONGO_PARSE_JOB_DATETIME_BODY = `function (dateAdded, createdAt) {
   function pad2(n) { return n < 10 ? '0' + n : '' + n; }
