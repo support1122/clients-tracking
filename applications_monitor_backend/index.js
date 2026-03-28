@@ -72,10 +72,12 @@ import {
 } from './utils/analysisCache.js';
 import { ensureDbIndexes } from './utils/ensureDbIndexes.js';
 import { ExtensionIncentiveComplaintModel } from './ExtensionIncentiveComplaintModel.js';
+import { ExtensionDailyIncentiveModel } from './ExtensionDailyIncentiveModel.js';
 import {
   istYmdRangeToUtcBounds,
   incentiveSlabFromTotalJobs,
-  MONGO_PARSE_JOB_DATETIME_BODY,
+  incentiveSlabFromQualifiedClients,
+  todayIstYmd,
 } from './utils/extensionReportHelpers.js';
 import multer from 'multer';
 import FormData from 'form-data';
@@ -4908,24 +4910,90 @@ const getOperationsPerformanceReport = async (req, res) => {
 
 app.get('/api/operations/performance-report', getOperationsPerformanceReport);
 
-/** Shared stages: parse IST job timestamp and filter to inclusive [startDate,endDate] in IST (YYYY-MM-DD). */
+/**
+ * Shared stages: parse IST job timestamp and filter to inclusive [startDate,endDate] in IST.
+ * Uses $regexFind + $dateFromParts (Atlas M0-compatible, no $function needed).
+ * dateAdded format: "D/M/YYYY, h:mm:ss am/pm" (IST)
+ */
 const buildExtensionJobsParsedRangeStages = (bounds) => [
   {
     $match: {
       addedBy: { $exists: true, $nin: [null, ''], $type: 'string' },
     },
   },
+  // Step 1: extract date components from dateAdded via regex
   {
     $addFields: {
-      parsedAt: {
-        $function: {
-          body: MONGO_PARSE_JOB_DATETIME_BODY,
-          args: ['$dateAdded', '$createdAt'],
-          lang: 'js',
+      _dateRegex: {
+        $regexFind: {
+          input: { $ifNull: ['$dateAdded', ''] },
+          regex: String.raw`^(\d{1,2})/(\d{1,2})/(\d{4}),\s*(\d{1,2}):(\d{2}):(\d{2})\s*(am|pm)`,
+          options: 'i',
         },
       },
     },
   },
+  // Step 2: build parsedAt Date from regex captures, with createdAt ISO fallback
+  {
+    $addFields: {
+      parsedAt: {
+        $cond: {
+          if: { $ne: ['$_dateRegex', null] },
+          then: {
+            $let: {
+              vars: {
+                day: { $toInt: { $arrayElemAt: ['$_dateRegex.captures', 0] } },
+                month: { $toInt: { $arrayElemAt: ['$_dateRegex.captures', 1] } },
+                year: { $toInt: { $arrayElemAt: ['$_dateRegex.captures', 2] } },
+                rawHour: { $toInt: { $arrayElemAt: ['$_dateRegex.captures', 3] } },
+                minute: { $toInt: { $arrayElemAt: ['$_dateRegex.captures', 4] } },
+                second: { $toInt: { $arrayElemAt: ['$_dateRegex.captures', 5] } },
+                ampm: { $toLower: { $arrayElemAt: ['$_dateRegex.captures', 6] } },
+              },
+              in: {
+                $dateFromParts: {
+                  year: '$$year',
+                  month: '$$month',
+                  day: '$$day',
+                  hour: {
+                    $switch: {
+                      branches: [
+                        // 12 AM → 0
+                        {
+                          case: { $and: [{ $eq: ['$$ampm', 'am'] }, { $eq: ['$$rawHour', 12] }] },
+                          then: 0,
+                        },
+                        // PM (not 12) → hour + 12
+                        {
+                          case: { $and: [{ $eq: ['$$ampm', 'pm'] }, { $ne: ['$$rawHour', 12] }] },
+                          then: { $add: ['$$rawHour', 12] },
+                        },
+                      ],
+                      // AM (not 12) or 12 PM → as-is
+                      default: '$$rawHour',
+                    },
+                  },
+                  minute: '$$minute',
+                  second: '$$second',
+                  timezone: 'Asia/Kolkata',
+                },
+              },
+            },
+          },
+          // Fallback: try to parse createdAt as ISO string
+          else: {
+            $cond: {
+              if: { $and: [{ $ne: ['$createdAt', null] }, { $ne: ['$createdAt', ''] }] },
+              then: { $dateFromString: { dateString: '$createdAt', onError: null } },
+              else: null,
+            },
+          },
+        },
+      },
+    },
+  },
+  // Clean up temp field
+  { $unset: '_dateRegex' },
   {
     $match: {
       parsedAt: { $ne: null, $gte: bounds.start, $lte: bounds.end },
@@ -4933,35 +5001,39 @@ const buildExtensionJobsParsedRangeStages = (bounds) => [
   },
 ];
 
-function buildIncentiveDailyRows(dailyMetrics, complaintSet) {
+/**
+ * Build daily incentive rows per operator.
+ * Day window = 11 PM IST (prev night) → 12:59 PM IST (this day).
+ * Only jobs within the 11 PM–1 PM IST window count.
+ * Jobs at 11 PM roll into the next day via +1h offset in the aggregation.
+ */
+function buildIncentiveDailyRows(dailyMetrics, complaintSet, clientJobCounts) {
   const byAdderMap = new Map();
   for (const row of dailyMetrics || []) {
     const addedBy = row.addedBy;
     const dateYmd = row.dateYmd;
     const totalJobs = row.totalJobs || 0;
     const uniqueClients = row.uniqueClients || 0;
-    const before1pm = row.before1pm || 0;
-    const avgPerClient = uniqueClients > 0 ? totalJobs / uniqueClients : 0;
-    const allBefore1pm = totalJobs > 0 && before1pm === totalJobs;
-    const avgAtLeast20 = avgPerClient >= 20;
     const key = `${dateYmd}|${addedBy}`;
     const hasComplaint = complaintSet.has(key);
+
+    // Count qualified clients (clients with 20+ jobs added by this operator on this day)
+    const clientCounts = clientJobCounts?.get(key) || [];
+    const qualifiedClients = clientCounts.filter((c) => c.jobCount >= 20).length;
+
     const gateReasons = [];
-    if (!allBefore1pm) gateReasons.push('Some jobs added at/after 1:00 PM IST');
-    if (!avgAtLeast20) gateReasons.push('Average applications per client is below 20');
+    if (qualifiedClients === 0) gateReasons.push('No client with 20+ jobs added');
     if (hasComplaint) gateReasons.push('Complaint recorded for this day');
-    if (uniqueClients === 0 && totalJobs > 0) gateReasons.push('No valid client (userID) on some rows');
-    const eligible = allBefore1pm && avgAtLeast20 && !hasComplaint && uniqueClients > 0;
-    const incentive = eligible ? incentiveSlabFromTotalJobs(totalJobs) : 0;
+
+    const eligible = qualifiedClients > 0 && !hasComplaint;
+    const incentive = eligible ? incentiveSlabFromQualifiedClients(qualifiedClients) : 0;
     const day = {
       dateYmd,
       totalJobs,
       uniqueClients,
-      avgPerClient: Math.round(avgPerClient * 100) / 100,
-      jobsBefore1pm: before1pm,
-      allBefore1pm,
+      qualifiedClients,
+      clientBreakdown: clientCounts,
       hasComplaint,
-      avgAtLeast20,
       eligible,
       incentive,
       gateReasons,
@@ -5063,30 +5135,33 @@ const getExtensionJobsReport = async (req, res) => {
                 },
               },
             ],
+            // Day window = 11 PM IST → 1 PM IST next day (14-hour counting window)
+            // Only jobs within this window count for incentives.
+            // +1h offset: 23:xx IST → 00:xx next day IST → correct day assignment.
             dailyMetrics: [
               {
                 $addFields: {
-                  dayKey: {
-                    $dateToString: {
-                      format: '%Y-%m-%d',
-                      date: '$parsedAt',
-                      timezone: 'Asia/Kolkata',
-                    },
-                  },
                   hourIST: {
                     $hour: { date: '$parsedAt', timezone: 'Asia/Kolkata' },
                   },
+                  dayKey: {
+                    $dateToString: {
+                      format: '%Y-%m-%d',
+                      date: { $add: ['$parsedAt', 1 * 60 * 60 * 1000] },
+                      timezone: 'Asia/Kolkata',
+                    },
+                  },
+                },
+              },
+              {
+                $match: {
+                  $or: [{ hourIST: { $gte: 23 } }, { hourIST: { $lt: 13 } }],
                 },
               },
               {
                 $group: {
                   _id: { addedBy: '$addedBy', day: '$dayKey' },
                   totalJobs: { $sum: 1 },
-                  before1pm: {
-                    $sum: {
-                      $cond: [{ $lt: ['$hourIST', 13] }, 1, 0],
-                    },
-                  },
                   clientKeys: {
                     $addToSet: {
                       $toLower: {
@@ -5102,7 +5177,6 @@ const getExtensionJobsReport = async (req, res) => {
                   addedBy: '$_id.addedBy',
                   dateYmd: '$_id.day',
                   totalJobs: 1,
-                  before1pm: 1,
                   uniqueClients: {
                     $size: {
                       $filter: {
@@ -5115,6 +5189,57 @@ const getExtensionJobsReport = async (req, res) => {
                 },
               },
             ],
+            // Per-client job counts — same 11 PM → 1 PM window with +1h offset
+            clientJobCounts: [
+              {
+                $addFields: {
+                  hourIST: {
+                    $hour: { date: '$parsedAt', timezone: 'Asia/Kolkata' },
+                  },
+                  dayKey: {
+                    $dateToString: {
+                      format: '%Y-%m-%d',
+                      date: { $add: ['$parsedAt', 1 * 60 * 60 * 1000] },
+                      timezone: 'Asia/Kolkata',
+                    },
+                  },
+                  _clientKey: {
+                    $cond: [
+                      {
+                        $or: [{ $eq: ['$userID', null] }, { $eq: ['$userID', ''] }],
+                      },
+                      null,
+                      {
+                        $toLower: {
+                          $trim: { input: { $toString: '$userID' } },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+              {
+                $match: {
+                  _clientKey: { $nin: [null, ''] },
+                  $or: [{ hourIST: { $gte: 23 } }, { hourIST: { $lt: 13 } }],
+                },
+              },
+              {
+                $group: {
+                  _id: { addedBy: '$addedBy', day: '$dayKey', client: '$_clientKey' },
+                  jobCount: { $sum: 1 },
+                },
+              },
+              {
+                $project: {
+                  _id: 0,
+                  addedBy: '$_id.addedBy',
+                  dateYmd: '$_id.day',
+                  clientEmail: '$_id.client',
+                  jobCount: 1,
+                },
+              },
+            ],
           },
         },
       ]).allowDiskUse(true),
@@ -5123,12 +5248,25 @@ const getExtensionJobsReport = async (req, res) => {
     const byAdder = facetResult[0]?.byAdderAgg || [];
     const samples = facetResult[0]?.samples || [];
     const dailyMetrics = facetResult[0]?.dailyMetrics || [];
+    const clientJobCountsRaw = facetResult[0]?.clientJobCounts || [];
     const totalJobs = byAdder.reduce((acc, row) => acc + (row.count || 0), 0);
+
+    // Build a Map: "dateYmd|addedBy" → [{clientEmail, jobCount, qualified}]
+    const clientJobCounts = new Map();
+    for (const row of clientJobCountsRaw) {
+      const key = `${row.dateYmd}|${row.addedBy}`;
+      if (!clientJobCounts.has(key)) clientJobCounts.set(key, []);
+      clientJobCounts.get(key).push({
+        clientEmail: row.clientEmail,
+        jobCount: row.jobCount,
+        qualified: row.jobCount >= 20,
+      });
+    }
 
     const complaintSet = new Set(
       (complaints || []).map((c) => `${c.dateYmd}|${c.addedBy}`)
     );
-    const incentiveByAdder = buildIncentiveDailyRows(dailyMetrics, complaintSet);
+    const incentiveByAdder = buildIncentiveDailyRows(dailyMetrics, complaintSet, clientJobCounts);
     const incentiveTotals = new Map(incentiveByAdder.map((x) => [x.addedBy, x.totalIncentive]));
     const incentiveDailyByAdder = new Map(incentiveByAdder.map((x) => [x.addedBy, x.daily]));
 
@@ -5138,6 +5276,13 @@ const getExtensionJobsReport = async (req, res) => {
       incentiveDaily: incentiveDailyByAdder.get(row.addedBy) ?? [],
     }));
 
+    // Also fetch persisted incentive records for this range
+    const persistedIncentives = await ExtensionDailyIncentiveModel.find({
+      dateYmd: { $gte: String(startDate), $lte: String(endDate) },
+    })
+      .sort({ dateYmd: -1, addedBy: 1 })
+      .lean();
+
     res.status(200).json({
       success: true,
       startDate,
@@ -5146,6 +5291,8 @@ const getExtensionJobsReport = async (req, res) => {
       byAdder: byAdderEnriched,
       incentiveByAdder,
       samples,
+      persistedIncentives,
+      isAdmin: req.user?.role === 'admin',
     });
   } catch (error) {
     console.error('Error in getExtensionJobsReport:', error);
@@ -5299,13 +5446,14 @@ const deleteExtensionIncentiveComplaint = async (req, res) => {
   }
 };
 
-app.get('/api/admin/extension-jobs-report', verifyToken, verifyAdmin, getExtensionJobsReport);
-app.get(
-  '/api/admin/extension-jobs-report/jobs',
-  verifyToken,
-  verifyAdmin,
-  getExtensionJobsReportJobsByAdder
-);
+// Extension report: visible to ALL authenticated users
+app.get('/api/extension-jobs-report', verifyToken, getExtensionJobsReport);
+app.get('/api/extension-jobs-report/jobs', verifyToken, getExtensionJobsReportJobsByAdder);
+// Keep old admin routes for backward compat (redirect to same handlers)
+app.get('/api/admin/extension-jobs-report', verifyToken, getExtensionJobsReport);
+app.get('/api/admin/extension-jobs-report/jobs', verifyToken, getExtensionJobsReportJobsByAdder);
+
+// Complaint management: admin only
 app.post(
   '/api/admin/extension-incentive-complaints',
   verifyToken,
@@ -5323,6 +5471,109 @@ app.delete(
   verifyToken,
   verifyAdmin,
   deleteExtensionIncentiveComplaint
+);
+
+// Incentive management: reject/restore (admin only)
+app.patch(
+  '/api/admin/extension-daily-incentive/:id/reject',
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { reason } = req.body || {};
+      if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      if (!reason || !reason.trim()) {
+        return res.status(400).json({ error: 'Rejection reason is required' });
+      }
+      const doc = await ExtensionDailyIncentiveModel.findByIdAndUpdate(
+        id,
+        {
+          status: 'rejected',
+          rejectedBy: req.user?.email || '',
+          rejectedAt: new Date(),
+          rejectionReason: reason.trim(),
+        },
+        { new: true }
+      );
+      if (!doc) return res.status(404).json({ error: 'Incentive record not found' });
+      res.status(200).json({ success: true, incentive: doc });
+    } catch (error) {
+      console.error('reject incentive:', error);
+      res.status(500).json({ error: error.message || 'Server error' });
+    }
+  }
+);
+
+app.patch(
+  '/api/admin/extension-daily-incentive/:id/restore',
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      const doc = await ExtensionDailyIncentiveModel.findByIdAndUpdate(
+        id,
+        {
+          status: 'approved',
+          rejectedBy: '',
+          rejectedAt: null,
+          rejectionReason: '',
+        },
+        { new: true }
+      );
+      if (!doc) return res.status(404).json({ error: 'Incentive record not found' });
+      res.status(200).json({ success: true, incentive: doc });
+    } catch (error) {
+      console.error('restore incentive:', error);
+      res.status(500).json({ error: error.message || 'Server error' });
+    }
+  }
+);
+
+// Incentive history: searchable by all authenticated users
+app.get(
+  '/api/extension-incentive-history',
+  verifyToken,
+  async (req, res) => {
+    try {
+      const { startYmd, endYmd, addedBy, status, page = '1', limit = '50' } = req.query;
+      const query = {};
+      if (startYmd) query.dateYmd = { ...(query.dateYmd || {}), $gte: String(startYmd) };
+      if (endYmd) query.dateYmd = { ...(query.dateYmd || {}), $lte: String(endYmd) };
+      if (addedBy) query.addedBy = { $regex: addedBy, $options: 'i' };
+      if (status && ['approved', 'rejected'].includes(status)) query.status = status;
+
+      const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+      const limitNum = Math.min(200, Math.max(1, parseInt(String(limit), 10) || 50));
+      const skip = (pageNum - 1) * limitNum;
+
+      const [records, total] = await Promise.all([
+        ExtensionDailyIncentiveModel.find(query)
+          .sort({ dateYmd: -1, addedBy: 1 })
+          .skip(skip)
+          .limit(limitNum)
+          .lean(),
+        ExtensionDailyIncentiveModel.countDocuments(query),
+      ]);
+
+      res.status(200).json({
+        success: true,
+        records,
+        total,
+        page: pageNum,
+        totalPages: Math.ceil(total / limitNum) || 0,
+      });
+    } catch (error) {
+      console.error('incentive history:', error);
+      res.status(500).json({ error: error.message || 'Server error' });
+    }
+  }
 );
 
 // Get all operations who have this client in their managedUsers (by client email)
@@ -6566,6 +6817,104 @@ const syncClientNumbersToOnboardingJobs = async () => {
   return updated;
 };
 
+/**
+ * Daily incentive cron job — runs at 1:00 PM IST (07:30 UTC).
+ * Counting window: yesterday 11:00 PM IST → today 12:59 PM IST (14 hours).
+ * Calculates qualified clients (20+ jobs) per operator and upserts to DB.
+ */
+async function runDailyIncentiveSnapshot() {
+  const dateYmd = todayIstYmd();
+  console.log(`[Incentive Cron] Running daily incentive snapshot for ${dateYmd}`);
+
+  try {
+    // Day window = yesterday 11 PM IST → today 12:59:59 PM IST (14-hour window)
+    // This matches the +1h offset and hourIST filter used in the report aggregation
+    const prevDay = new Date(new Date(`${dateYmd}T00:00:00.000+05:30`).getTime() - 86400000);
+    const prevYmd = prevDay.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const dayStart = new Date(`${prevYmd}T23:00:00.000+05:30`);
+    const dayEnd = new Date(`${dateYmd}T12:59:59.999+05:30`);
+
+    // Aggregate: per operator, per client, count jobs in this 11PM-1PM window
+    const results = await JobModel.aggregate([
+      ...buildExtensionJobsParsedRangeStages({ start: dayStart, end: dayEnd }),
+      {
+        $addFields: {
+          _clientKey: {
+            $cond: [
+              { $or: [{ $eq: ['$userID', null] }, { $eq: ['$userID', ''] }] },
+              null,
+              { $toLower: { $trim: { input: { $toString: '$userID' } } } },
+            ],
+          },
+        },
+      },
+      { $match: { addedBy: { $nin: [null, ''] }, _clientKey: { $nin: [null, ''] } } },
+      {
+        $group: {
+          _id: { addedBy: '$addedBy', client: '$_clientKey' },
+          jobCount: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: '$_id.addedBy',
+          clients: {
+            $push: {
+              clientEmail: '$_id.client',
+              jobCount: '$jobCount',
+              qualified: { $gte: ['$jobCount', 20] },
+            },
+          },
+          totalJobs: { $sum: '$jobCount' },
+        },
+      },
+    ]).allowDiskUse(true);
+
+    // Fetch complaints for today
+    const todayComplaints = await ExtensionIncentiveComplaintModel.find({ dateYmd })
+      .select('addedBy')
+      .lean();
+    const complaintOperators = new Set(todayComplaints.map((c) => c.addedBy));
+
+    let upserted = 0;
+    for (const row of results) {
+      const addedBy = row._id;
+      const qualifiedClients = row.clients.filter((c) => c.qualified).length;
+      const hasComplaint = complaintOperators.has(addedBy);
+      const eligible = qualifiedClients > 0 && !hasComplaint;
+      const incentiveAmount = eligible ? incentiveSlabFromQualifiedClients(qualifiedClients) : 0;
+
+      await ExtensionDailyIncentiveModel.findOneAndUpdate(
+        { dateYmd, addedBy },
+        {
+          $set: {
+            qualifiedClients,
+            totalJobs: row.totalJobs,
+            incentiveAmount,
+            clientBreakdown: row.clients.map((c) => ({
+              clientEmail: c.clientEmail,
+              jobCount: c.jobCount,
+              qualified: c.jobCount >= 20,
+            })),
+            computedAt: new Date(),
+          },
+          $setOnInsert: {
+            dateYmd,
+            addedBy,
+            status: 'approved',
+          },
+        },
+        { upsert: true, new: true }
+      );
+      upserted++;
+    }
+
+    console.log(`[Incentive Cron] Upserted ${upserted} incentive records for ${dateYmd}`);
+  } catch (error) {
+    console.error('[Incentive Cron] Error:', error);
+  }
+}
+
 // Start HTTP server only after MongoDB is connected (prevents startup tasks from hitting buffer timeout)
 dbReady
   .then(async () => {
@@ -6594,6 +6943,10 @@ dbReady
         cron.schedule('30 7 * * *', runZeroSavedJobReminder);
         console.log('📬 [Zero Saved Reminder] Cron scheduled for 1 PM IST daily');
       }
+
+      // Daily incentive snapshot: 1:00 PM IST (07:30 UTC)
+      cron.schedule('30 7 * * *', runDailyIncentiveSnapshot);
+      console.log('📬 [Incentive Cron] Scheduled for 1:00 PM IST daily');
     });
   })
   .catch(() => {
