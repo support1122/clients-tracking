@@ -1,47 +1,160 @@
-import React, { useState, useEffect, useMemo, useCallback, Fragment } from 'react';
+import React, { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://applications-monitor-api.flashfirejobs.com';
-
+const IST_TIMEZONE = 'Asia/Kolkata';
 const MODAL_PAGE_SIZE = 15;
+const OPERATOR_PAGE_SIZE = 8;
 
-function toYmdLocal(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+function getIstYmd(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: IST_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function parseIstYmd(ymd) {
+  return new Date(`${ymd}T00:00:00.000+05:30`);
+}
+
+function shiftIstDays(ymd, days) {
+  const next = new Date(parseIstYmd(ymd).getTime() + days * 24 * 60 * 60 * 1000);
+  return getIstYmd(next);
+}
+
+function getLastCalendarMonthRange() {
+  const today = parseIstYmd(getIstYmd());
+  const year = today.getUTCFullYear();
+  const month = today.getUTCMonth();
+  const start = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));
+  const end = new Date(Date.UTC(year, month, 0, 0, 0, 0));
+  return {
+    startDate: getIstYmd(start),
+    endDate: getIstYmd(end),
+  };
+}
+
+function buildInitialFilters() {
+  const today = getIstYmd();
+  return { startDate: today, endDate: today, operator: '' };
+}
+
+function formatCurrency(value) {
+  return `₹${Number(value || 0).toLocaleString('en-IN')}`;
+}
+
+function formatAverage(value) {
+  const num = Number(value || 0);
+  return Number.isInteger(num) ? String(num) : num.toFixed(1);
+}
+
+function samePreset(filters, preset) {
+  return filters.startDate === preset.startDate && filters.endDate === preset.endDate;
+}
+
+function presetButtonClass(isActive) {
+  return isActive
+    ? 'rounded-lg border border-orange-300 bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white shadow-sm'
+    : 'rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100';
 }
 
 function parseAppliedByLabel(currentStatus) {
-  if (!currentStatus || typeof currentStatus !== 'string') return '\u2014';
-  const m = currentStatus.match(/\bapplied\s+by\s+(.+?)(?:\s*$|,)/i);
-  if (m) return m[1].trim();
+  if (!currentStatus || typeof currentStatus !== 'string') return '—';
+  const match = currentStatus.match(/\bapplied\s+by\s+(.+?)(?:\s*$|,)/i);
+  if (match) return match[1].trim();
   if (/applied/i.test(currentStatus)) return currentStatus.trim();
-  return '\u2014';
+  return '—';
 }
 
-function JobRowsTable({ jobs, dense }) {
-  if (!jobs?.length) return <p className="text-sm text-gray-500 py-2">No rows.</p>;
+function getHistoryAverage(record) {
+  if (record?.avgJobsPerClient !== undefined && record?.avgJobsPerClient !== null) {
+    return Number(record.avgJobsPerClient) || 0;
+  }
+  const handled = Number(record?.clientsHandled) || record?.clientBreakdown?.length || 0;
+  const totalJobs = Number(record?.totalJobs) || 0;
+  return handled > 0 ? totalJobs / handled : 0;
+}
+
+function getHistoryClientsHandled(record) {
+  return Number(record?.clientsHandled) || record?.clientBreakdown?.length || 0;
+}
+
+function normalizeFilters(filters) {
+  const startDate = filters.startDate || getIstYmd();
+  const endDate = filters.endDate || startDate;
+  return {
+    ...filters,
+    startDate,
+    endDate: endDate < startDate ? startDate : endDate,
+    operator: (filters.operator || '').trim(),
+  };
+}
+
+function SectionHeading({ title, description, action }) {
+  return (
+    <div className="flex flex-col gap-3 border-b border-gray-100 px-6 py-5 sm:flex-row sm:items-start sm:justify-between">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+        {description ? <p className="mt-1 text-sm text-gray-500">{description}</p> : null}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, hint, accent = 'text-gray-900' }) {
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+      <p className="text-sm text-gray-500">{label}</p>
+      <p className={`mt-2 text-3xl font-bold ${accent}`}>{value}</p>
+      {hint ? <p className="mt-1 text-xs text-gray-500">{hint}</p> : null}
+    </div>
+  );
+}
+
+function StatusBadge({ tone, children, title }) {
+  const tones = {
+    good: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    warn: 'bg-amber-50 text-amber-700 border-amber-200',
+    bad: 'bg-red-50 text-red-700 border-red-200',
+    neutral: 'bg-slate-50 text-slate-700 border-slate-200',
+  };
+  return (
+    <span title={title} className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${tones[tone] || tones.neutral}`}>
+      {children}
+    </span>
+  );
+}
+
+function JobRowsTable({ jobs, dense = false }) {
+  if (!jobs?.length) return <p className="py-6 text-sm text-gray-500">No rows found for this selection.</p>;
+
   return (
     <div className={`overflow-x-auto ${dense ? '' : 'max-h-[50vh] overflow-y-auto'}`}>
       <table className="min-w-full text-sm">
-        <thead className={dense ? '' : 'sticky top-0 bg-gray-100 z-10'}>
+        <thead className={dense ? '' : 'sticky top-0 z-10 bg-gray-100'}>
           <tr className="text-left text-gray-600">
-            <th className={`${dense ? 'px-3 py-1.5' : 'px-3 py-2'} font-medium`}>Job</th>
-            <th className={`${dense ? 'px-3 py-1.5' : 'px-3 py-2'} font-medium`}>Company</th>
-            <th className={`${dense ? 'px-3 py-1.5' : 'px-3 py-2'} font-medium`}>Client</th>
-            <th className={`${dense ? 'px-3 py-1.5' : 'px-3 py-2'} font-medium`}>Added</th>
-            <th className={`${dense ? 'px-3 py-1.5' : 'px-3 py-2'} font-medium`}>Applied by</th>
+            <th className={`${dense ? 'px-3 py-2' : 'px-3 py-2.5'} font-medium`}>Job</th>
+            <th className={`${dense ? 'px-3 py-2' : 'px-3 py-2.5'} font-medium`}>Company</th>
+            <th className={`${dense ? 'px-3 py-2' : 'px-3 py-2.5'} font-medium`}>Client</th>
+            <th className={`${dense ? 'px-3 py-2' : 'px-3 py-2.5'} font-medium`}>Added time</th>
+            <th className={`${dense ? 'px-3 py-2' : 'px-3 py-2.5'} font-medium`}>Applied by</th>
           </tr>
         </thead>
         <tbody>
-          {jobs.map((j) => (
-            <tr key={j._id || `${j.jobID}-${j.userID}`} className="border-t border-gray-200/80">
-              <td className={`${dense ? 'px-3 py-1.5' : 'px-3 py-2'} text-gray-900 max-w-[200px] truncate`} title={j.jobTitle}>{j.jobTitle}</td>
-              <td className={`${dense ? 'px-3 py-1.5' : 'px-3 py-2'} text-gray-700 max-w-[140px] truncate`} title={j.companyName}>{j.companyName}</td>
-              <td className={`${dense ? 'px-3 py-1.5' : 'px-3 py-2'} text-gray-600 max-w-[160px] truncate text-xs`} title={j.userID}>{j.userID}</td>
-              <td className={`${dense ? 'px-3 py-1.5' : 'px-3 py-2'} text-gray-500 whitespace-nowrap text-xs`}>{j.dateAdded || j.createdAt || '\u2014'}</td>
-              <td className={`${dense ? 'px-3 py-1.5' : 'px-3 py-2'} text-violet-700 font-medium text-xs max-w-[140px] truncate`} title={j.currentStatus || ''}>{parseAppliedByLabel(j.currentStatus)}</td>
+          {jobs.map((job) => (
+            <tr key={job._id || `${job.jobID}-${job.userID}`} className="border-t border-gray-200/80">
+              <td className={`${dense ? 'px-3 py-2' : 'px-3 py-2.5'} max-w-[220px] truncate text-gray-900`} title={job.jobTitle}>{job.jobTitle || '—'}</td>
+              <td className={`${dense ? 'px-3 py-2' : 'px-3 py-2.5'} max-w-[180px] truncate text-gray-700`} title={job.companyName}>{job.companyName || '—'}</td>
+              <td className={`${dense ? 'px-3 py-2' : 'px-3 py-2.5'} max-w-[180px] truncate text-xs text-gray-600`} title={job.userID}>{job.userID || '—'}</td>
+              <td className={`${dense ? 'px-3 py-2' : 'px-3 py-2.5'} whitespace-nowrap text-xs text-gray-500`}>{job.dateAdded || job.createdAt || '—'}</td>
+              <td className={`${dense ? 'px-3 py-2' : 'px-3 py-2.5'} max-w-[160px] truncate text-xs font-medium text-orange-700`} title={job.currentStatus || ''}>{parseAppliedByLabel(job.currentStatus)}</td>
             </tr>
           ))}
         </tbody>
@@ -50,28 +163,43 @@ function JobRowsTable({ jobs, dense }) {
   );
 }
 
-const INCENTIVE_SLAB_ROWS = [
-  { label: '0 qualified clients', value: '\u20B90' },
-  { label: '1 client', value: '\u20B950 / day' },
-  { label: '2 clients', value: '\u20B970 / day' },
-  { label: '3 clients', value: '\u20B980 / day' },
-  { label: '4+ clients', value: '\u20B9100 / day' },
+const INCENTIVE_RULES = [
+  { label: 'Below 20 clients handled', value: '₹0' },
+  { label: '20 to 29 clients handled', value: '₹50 / day' },
+  { label: '30 to 34 clients handled', value: '₹70 / day' },
+  { label: '35 to 39 clients handled', value: '₹80 / day' },
+  { label: '40+ clients handled', value: '₹100 / day' },
 ];
 
 export default function ExtensionJobsReport() {
   const navigate = useNavigate();
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('authToken') : null;
+
+  const [draftFilters, setDraftFilters] = useState(() => buildInitialFilters());
+  const [reportFilters, setReportFilters] = useState(() => buildInitialFilters());
+  const [historyFilters, setHistoryFilters] = useState(() => ({
+    ...buildInitialFilters(),
+    status: '',
+  }));
+
   const [loading, setLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState('');
+  const [historyError, setHistoryError] = useState('');
   const [totalJobs, setTotalJobs] = useState(0);
   const [byAdder, setByAdder] = useState([]);
-  const [incentiveByAdder, setIncentiveByAdder] = useState([]);
   const [samples, setSamples] = useState([]);
+  const [operatorOptions, setOperatorOptions] = useState([]);
+  const [totalOperators, setTotalOperators] = useState(0);
+  const [operatorPage, setOperatorPage] = useState(1);
+  const [operatorTotalPages, setOperatorTotalPages] = useState(0);
+  const [totalClientsHandled, setTotalClientsHandled] = useState(0);
+  const [totalIncentiveRange, setTotalIncentiveRange] = useState(0);
+  const [averageAcrossOperators, setAverageAcrossOperators] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
 
   const [complaints, setComplaints] = useState([]);
-  const [complaintDateYmd, setComplaintDateYmd] = useState('');
+  const [complaintDateYmd, setComplaintDateYmd] = useState(() => getIstYmd());
   const [complaintAddedBy, setComplaintAddedBy] = useState('');
   const [complaintClientEmail, setComplaintClientEmail] = useState('');
   const [complaintNote, setComplaintNote] = useState('');
@@ -86,351 +214,665 @@ export default function ExtensionJobsReport() {
   const [modalData, setModalData] = useState({ jobs: [], total: 0, totalPages: 0, uniqueClients: 0 });
   const [modalLoading, setModalLoading] = useState(false);
 
-  // Incentive history — own date range
-  const [histStartDate, setHistStartDate] = useState('');
-  const [histEndDate, setHistEndDate] = useState('');
-  const [historySearch, setHistorySearch] = useState('');
-  const [historyStatus, setHistoryStatus] = useState('');
   const [historyPage, setHistoryPage] = useState(1);
   const [historyData, setHistoryData] = useState({ records: [], total: 0, totalPages: 0 });
-  const [historyLoading, setHistoryLoading] = useState(false);
 
-  // Reject modal
   const [rejectModal, setRejectModal] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectSaving, setRejectSaving] = useState(false);
 
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('authToken') : null;
-
-  // Build a Set of "dateYmd|addedBy" from complaints for red-bg highlighting
-  const complaintKeySet = useMemo(
-    () => new Set(complaints.map((c) => `${c.dateYmd}|${c.addedBy}`)),
-    [complaints]
-  );
-
   useEffect(() => {
-    const saved = localStorage.getItem('user');
-    if (saved) {
-      try { setIsAdmin(JSON.parse(saved)?.role === 'admin'); } catch { /* */ }
+    const savedUser = localStorage.getItem('user');
+    if (!savedUser) return;
+    try {
+      setIsAdmin(JSON.parse(savedUser)?.role === 'admin');
+    } catch {
+      setIsAdmin(false);
     }
   }, []);
 
   useEffect(() => {
-    const end = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - 30);
-    const s = toYmdLocal(start);
-    const e = toYmdLocal(end);
-    setEndDate(e);
-    setStartDate(s);
-    setHistStartDate(s);
-    setHistEndDate(e);
+    setComplaintDateYmd(reportFilters.startDate);
+  }, [reportFilters.startDate]);
+
+  const complaintKeySet = useMemo(
+    () => new Set(complaints.map((item) => `${item.dateYmd}|${item.addedBy}`)),
+    [complaints]
+  );
+
+  const mergedOperatorOptions = useMemo(() => {
+    return Array.from(new Set([
+      ...operatorOptions,
+      ...byAdder.map((row) => row.addedBy).filter(Boolean),
+      ...historyData.records.map((row) => row.addedBy).filter(Boolean),
+      complaintAddedBy,
+      draftFilters.operator,
+      historyFilters.operator,
+    ].filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  }, [operatorOptions, byAdder, historyData.records, complaintAddedBy, draftFilters.operator, historyFilters.operator]);
+
+  const maxCount = useMemo(() => Math.max(...byAdder.map((row) => row.count || 0), 1), [byAdder]);
+
+  const applyDraftFilters = useCallback(() => {
+    const next = normalizeFilters(draftFilters);
+    setDraftFilters(next);
+    setReportFilters(next);
+  }, [draftFilters]);
+
+  const applyPresetFilters = useCallback((nextFilters) => {
+    const normalized = normalizeFilters(nextFilters);
+    setOperatorPage(1);
+    setDraftFilters(normalized);
+    setReportFilters(normalized);
   }, []);
 
-  const setQuickToday = useCallback(() => { const t = toYmdLocal(new Date()); setStartDate(t); setEndDate(t); }, []);
-  const setQuickLast7 = useCallback(() => { const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 6); setStartDate(toYmdLocal(start)); setEndDate(toYmdLocal(end)); }, []);
-  const setQuickLastMonth = useCallback(() => { const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth() - 1, 1); const end = new Date(now.getFullYear(), now.getMonth(), 0); setStartDate(toYmdLocal(start)); setEndDate(toYmdLocal(end)); }, []);
+  const resetToToday = useCallback(() => {
+    const next = buildInitialFilters();
+    setDraftFilters(next);
+    setReportFilters(next);
+    setOperatorPage(1);
+    setHistoryFilters((prev) => ({ ...prev, ...next }));
+    setHistoryPage(1);
+  }, []);
+
+  const applyHistoryFilters = useCallback(() => {
+    const normalized = normalizeFilters(historyFilters);
+    setHistoryFilters((prev) => ({ ...prev, ...normalized }));
+    setHistoryPage(1);
+  }, [historyFilters]);
+
+  const todayPreset = useMemo(() => buildInitialFilters(), []);
+  const last7Preset = useMemo(() => ({ startDate: shiftIstDays(getIstYmd(), -6), endDate: getIstYmd(), operator: draftFilters.operator }), [draftFilters.operator]);
+  const lastMonthPreset = useMemo(() => ({ ...getLastCalendarMonthRange(), operator: draftFilters.operator }), [draftFilters.operator]);
+
+  const fetchReport = useCallback(async () => {
+    if (!token) {
+      setError('Not signed in.');
+      return;
+    }
+
+    const currentFilters = normalizeFilters(reportFilters);
+    setLoading(true);
+    setError('');
+    setExpandedAdder(null);
+    setPreviewByAdder({});
+
+    try {
+      const params = new URLSearchParams({
+        startDate: currentFilters.startDate,
+        endDate: currentFilters.endDate,
+        page: String(operatorPage),
+        limit: String(OPERATOR_PAGE_SIZE),
+      });
+      if (currentFilters.operator) params.set('addedBy', currentFilters.operator);
+
+      const response = await fetch(`${API_BASE}/api/extension-jobs-report?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (response.status === 401 || response.status === 403) {
+        setError(data?.error || 'Access denied.');
+        setByAdder([]);
+        setSamples([]);
+        setOperatorOptions([]);
+        setTotalOperators(0);
+        setOperatorTotalPages(0);
+        setTotalClientsHandled(0);
+        setTotalIncentiveRange(0);
+        setAverageAcrossOperators(0);
+        setTotalJobs(0);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to load extension jobs report');
+      }
+
+      setTotalJobs(data.totalJobs || 0);
+      setTotalOperators(data.totalOperators || 0);
+      setOperatorTotalPages(data.totalPages || 0);
+      setByAdder(Array.isArray(data.byAdder) ? data.byAdder : []);
+      setSamples(Array.isArray(data.samples) ? data.samples : []);
+      setOperatorOptions(Array.isArray(data.operatorOptions) ? data.operatorOptions : []);
+      setTotalClientsHandled(data.totalClientsHandled || 0);
+      setTotalIncentiveRange(data.totalIncentiveRange || 0);
+      setAverageAcrossOperators(Number(data.averageJobsPerClientOverall) || 0);
+      if (data.isAdmin !== undefined) setIsAdmin(Boolean(data.isAdmin));
+    } catch (fetchError) {
+      console.error(fetchError);
+      setError(fetchError.message || 'Network error while loading report');
+      setByAdder([]);
+      setSamples([]);
+      setOperatorOptions([]);
+      setTotalOperators(0);
+      setOperatorTotalPages(0);
+      setTotalClientsHandled(0);
+      setTotalIncentiveRange(0);
+      setAverageAcrossOperators(0);
+      setTotalJobs(0);
+    } finally {
+      setLoading(false);
+    }
+  }, [operatorPage, reportFilters, token]);
 
   const fetchComplaints = useCallback(async () => {
-    if (!startDate || !endDate || !token || !isAdmin) return;
+    if (!token || !isAdmin) {
+      setComplaints([]);
+      return;
+    }
+
     try {
-      const params = new URLSearchParams({ startYmd: startDate, endYmd: endDate });
-      const res = await fetch(`${API_BASE}/api/admin/extension-incentive-complaints?${params}`, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && Array.isArray(data.complaints)) setComplaints(data.complaints);
-      else setComplaints([]);
-    } catch { setComplaints([]); }
-  }, [startDate, endDate, token, isAdmin]);
+      const params = new URLSearchParams({
+        startYmd: reportFilters.startDate,
+        endYmd: reportFilters.endDate,
+      });
+      if (reportFilters.operator) params.set('addedBy', reportFilters.operator);
 
-  const fetchReport = async () => {
-    if (!startDate || !endDate) { setError('Choose a start and end date.'); return; }
-    if (!token) { setError('Not signed in.'); return; }
-    setError(''); setLoading(true); setExpandedAdder(null); setPreviewByAdder({});
-    try {
-      const params = new URLSearchParams({ startDate, endDate });
-      const res = await fetch(`${API_BASE}/api/extension-jobs-report?${params}`, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 401 || res.status === 403) { setError(data?.error || 'Access denied.'); setByAdder([]); setIncentiveByAdder([]); setSamples([]); setTotalJobs(0); return; }
-      if (!res.ok) { setError(data?.error || 'Failed to load report'); setByAdder([]); setIncentiveByAdder([]); setSamples([]); setTotalJobs(0); return; }
-      setTotalJobs(data.totalJobs || 0);
-      setByAdder(Array.isArray(data.byAdder) ? data.byAdder : []);
-      setIncentiveByAdder(Array.isArray(data.incentiveByAdder) ? data.incentiveByAdder : []);
-      setSamples(Array.isArray(data.samples) ? data.samples : []);
-      if (data.isAdmin !== undefined) setIsAdmin(data.isAdmin);
-      await fetchComplaints();
-    } catch (e) { console.error(e); setError('Network error'); setByAdder([]); setIncentiveByAdder([]); setSamples([]); setTotalJobs(0); }
-    finally { setLoading(false); }
-  };
+      const response = await fetch(`${API_BASE}/api/admin/extension-incentive-complaints?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json().catch(() => ({}));
+      setComplaints(response.ok && Array.isArray(data.complaints) ? data.complaints : []);
+    } catch {
+      setComplaints([]);
+    }
+  }, [isAdmin, reportFilters.endDate, reportFilters.operator, reportFilters.startDate, token]);
 
-  useEffect(() => { if (startDate && endDate && token) fetchReport(); }, [startDate, endDate]); // eslint-disable-line
-  useEffect(() => { if (startDate) setComplaintDateYmd(startDate); }, [startDate]);
-
-  // Incentive history fetch — uses its own date range
   const fetchHistory = useCallback(async () => {
-    if (!histStartDate || !histEndDate || !token) return;
+    if (!token) return;
+
+    const currentFilters = normalizeFilters(historyFilters);
     setHistoryLoading(true);
-    try {
-      const params = new URLSearchParams({ startYmd: histStartDate, endYmd: histEndDate, page: String(historyPage), limit: '20' });
-      if (historySearch.trim()) params.set('addedBy', historySearch.trim());
-      if (historyStatus) params.set('status', historyStatus);
-      const res = await fetch(`${API_BASE}/api/extension-incentive-history?${params}`, { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) setHistoryData({ records: data.records || [], total: data.total || 0, totalPages: data.totalPages || 0 });
-    } catch { /* silent */ }
-    finally { setHistoryLoading(false); }
-  }, [histStartDate, histEndDate, token, historyPage, historySearch, historyStatus]);
+    setHistoryError('');
 
-  useEffect(() => { if (histStartDate && histEndDate && token) fetchHistory(); }, [fetchHistory]);
-
-  const submitComplaint = async (e) => {
-    e.preventDefault();
-    if (!complaintDateYmd || !complaintAddedBy.trim() || !token) return;
-    setComplaintSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/extension-incentive-complaints`, {
-        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dateYmd: complaintDateYmd, addedBy: complaintAddedBy.trim(), clientEmail: complaintClientEmail.trim(), note: complaintNote.trim() }),
+      const params = new URLSearchParams({
+        startYmd: currentFilters.startDate,
+        endYmd: currentFilters.endDate,
+        page: String(historyPage),
+        limit: '20',
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || 'Failed');
-      setComplaintNote(''); setComplaintClientEmail('');
-      await fetchReport();
-    } catch (err) { console.error(err); setError(err.message || 'Failed to save complaint'); }
-    finally { setComplaintSaving(false); }
-  };
+      if (currentFilters.operator) params.set('addedBy', currentFilters.operator);
+      if (historyFilters.status) params.set('status', historyFilters.status);
 
-  const deleteComplaint = async (id) => {
-    if (!token || !id) return;
-    if (!window.confirm('Remove this complaint flag?')) return;
-    try { const res = await fetch(`${API_BASE}/api/admin/extension-incentive-complaints/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }); if (!res.ok) throw new Error('Failed'); await fetchReport(); }
-    catch (err) { console.error(err); setError('Failed to delete complaint'); }
-  };
-
-  const rejectIncentive = async () => {
-    if (!rejectModal || !rejectReason.trim() || !token) return;
-    setRejectSaving(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/admin/extension-daily-incentive/${rejectModal._id}/reject`, {
-        method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: rejectReason.trim() }),
+      const response = await fetch(`${API_BASE}/api/extension-incentive-history?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || 'Failed');
-      setRejectModal(null); setRejectReason('');
-      await Promise.all([fetchReport(), fetchHistory()]);
-    } catch (err) { console.error(err); setError(err.message || 'Failed to reject incentive'); }
-    finally { setRejectSaving(false); }
-  };
+      const data = await response.json().catch(() => ({}));
 
-  const restoreIncentive = async (id) => {
-    if (!token || !id) return;
-    if (!window.confirm('Restore this incentive?')) return;
-    try { const res = await fetch(`${API_BASE}/api/admin/extension-daily-incentive/${id}/restore`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } }); if (!res.ok) throw new Error('Failed'); await Promise.all([fetchReport(), fetchHistory()]); }
-    catch (err) { console.error(err); setError('Failed to restore incentive'); }
-  };
+      if (!response.ok) {
+        throw new Error(data?.error || 'Failed to load incentive records');
+      }
+
+      setHistoryData({
+        records: Array.isArray(data.records) ? data.records : [],
+        total: data.total || 0,
+        totalPages: data.totalPages || 0,
+      });
+    } catch (fetchError) {
+      console.error(fetchError);
+      setHistoryError(fetchError.message || 'Failed to load incentive history');
+      setHistoryData({ records: [], total: 0, totalPages: 0 });
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [historyFilters, historyPage, token]);
+
+  useEffect(() => {
+    fetchReport();
+  }, [fetchReport]);
+
+  useEffect(() => {
+    fetchComplaints();
+  }, [fetchComplaints]);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
 
   const fetchJobsByAdder = useCallback(async (addedBy, page, limit) => {
-    const params = new URLSearchParams({ startDate, endDate, addedBy, page: String(page), limit: String(limit) });
-    const res = await fetch(`${API_BASE}/api/extension-jobs-report/jobs?${params}`, { headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || 'Failed to load jobs');
+    const params = new URLSearchParams({
+      startDate: reportFilters.startDate,
+      endDate: reportFilters.endDate,
+      addedBy,
+      page: String(page),
+      limit: String(limit),
+    });
+    const response = await fetch(`${API_BASE}/api/extension-jobs-report/jobs?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.error || 'Failed to load jobs');
     return data;
-  }, [startDate, endDate, token]);
+  }, [reportFilters.endDate, reportFilters.startDate, token]);
 
   const toggleExpand = async (addedBy) => {
-    if (expandedAdder === addedBy) { setExpandedAdder(null); return; }
+    if (expandedAdder === addedBy) {
+      setExpandedAdder(null);
+      return;
+    }
+
     setExpandedAdder(addedBy);
     if (previewByAdder[addedBy]) return;
+
     setPreviewLoading(addedBy);
-    try { const data = await fetchJobsByAdder(addedBy, 1, 5); setPreviewByAdder((prev) => ({ ...prev, [addedBy]: data.jobs || [] })); }
-    catch (e) { console.error(e); setPreviewByAdder((prev) => ({ ...prev, [addedBy]: [] })); }
-    finally { setPreviewLoading(null); }
+    try {
+      const data = await fetchJobsByAdder(addedBy, 1, 5);
+      setPreviewByAdder((prev) => ({ ...prev, [addedBy]: data.jobs || [] }));
+    } catch (previewError) {
+      console.error(previewError);
+      setPreviewByAdder((prev) => ({ ...prev, [addedBy]: [] }));
+    } finally {
+      setPreviewLoading(null);
+    }
   };
 
   const openModal = async (addedBy) => {
-    setModalAdder(addedBy); setModalPage(1); setModalLoading(true);
-    try { const data = await fetchJobsByAdder(addedBy, 1, MODAL_PAGE_SIZE); setModalData({ jobs: data.jobs || [], total: data.total || 0, totalPages: data.totalPages || 0, uniqueClients: data.uniqueClients ?? 0 }); }
-    catch (e) { console.error(e); setModalData({ jobs: [], total: 0, totalPages: 0, uniqueClients: 0 }); }
-    finally { setModalLoading(false); }
+    setModalAdder(addedBy);
+    setModalPage(1);
+    setModalLoading(true);
+    try {
+      const data = await fetchJobsByAdder(addedBy, 1, MODAL_PAGE_SIZE);
+      setModalData({
+        jobs: data.jobs || [],
+        total: data.total || 0,
+        totalPages: data.totalPages || 0,
+        uniqueClients: data.uniqueClients ?? 0,
+      });
+    } catch (modalError) {
+      console.error(modalError);
+      setModalData({ jobs: [], total: 0, totalPages: 0, uniqueClients: 0 });
+    } finally {
+      setModalLoading(false);
+    }
   };
 
   const loadModalPage = async (page) => {
-    if (!modalAdder) return; setModalLoading(true);
-    try { const data = await fetchJobsByAdder(modalAdder, page, MODAL_PAGE_SIZE); setModalPage(page); setModalData({ jobs: data.jobs || [], total: data.total || 0, totalPages: data.totalPages || 0, uniqueClients: data.uniqueClients ?? 0 }); }
-    catch (e) { console.error(e); }
-    finally { setModalLoading(false); }
+    if (!modalAdder) return;
+    setModalLoading(true);
+    try {
+      const data = await fetchJobsByAdder(modalAdder, page, MODAL_PAGE_SIZE);
+      setModalPage(page);
+      setModalData({
+        jobs: data.jobs || [],
+        total: data.total || 0,
+        totalPages: data.totalPages || 0,
+        uniqueClients: data.uniqueClients ?? 0,
+      });
+    } catch (modalError) {
+      console.error(modalError);
+    } finally {
+      setModalLoading(false);
+    }
   };
 
-  const closeModal = () => { setModalAdder(null); setModalPage(1); setModalData({ jobs: [], total: 0, totalPages: 0, uniqueClients: 0 }); };
+  const closeModal = () => {
+    setModalAdder(null);
+    setModalPage(1);
+    setModalData({ jobs: [], total: 0, totalPages: 0, uniqueClients: 0 });
+  };
 
-  const maxCount = useMemo(() => { if (!byAdder.length) return 1; return Math.max(...byAdder.map((r) => r.count || 0), 1); }, [byAdder]);
-  const totalIncentiveRange = useMemo(() => incentiveByAdder.reduce((s, x) => s + (x.totalIncentive || 0), 0), [incentiveByAdder]);
-  const incentiveDailyMap = useMemo(() => { const m = new Map(); for (const x of incentiveByAdder) m.set(x.addedBy, x.daily || []); return m; }, [incentiveByAdder]);
+  const submitComplaint = async (event) => {
+    event.preventDefault();
+    if (!token || !complaintDateYmd || !complaintAddedBy.trim()) return;
+
+    setComplaintSaving(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/admin/extension-incentive-complaints`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          dateYmd: complaintDateYmd,
+          addedBy: complaintAddedBy.trim(),
+          clientEmail: complaintClientEmail.trim(),
+          note: complaintNote.trim(),
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || 'Failed to save complaint');
+
+      setComplaintClientEmail('');
+      setComplaintNote('');
+      await Promise.all([fetchReport(), fetchHistory()]);
+    } catch (submitError) {
+      console.error(submitError);
+      setError(submitError.message || 'Failed to save complaint');
+    } finally {
+      setComplaintSaving(false);
+    }
+  };
+
+  const deleteComplaint = async (id) => {
+    if (!token || !id || !window.confirm('Remove this complaint flag?')) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/admin/extension-incentive-complaints/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error('Failed to delete complaint');
+      await Promise.all([fetchReport(), fetchHistory()]);
+    } catch (deleteError) {
+      console.error(deleteError);
+      setError('Failed to delete complaint');
+    }
+  };
+
+  const rejectIncentive = async () => {
+    if (!token || !rejectModal || !rejectReason.trim()) return;
+
+    setRejectSaving(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/admin/extension-daily-incentive/${rejectModal._id}/reject`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ reason: rejectReason.trim() }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || 'Failed to reject incentive');
+
+      setRejectModal(null);
+      setRejectReason('');
+      await Promise.all([fetchReport(), fetchHistory()]);
+    } catch (rejectError) {
+      console.error(rejectError);
+      setError(rejectError.message || 'Failed to reject incentive');
+    } finally {
+      setRejectSaving(false);
+    }
+  };
+
+  const restoreIncentive = async (id) => {
+    if (!token || !id || !window.confirm('Restore this incentive?')) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/admin/extension-daily-incentive/${id}/restore`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error('Failed to restore incentive');
+      await Promise.all([fetchReport(), fetchHistory()]);
+    } catch (restoreError) {
+      console.error(restoreError);
+      setError('Failed to restore incentive');
+    }
+  };
+
+  const approveIncentive = async (id) => {
+    if (!token || !id) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/admin/extension-daily-incentive/${id}/approve`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error('Failed to approve incentive');
+      await Promise.all([fetchReport(), fetchHistory()]);
+    } catch (approveError) {
+      console.error(approveError);
+      setError('Failed to approve incentive');
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-orange-50/40">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
-        <div className="mb-8 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-orange-50/40 to-white">
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">Extension jobs report</h1>
-            <p className="mt-1 text-gray-600 text-sm sm:text-base max-w-2xl">
-              Jobs added through the FlashFire extension, grouped by operator.
-              Each <span className="font-semibold">incentive day</span> counts jobs from 11:00 PM IST (night) to 12:59 PM IST (next day).
-              Only jobs within this 14-hour window are counted.
+            <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">Extension Jobs</h1>
+            <p className="mt-2 max-w-3xl text-sm text-gray-600 sm:text-base">
+              Track jobs added from the extension, see operator productivity, and review daily incentives.
+              Incentive days use the 11:00 PM IST to 12:59 PM IST counting window.
             </p>
           </div>
-          <button type="button" onClick={() => navigate('/monitor-clients')} className="self-start px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
-            &larr; Back to portal
+          <button
+            type="button"
+            onClick={() => navigate('/monitor-clients')}
+            className="self-start rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+          >
+            Back to portal
           </button>
         </div>
 
-        {/* Date range */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Date range</h2>
-          <div className="flex flex-wrap items-center gap-2 mb-4">
-            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Quick filters</span>
-            <button type="button" onClick={setQuickToday} className="px-3 py-1.5 text-xs font-medium rounded-lg bg-orange-50 text-orange-800 border border-orange-200 hover:bg-orange-100">Today</button>
-            <button type="button" onClick={setQuickLast7} className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-100 text-slate-800 border border-slate-200 hover:bg-slate-200">Last 7 days</button>
-            <button type="button" onClick={setQuickLastMonth} className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-100 text-slate-800 border border-slate-200 hover:bg-slate-200">Last calendar month</button>
-          </div>
-          <div className="flex flex-wrap items-end gap-4">
-            <div><label className="block text-xs font-medium text-gray-500 mb-1">Start</label><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm" /></div>
-            <div><label className="block text-xs font-medium text-gray-500 mb-1">End</label><input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} min={startDate} className="border border-gray-300 rounded-lg px-3 py-2 text-sm" /></div>
-            <button type="button" onClick={fetchReport} disabled={loading} className="px-5 py-2 rounded-lg bg-orange-600 text-white text-sm font-medium hover:bg-orange-700 disabled:opacity-50">{loading ? 'Loading\u2026' : 'Refresh'}</button>
-          </div>
-          {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-        </div>
-
-        {startDate && endDate && !loading && !error && (
-          <>
-            {/* Summary cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-              <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
-                <p className="text-sm text-gray-500">Total extension jobs (range)</p>
-                <p className="text-3xl font-bold text-orange-600 mt-1">{totalJobs}</p>
+        <div className="mb-8 rounded-3xl border border-orange-100 bg-white/90 shadow-sm backdrop-blur">
+          <SectionHeading
+            title="Filters"
+            description="Use IST dates. The page loads with today selected by default, and the quick filters apply immediately."
+            action={(
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => applyPresetFilters(todayPreset)} className={presetButtonClass(samePreset(draftFilters, todayPreset))}>Today</button>
+                <button type="button" onClick={() => applyPresetFilters(last7Preset)} className={presetButtonClass(samePreset(draftFilters, last7Preset))}>Last 7 days</button>
+                <button type="button" onClick={() => applyPresetFilters(lastMonthPreset)} className={presetButtonClass(samePreset(draftFilters, lastMonthPreset))}>Last month</button>
               </div>
-              <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm">
-                <p className="text-sm text-gray-500">Distinct operators</p>
-                <p className="text-3xl font-bold text-gray-900 mt-1">{byAdder.length}</p>
+            )}
+          />
+          <div className="px-6 py-5">
+            <div className="grid gap-4 lg:grid-cols-[1fr_1fr_1.2fr_auto]">
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Start date</label>
+                <input
+                  type="date"
+                  value={draftFilters.startDate}
+                  onChange={(event) => setDraftFilters((prev) => ({ ...prev, startDate: event.target.value }))}
+                  className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
+                />
               </div>
-              <div className="bg-white rounded-2xl border border-gray-200 p-6 shadow-sm md:col-span-2">
-                <p className="text-sm text-gray-500">Total incentive (range, eligible days)</p>
-                <p className="text-3xl font-bold text-emerald-700 mt-1">{'\u20B9'}{totalIncentiveRange.toLocaleString('en-IN')}</p>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">End date</label>
+                <input
+                  type="date"
+                  value={draftFilters.endDate}
+                  min={draftFilters.startDate}
+                  onChange={(event) => setDraftFilters((prev) => ({ ...prev, endDate: event.target.value }))}
+                  className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Operator</label>
+                <select
+                  value={draftFilters.operator}
+                  onChange={(event) => setDraftFilters((prev) => ({ ...prev, operator: event.target.value }))}
+                  className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100"
+                >
+                  <option value="">All operators</option>
+                  {mergedOperatorOptions.map((operator) => (
+                    <option key={operator} value={operator}>{operator}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-end gap-2">
+                <button type="button" onClick={() => { setOperatorPage(1); applyDraftFilters(); }} disabled={loading} className="rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-orange-700 disabled:opacity-50">
+                  {loading ? 'Loading…' : 'Apply'}
+                </button>
+                <button type="button" onClick={resetToToday} className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-50">
+                  Reset
+                </button>
               </div>
             </div>
+            <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+              <StatusBadge tone="neutral">Applied range: {reportFilters.startDate} to {reportFilters.endDate}</StatusBadge>
+              {reportFilters.operator ? <StatusBadge tone="neutral">Operator: {reportFilters.operator}</StatusBadge> : null}
+            </div>
+            {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
+          </div>
+        </div>
 
-            {/* By operator table */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden mb-8">
-              <div className="px-6 py-4 border-b border-gray-100">
-                <h2 className="text-lg font-semibold text-gray-900">By operator name</h2>
-                <p className="text-sm text-gray-500">Click a name to expand (latest 5 + daily incentive). Use <span className="font-medium">View all</span> for full list.</p>
-              </div>
+        {!loading && !error ? (
+          <>
+            <div className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <SummaryCard label="Jobs added" value={totalJobs.toLocaleString('en-IN')} hint="Current filter range" accent="text-orange-600" />
+              <SummaryCard label="Operators active" value={totalOperators.toLocaleString('en-IN')} hint="Distinct extension adders in this range" />
+              <SummaryCard label="Clients handled" value={totalClientsHandled.toLocaleString('en-IN')} hint="Sum of clients handled across visible operators" />
+              <SummaryCard label="Average jobs per client" value={formatAverage(averageAcrossOperators)} hint="Average of operator-level averages" accent="text-emerald-700" />
+            </div>
+
+            <div className="mb-8 rounded-3xl border border-gray-200 bg-white shadow-sm">
+              <SectionHeading
+                title="Team performance"
+                description="Simple view for the team: clients handled, jobs added, average jobs per client, incentive total, and share of volume."
+                action={<StatusBadge tone="good">Range incentive: {formatCurrency(totalIncentiveRange)}</StatusBadge>}
+              />
               {byAdder.length === 0 ? (
-                <p className="p-8 text-gray-500 text-center">No jobs with an extension operator name in this range.</p>
+                <p className="px-6 py-12 text-center text-sm text-gray-500">No extension jobs found for the selected filters.</p>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-sm">
                     <thead>
                       <tr className="bg-gray-50 text-left text-gray-600">
-                        <th className="px-6 py-3 font-medium w-10" aria-hidden />
-                        <th className="px-6 py-3 font-medium">Operator (addedBy)</th>
-                        <th className="px-6 py-3 font-medium text-right">Unique clients</th>
-                        <th className="px-6 py-3 font-medium text-right">Jobs</th>
-                        <th className="px-6 py-3 font-medium text-right">Incentive ({'\u20B9'})</th>
-                        <th className="px-6 py-3 font-medium">Share</th>
+                        <th className="w-10 px-3 py-3" aria-hidden />
+                        <th className="px-4 py-3 font-medium">Operator</th>
+                        <th className="px-4 py-3 text-right font-medium">Clients handled</th>
+                        <th className="px-4 py-3 text-right font-medium">Jobs added</th>
+                        <th className="px-4 py-3 text-right font-medium">Avg jobs / client</th>
+                        <th className="px-4 py-3 text-right font-medium">Incentive</th>
+                        <th className="px-4 py-3 font-medium">Share</th>
                       </tr>
                     </thead>
                     <tbody>
                       {byAdder.map((row) => {
-                        const pct = totalJobs ? Math.round((row.count / totalJobs) * 1000) / 10 : 0;
-                        const barPct = (row.count / maxCount) * 100;
                         const isOpen = expandedAdder === row.addedBy;
-                        const inc = row.incentiveTotal ?? 0;
-                        const daily = incentiveDailyMap.get(row.addedBy) || [];
+                        const count = row.count || 0;
+                        const clientsHandled = row.clientsHandled || row.uniqueClients || 0;
+                        const average = Number(row.avgJobsPerClient) || 0;
+                        const share = totalJobs > 0 ? ((count / totalJobs) * 100).toFixed(1) : '0.0';
+                        const barWidth = `${Math.max((count / maxCount) * 100, 4)}%`;
+                        const incentiveTotal = row.incentiveTotal || 0;
+                        const isEligible = average >= 20 && clientsHandled >= 20;
+                        const daily = row.incentiveDaily || [];
+
                         return (
                           <Fragment key={row.addedBy}>
-                            <tr className="border-t border-gray-100 hover:bg-gray-50/80">
-                              <td className="px-2 py-2 text-center align-middle">
-                                <button type="button" onClick={() => toggleExpand(row.addedBy)} className="p-1.5 rounded-md text-gray-500 hover:bg-gray-200/80 hover:text-gray-800 transition-colors" aria-expanded={isOpen} aria-label={isOpen ? 'Collapse' : 'Expand'}>
-                                  <svg className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                            <tr className="border-t border-gray-100 align-top hover:bg-orange-50/30">
+                              <td className="px-2 py-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExpand(row.addedBy)}
+                                  className="rounded-lg p-1.5 text-gray-500 transition hover:bg-gray-200 hover:text-gray-900"
+                                  aria-expanded={isOpen}
+                                  aria-label={isOpen ? 'Collapse' : 'Expand'}
+                                >
+                                  <svg className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                                 </button>
                               </td>
                               <td className="px-4 py-3">
-                                <button type="button" onClick={() => toggleExpand(row.addedBy)} className="font-medium text-gray-900 text-left hover:text-orange-700 focus:outline-none focus:underline">{row.addedBy}</button>
+                                <div className="flex flex-col gap-1">
+                                  <button type="button" onClick={() => toggleExpand(row.addedBy)} className="text-left font-semibold text-gray-900 hover:text-orange-700">
+                                    {row.addedBy}
+                                  </button>
+                                  <div className="flex flex-wrap gap-2">
+                                    <StatusBadge tone={isEligible ? 'good' : 'warn'}>
+                                      {isEligible ? 'Meets payout rule' : 'Below payout rule'}
+                                    </StatusBadge>
+                                  </div>
+                                </div>
                               </td>
-                              <td className="px-6 py-3 text-right tabular-nums text-gray-800">{row.uniqueClients ?? '\u2014'}</td>
-                              <td className="px-6 py-3 text-right tabular-nums text-gray-800">{row.count}</td>
-                              <td className="px-6 py-3 text-right tabular-nums font-semibold text-emerald-800">{'\u20B9'}{inc}</td>
-                              <td className="px-6 py-3 w-48">
+                              <td className="px-4 py-3 text-right font-semibold tabular-nums text-gray-900">{clientsHandled}</td>
+                              <td className="px-4 py-3 text-right tabular-nums text-gray-800">{count}</td>
+                              <td className="px-4 py-3 text-right tabular-nums font-semibold text-gray-900">{formatAverage(average)}</td>
+                              <td className="px-4 py-3 text-right tabular-nums font-semibold text-emerald-700">{formatCurrency(incentiveTotal)}</td>
+                              <td className="px-4 py-3">
                                 <div className="flex items-center gap-2">
-                                  <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-orange-500 rounded-full transition-all" style={{ width: `${barPct}%` }} /></div>
-                                  <span className="text-xs text-gray-500 w-12 text-right">{pct}%</span>
+                                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
+                                    <div className="h-full rounded-full bg-orange-500" style={{ width: barWidth }} />
+                                  </div>
+                                  <span className="w-12 text-right text-xs text-gray-500">{share}%</span>
                                 </div>
                               </td>
                             </tr>
-                            {isOpen && (
-                              <tr className="bg-slate-50/90 border-t border-gray-100">
-                                <td colSpan={6} className="px-4 sm:px-8 py-4 space-y-4">
-                                  {daily.length > 0 && (
-                                    <div>
-                                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Daily incentive (11 PM &ndash; 1 PM IST window)</p>
-                                      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
-                                        <table className="min-w-full text-xs">
-                                          <thead>
-                                            <tr className="bg-gray-50 text-left text-gray-600">
-                                              <th className="px-3 py-2">Day</th>
-                                              <th className="px-3 py-2 text-right">Jobs</th>
-                                              <th className="px-3 py-2 text-right">Total Clients</th>
-                                              <th className="px-3 py-2 text-right">Qualified (20+)</th>
-                                              <th className="px-3 py-2 text-right">{'\u20B9'}</th>
-                                              <th className="px-3 py-2">Status</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody className="divide-y divide-gray-100">
-                                            {daily.map((d) => {
-                                              const dayHasComplaint = complaintKeySet.has(`${d.dateYmd}|${row.addedBy}`);
-                                              return (
-                                                <tr key={d.dateYmd} className={dayHasComplaint ? 'bg-red-50 border-l-4 border-l-red-400' : ''}>
-                                                  <td className="px-3 py-2 whitespace-nowrap">
-                                                    {d.dateYmd}
-                                                    {dayHasComplaint && <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700">COMPLAINT</span>}
-                                                  </td>
-                                                  <td className="px-3 py-2 text-right">{d.totalJobs}</td>
-                                                  <td className="px-3 py-2 text-right">{d.uniqueClients}</td>
-                                                  <td className="px-3 py-2 text-right font-semibold">{d.qualifiedClients ?? 0}</td>
-                                                  <td className="px-3 py-2 text-right font-semibold">{d.incentive}</td>
-                                                  <td className="px-3 py-2">
-                                                    {d.eligible ? (
-                                                      <span className="text-emerald-700 font-medium">Eligible</span>
-                                                    ) : (
-                                                      <span className="text-red-700 text-xs">{d.gateReasons?.join(' \u00B7 ') || '\u2014'}</span>
-                                                    )}
-                                                  </td>
-                                                </tr>
-                                              );
-                                            })}
-                                          </tbody>
-                                        </table>
+                            {isOpen ? (
+                              <tr className="border-t border-gray-100 bg-slate-50/80">
+                                <td colSpan={7} className="px-4 py-5 sm:px-6">
+                                  <div className="space-y-5">
+                                    <div className="grid gap-3 md:grid-cols-4">
+                                      <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Clients handled</p>
+                                        <p className="mt-2 text-2xl font-bold text-gray-900">{clientsHandled}</p>
+                                      </div>
+                                      <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Jobs added</p>
+                                        <p className="mt-2 text-2xl font-bold text-gray-900">{count}</p>
+                                      </div>
+                                      <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Average jobs per client</p>
+                                        <p className="mt-2 text-2xl font-bold text-gray-900">{formatAverage(average)}</p>
+                                      </div>
+                                      <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Range incentive</p>
+                                        <p className="mt-2 text-2xl font-bold text-emerald-700">{formatCurrency(incentiveTotal)}</p>
                                       </div>
                                     </div>
-                                  )}
-                                  {previewLoading === row.addedBy ? (
-                                    <p className="text-sm text-gray-500">Loading\u2026</p>
-                                  ) : (
-                                    <>
-                                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Latest 5 in range (newest first)</p>
-                                      <JobRowsTable jobs={previewByAdder[row.addedBy] || []} dense />
-                                      {(row.count || 0) > 5 && (
-                                        <div className="mt-3 flex justify-end">
-                                          <button type="button" onClick={() => openModal(row.addedBy)} className="text-sm font-medium text-orange-700 hover:text-orange-900 px-3 py-1.5 rounded-lg border border-orange-200 bg-white hover:bg-orange-50">View all &middot; {row.count} jobs</button>
+
+                                    <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                                      <div className="mb-3 flex items-center justify-between gap-3">
+                                        <div>
+                                          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Latest jobs</p>
+                                          <p className="text-sm text-gray-500">Newest 5 rows in the selected range.</p>
+                                        </div>
+                                        {(row.count || 0) > 5 ? (
+                                          <button type="button" onClick={() => openModal(row.addedBy)} className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-800 hover:bg-orange-100">
+                                            View all {row.count} jobs
+                                          </button>
+                                        ) : null}
+                                      </div>
+                                      {previewLoading === row.addedBy ? <p className="py-6 text-sm text-gray-500">Loading preview…</p> : <JobRowsTable jobs={previewByAdder[row.addedBy] || []} dense />}
+                                    </div>
+
+                                    <div className="rounded-2xl border border-gray-200 bg-white p-4">
+                                      <div className="mb-3">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Daily payout breakdown</p>
+                                        <p className="text-sm text-gray-500">Review each day’s handled clients, job volume, average output, and payout readiness in one place.</p>
+                                      </div>
+                                      {daily.length === 0 ? (
+                                        <p className="py-6 text-sm text-gray-500">No daily incentive rows in this range.</p>
+                                      ) : (
+                                        <div className="overflow-x-auto rounded-xl border border-gray-200">
+                                          <table className="min-w-full text-xs sm:text-sm">
+                                            <thead className="bg-gray-50 text-left text-gray-600">
+                                              <tr>
+                                                <th className="px-3 py-2">Day</th>
+                                                <th className="px-3 py-2 text-right">Clients</th>
+                                                <th className="px-3 py-2 text-right">Jobs</th>
+                                                <th className="px-3 py-2 text-right">Avg</th>
+                                                <th className="px-3 py-2 text-right">₹</th>
+                                                <th className="px-3 py-2">Status</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                              {daily.map((day) => {
+                                                const dayHasComplaint = complaintKeySet.has(`${day.dateYmd}|${row.addedBy}`);
+                                                return (
+                                                  <tr key={day.dateYmd} className={dayHasComplaint ? 'bg-red-50/70' : ''}>
+                                                    <td className="px-3 py-2 whitespace-nowrap text-gray-900">
+                                                      {day.dateYmd}
+                                                      {dayHasComplaint ? <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">Complaint</span> : null}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-right tabular-nums">{day.clientsHandled || 0}</td>
+                                                    <td className="px-3 py-2 text-right tabular-nums">{day.totalJobs || 0}</td>
+                                                    <td className="px-3 py-2 text-right tabular-nums font-semibold">{formatAverage(day.avgJobsPerClient)}</td>
+                                                    <td className="px-3 py-2 text-right tabular-nums font-semibold">{day.incentive || 0}</td>
+                                                    <td className="px-3 py-2 min-w-[240px]">
+                                                      {day.eligible ? (
+                                                        <StatusBadge tone="good">Eligible</StatusBadge>
+                                                      ) : (
+                                                        <span className="text-xs text-red-600">{day.gateReasons?.join(' · ') || 'Not eligible'}</span>
+                                                      )}
+                                                    </td>
+                                                  </tr>
+                                                );
+                                              })}
+                                            </tbody>
+                                          </table>
                                         </div>
                                       )}
-                                    </>
-                                  )}
+                                    </div>
+                                  </div>
                                 </td>
                               </tr>
-                            )}
+                            ) : null}
                           </Fragment>
                         );
                       })}
@@ -438,204 +880,306 @@ export default function ExtensionJobsReport() {
                   </table>
                 </div>
               )}
+              {totalOperators > OPERATOR_PAGE_SIZE ? (
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-6 py-4">
+                  <p className="text-sm text-gray-600">Page {operatorPage} of {Math.max(operatorTotalPages, 1)} · {totalOperators} operators</p>
+                  <div className="flex gap-2">
+                    <button type="button" disabled={operatorPage <= 1 || loading} onClick={() => setOperatorPage((prev) => prev - 1)} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Previous</button>
+                    <button type="button" disabled={operatorPage >= operatorTotalPages || loading} onClick={() => setOperatorPage((prev) => prev + 1)} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Next</button>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
-            {/* Incentive slab reference */}
-            <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border border-amber-200 p-6 mb-8 shadow-sm">
-              <h3 className="text-lg font-bold text-gray-900 mb-2">Incentive tiers</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Tier is based on <span className="font-semibold">qualified clients that incentive day</span>.
-                A client qualifies when <span className="font-semibold">20+ job cards</span> are added.
-                Day window: 11:00 PM IST &rarr; 12:59 PM IST next day.
-              </p>
-              <div className="overflow-x-auto rounded-xl border border-amber-100 bg-white/80">
-                <table className="min-w-full text-sm">
-                  <thead><tr className="border-b border-gray-200 text-left text-gray-600"><th className="px-4 py-3 font-semibold">Qualified clients that day</th><th className="px-4 py-3 font-semibold">Incentive</th></tr></thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {INCENTIVE_SLAB_ROWS.map((r) => (<tr key={r.label} className="hover:bg-amber-50/50"><td className="px-4 py-2.5 text-gray-900">{r.label}</td><td className="px-4 py-2.5 font-medium text-gray-800">{r.value}</td></tr>))}
-                  </tbody>
-                </table>
+            <div className="mb-8 rounded-3xl border border-gray-200 bg-white shadow-sm">
+              <SectionHeading
+                title="Recent jobs"
+                description="Latest extension-added jobs inside the selected range."
+              />
+              <div className="p-3 sm:p-4">
+                {samples.length === 0 ? <p className="px-3 py-8 text-center text-sm text-gray-500">No sample rows found.</p> : <JobRowsTable jobs={samples} />}
               </div>
             </div>
 
-            {/* Incentive History — own date filters + pagination */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden mb-8">
-              <div className="px-6 py-4 border-b border-gray-100">
-                <h2 className="text-lg font-semibold text-gray-900">Incentive history</h2>
-                <p className="text-sm text-gray-500">Daily incentive records stored at 1:00 PM IST. Counting window: 11 PM &ndash; 1 PM IST. Search by operator, filter by status or date.</p>
-              </div>
-              <div className="px-6 py-4 border-b border-gray-50">
-                <div className="flex flex-wrap items-end gap-3">
+            <div className="mb-8 rounded-3xl border border-gray-200 bg-white shadow-sm">
+              <SectionHeading
+                title="Incentive records"
+                description="Pending rows can be approved or rejected before 1 PM IST. If no action is taken, they auto-approve after 1 PM and can still be rejected later if a complaint comes in."
+                action={<button type="button" onClick={applyHistoryFilters} className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-700">Refresh records</button>}
+              />
+              <div className="border-b border-gray-100 px-6 py-4">
+                <div className="grid gap-4 lg:grid-cols-[1fr_1fr_1.2fr_0.9fr_auto]">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">From</label>
-                    <input type="date" value={histStartDate} onChange={(e) => { setHistStartDate(e.target.value); setHistoryPage(1); }} className="border rounded-lg px-3 py-2 text-sm" />
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">From</label>
+                    <input type="date" value={historyFilters.startDate} onChange={(event) => setHistoryFilters((prev) => ({ ...prev, startDate: event.target.value }))} className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100" />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">To</label>
-                    <input type="date" value={histEndDate} onChange={(e) => { setHistEndDate(e.target.value); setHistoryPage(1); }} min={histStartDate} className="border rounded-lg px-3 py-2 text-sm" />
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">To</label>
+                    <input type="date" min={historyFilters.startDate} value={historyFilters.endDate} onChange={(event) => setHistoryFilters((prev) => ({ ...prev, endDate: event.target.value }))} className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100" />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Search operator</label>
-                    <input type="text" value={historySearch} onChange={(e) => { setHistorySearch(e.target.value); setHistoryPage(1); }} placeholder="e.g. sarah" className="border rounded-lg px-3 py-2 text-sm w-44" />
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Operator</label>
+                    <select value={historyFilters.operator} onChange={(event) => setHistoryFilters((prev) => ({ ...prev, operator: event.target.value }))} className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100">
+                      <option value="">All operators</option>
+                      {mergedOperatorOptions.map((operator) => (
+                        <option key={`history-${operator}`} value={operator}>{operator}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Status</label>
-                    <select value={historyStatus} onChange={(e) => { setHistoryStatus(e.target.value); setHistoryPage(1); }} className="border rounded-lg px-3 py-2 text-sm">
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Status</label>
+                    <select value={historyFilters.status} onChange={(event) => setHistoryFilters((prev) => ({ ...prev, status: event.target.value }))} className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100">
                       <option value="">All</option>
+                      <option value="pending">Pending review</option>
                       <option value="approved">Approved</option>
                       <option value="rejected">Rejected</option>
                     </select>
                   </div>
+                  <div className="flex items-end">
+                    <button type="button" onClick={() => { setHistoryPage(1); applyHistoryFilters(); }} className="w-full rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                      Apply
+                    </button>
+                  </div>
                 </div>
+                {historyError ? <p className="mt-3 text-sm text-red-600">{historyError}</p> : null}
               </div>
               {historyLoading ? (
-                <div className="p-8 text-center text-gray-500">Loading history\u2026</div>
+                <p className="px-6 py-12 text-center text-sm text-gray-500">Loading incentive records…</p>
               ) : historyData.records.length === 0 ? (
-                <div className="p-8 text-center text-gray-500">No incentive records found. Records are created daily at 1:00 PM IST (counting window: 11 PM &ndash; 1 PM IST).</div>
+                <p className="px-6 py-12 text-center text-sm text-gray-500">No incentive records found for the current filters.</p>
               ) : (
                 <>
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-sm">
                       <thead>
                         <tr className="bg-gray-50 text-left text-gray-600">
-                          <th className="px-4 py-3 font-medium">Date</th>
+                          <th className="px-4 py-3 font-medium">Day</th>
                           <th className="px-4 py-3 font-medium">Operator</th>
-                          <th className="px-4 py-3 font-medium text-right">Qualified Clients</th>
-                          <th className="px-4 py-3 font-medium text-right">Total Jobs</th>
-                          <th className="px-4 py-3 font-medium text-right">Incentive ({'\u20B9'})</th>
-                          <th className="px-4 py-3 font-medium text-center">Status</th>
-                          {isAdmin && <th className="px-4 py-3 font-medium">Action</th>}
+                          <th className="px-4 py-3 text-right font-medium">Clients</th>
+                          <th className="px-4 py-3 text-right font-medium">Jobs</th>
+                          <th className="px-4 py-3 text-right font-medium">Avg</th>
+                          <th className="px-4 py-3 text-right font-medium">Incentive</th>
+                          <th className="px-4 py-3 text-center font-medium">Status</th>
+                          {isAdmin ? <th className="px-4 py-3 font-medium">Action</th> : null}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                        {historyData.records.map((rec) => (
-                          <tr key={rec._id} className={rec.status === 'rejected' ? 'bg-red-50/50' : ''}>
-                            <td className="px-4 py-3 whitespace-nowrap text-gray-900">{rec.dateYmd}</td>
-                            <td className="px-4 py-3 text-gray-800">{rec.addedBy}</td>
-                            <td className="px-4 py-3 text-right tabular-nums font-semibold">{rec.qualifiedClients}</td>
-                            <td className="px-4 py-3 text-right tabular-nums text-gray-600">{rec.totalJobs}</td>
-                            <td className="px-4 py-3 text-right tabular-nums font-semibold text-emerald-800">
-                              {rec.status === 'rejected' ? <span className="text-red-600 line-through">{'\u20B9'}{rec.incentiveAmount}</span> : `\u20B9${rec.incentiveAmount}`}
-                            </td>
-                            <td className="px-4 py-3 text-center">
-                              {rec.status === 'approved'
-                                ? <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">Approved</span>
-                                : <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800" title={`Rejected by ${rec.rejectedBy}: ${rec.rejectionReason}`}>Rejected</span>}
-                            </td>
-                            {isAdmin && (
-                              <td className="px-4 py-3">
-                                {rec.status === 'approved' ? (
-                                  <button type="button" onClick={() => { setRejectModal(rec); setRejectReason(''); }} className="text-xs font-medium text-red-600 hover:text-red-800 px-2 py-1 rounded border border-red-200 hover:bg-red-50">Reject</button>
+                        {historyData.records.map((record) => {
+                          const clientsHandled = getHistoryClientsHandled(record);
+                          const average = getHistoryAverage(record);
+                          return (
+                            <tr key={record._id} className={record.status === 'rejected' ? 'bg-red-50/40' : record.status === 'pending' ? 'bg-amber-50/40' : ''}>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-900">{record.dateYmd}</td>
+                              <td className="px-4 py-3 font-medium text-gray-900">{record.addedBy}</td>
+                              <td className="px-4 py-3 text-right tabular-nums">{clientsHandled}</td>
+                              <td className="px-4 py-3 text-right tabular-nums">{record.totalJobs || 0}</td>
+                              <td className="px-4 py-3 text-right tabular-nums font-semibold">{formatAverage(average)}</td>
+                              <td className="px-4 py-3 text-right tabular-nums font-semibold text-emerald-700">
+                                {record.status === 'rejected' ? <span className="text-red-600 line-through">{formatCurrency(record.incentiveAmount)}</span> : formatCurrency(record.incentiveAmount)}
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                {record.status === 'approved' ? (
+                                  <StatusBadge tone="good">Approved</StatusBadge>
+                                ) : record.status === 'pending' ? (
+                                  <StatusBadge tone="warn">Pending</StatusBadge>
                                 ) : (
-                                  <div className="space-y-1">
-                                    <button type="button" onClick={() => restoreIncentive(rec._id)} className="text-xs font-medium text-emerald-600 hover:text-emerald-800 px-2 py-1 rounded border border-emerald-200 hover:bg-emerald-50">Restore</button>
-                                    <p className="text-xs text-gray-500 max-w-[200px] truncate" title={rec.rejectionReason}>{rec.rejectionReason}</p>
-                                  </div>
+                                  <StatusBadge tone="bad" title={record.rejectionReason || ''}>Rejected</StatusBadge>
                                 )}
                               </td>
-                            )}
-                          </tr>
-                        ))}
+                              {isAdmin ? (
+                                <td className="px-4 py-3">
+                                  {record.status === 'approved' ? (
+                                    <button type="button" onClick={() => { setRejectModal(record); setRejectReason(''); }} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50">
+                                      Reject
+                                    </button>
+                                  ) : record.status === 'pending' ? (
+                                    <div className="flex flex-wrap gap-2">
+                                      <button type="button" onClick={() => approveIncentive(record._id)} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50">
+                                        Approve
+                                      </button>
+                                      <button type="button" onClick={() => { setRejectModal(record); setRejectReason(''); }} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50">
+                                        Reject
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-1">
+                                      <button type="button" onClick={() => restoreIncentive(record._id)} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50">
+                                        Restore
+                                      </button>
+                                      {record.rejectionReason ? <p className="max-w-[220px] truncate text-xs text-gray-500" title={record.rejectionReason}>{record.rejectionReason}</p> : null}
+                                    </div>
+                                  )}
+                                </td>
+                              ) : null}
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
-                  <div className="px-6 py-3 border-t border-gray-100 flex items-center justify-between">
-                    <span className="text-sm text-gray-600">Page {historyPage} of {Math.max(historyData.totalPages, 1)} ({historyData.total} records)</span>
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-6 py-4">
+                    <p className="text-sm text-gray-600">Page {historyPage} of {Math.max(historyData.totalPages, 1)} · {historyData.total} records</p>
                     <div className="flex gap-2">
-                      <button type="button" disabled={historyPage <= 1} onClick={() => setHistoryPage((p) => p - 1)} className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40">Previous</button>
-                      <button type="button" disabled={historyPage >= historyData.totalPages} onClick={() => setHistoryPage((p) => p + 1)} className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40">Next</button>
+                      <button type="button" disabled={historyPage <= 1} onClick={() => setHistoryPage((prev) => prev - 1)} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Previous</button>
+                      <button type="button" disabled={historyPage >= historyData.totalPages} onClick={() => setHistoryPage((prev) => prev + 1)} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Next</button>
                     </div>
                   </div>
                 </>
               )}
             </div>
 
-            {/* Admin-only: Complaint management */}
-            {isAdmin && (
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8">
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">Record complaint (zeros that day&apos;s incentive)</h3>
-                <p className="text-sm text-gray-500 mb-4">Flags the operator + calendar day. Incentive recalculates automatically on refresh.</p>
-                <form onSubmit={submitComplaint} className="flex flex-wrap gap-3 items-end">
-                  <div><label className="block text-xs text-gray-500 mb-1">Day (IST)</label><input type="date" value={complaintDateYmd} onChange={(e) => setComplaintDateYmd(e.target.value)} className="border rounded-lg px-3 py-2 text-sm" required /></div>
-                  <div><label className="block text-xs text-gray-500 mb-1">Operator (addedBy)</label><input type="text" value={complaintAddedBy} onChange={(e) => setComplaintAddedBy(e.target.value)} placeholder="e.g. sarah@flashfirehq" className="border rounded-lg px-3 py-2 text-sm w-56 max-w-full" required /></div>
-                  <div><label className="block text-xs text-gray-500 mb-1">Client email (optional)</label><input type="text" value={complaintClientEmail} onChange={(e) => setComplaintClientEmail(e.target.value)} className="border rounded-lg px-3 py-2 text-sm w-48 max-w-full" /></div>
-                  <div className="flex-1 min-w-[200px]"><label className="block text-xs text-gray-500 mb-1">Note</label><input type="text" value={complaintNote} onChange={(e) => setComplaintNote(e.target.value)} className="border rounded-lg px-3 py-2 text-sm w-full" /></div>
-                  <button type="submit" disabled={complaintSaving} className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50">{complaintSaving ? 'Saving\u2026' : 'Log complaint'}</button>
-                </form>
-                {complaints.length > 0 && (
-                  <div className="mt-4 overflow-x-auto">
-                    <table className="min-w-full text-xs">
-                      <thead><tr className="text-left text-gray-500 border-b"><th className="py-2 pr-2">Date</th><th className="py-2 pr-2">Operator</th><th className="py-2 pr-2">Client</th><th className="py-2 pr-2">Note</th><th className="py-2" /></tr></thead>
-                      <tbody>
-                        {complaints.map((c) => (
-                          <tr key={c._id} className="border-t border-gray-100 bg-red-50/30">
-                            <td className="py-2 pr-2 whitespace-nowrap">{c.dateYmd}</td>
-                            <td className="py-2 pr-2">{c.addedBy}</td>
-                            <td className="py-2 pr-2">{c.clientEmail || '\u2014'}</td>
-                            <td className="py-2 pr-2 max-w-xs truncate" title={c.note}>{c.note || '\u2014'}</td>
-                            <td className="py-2"><button type="button" onClick={() => deleteComplaint(c._id)} className="text-red-600 hover:underline">Remove</button></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+            <div className="mb-8 rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 shadow-sm">
+              <SectionHeading
+                title="Incentive rules"
+                description="Keep this below the working tables so the page starts with action, then shows the policy."
+              />
+              <div className="grid gap-6 px-6 py-6 lg:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-2xl border border-amber-100 bg-white/80 p-5">
+                  <p className="text-sm leading-6 text-gray-700">
+                    Daily incentive is paid only when the operator handled at least <span className="font-semibold text-gray-900">20 clients</span> and the
+                    average stays at <span className="font-semibold text-gray-900">20+ jobs per client</span>.
+                    After that, the slab is decided by <span className="font-semibold text-gray-900">clients handled that day</span>.
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-amber-100 bg-white/80 p-5">
+                  <div className="space-y-2">
+                    {INCENTIVE_RULES.map((rule) => (
+                      <div key={rule.label} className="flex items-center justify-between rounded-xl border border-gray-100 bg-white px-4 py-3 text-sm">
+                        <span className="font-medium text-gray-800">{rule.label}</span>
+                        <span className="font-semibold text-gray-900">{rule.value}</span>
+                      </div>
+                    ))}
                   </div>
-                )}
+                </div>
               </div>
-            )}
-
-            {/* Recent jobs */}
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-100">
-                <h2 className="text-lg font-semibold text-gray-900">Recent jobs in range</h2>
-                <p className="text-sm text-gray-500">Up to 50 rows, newest by added time first</p>
-              </div>
-              {samples.length === 0 ? <p className="p-8 text-gray-500 text-center">No sample rows.</p> : (
-                <div className="overflow-x-auto max-h-[480px] overflow-y-auto p-2"><JobRowsTable jobs={samples} dense={false} /></div>
-              )}
             </div>
+
+            {isAdmin ? (
+              <div className="rounded-3xl border border-gray-200 bg-white shadow-sm">
+                <SectionHeading
+                  title="Complaint log"
+                  description="Record an issue for a day and operator. That day’s incentive becomes zero."
+                />
+                <div className="px-6 py-5">
+                  <form onSubmit={submitComplaint} className="grid gap-4 lg:grid-cols-[1fr_1.2fr_1.1fr_1.5fr_auto]">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Day</label>
+                      <input type="date" required value={complaintDateYmd} onChange={(event) => setComplaintDateYmd(event.target.value)} className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100" />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Operator</label>
+                      <select value={complaintAddedBy} onChange={(event) => setComplaintAddedBy(event.target.value)} required className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100">
+                        <option value="">Select operator</option>
+                        {mergedOperatorOptions.map((operator) => (
+                          <option key={`complaint-${operator}`} value={operator}>{operator}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Client email</label>
+                      <input type="text" value={complaintClientEmail} onChange={(event) => setComplaintClientEmail(event.target.value)} className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100" />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Reason</label>
+                      <input type="text" value={complaintNote} onChange={(event) => setComplaintNote(event.target.value)} className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-100" />
+                    </div>
+                    <div className="flex items-end">
+                      <button type="submit" disabled={complaintSaving} className="w-full rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+                        {complaintSaving ? 'Saving…' : 'Log complaint'}
+                      </button>
+                    </div>
+                  </form>
+
+                  {complaints.length > 0 ? (
+                    <div className="mt-5 overflow-x-auto rounded-2xl border border-gray-200">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-gray-50 text-left text-gray-600">
+                          <tr>
+                            <th className="px-4 py-3 font-medium">Day</th>
+                            <th className="px-4 py-3 font-medium">Operator</th>
+                            <th className="px-4 py-3 font-medium">Client</th>
+                            <th className="px-4 py-3 font-medium">Reason</th>
+                            <th className="px-4 py-3 font-medium">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {complaints.map((complaint) => (
+                            <tr key={complaint._id} className="bg-red-50/30">
+                              <td className="px-4 py-3 whitespace-nowrap">{complaint.dateYmd}</td>
+                              <td className="px-4 py-3 font-medium text-gray-900">{complaint.addedBy}</td>
+                              <td className="px-4 py-3 text-gray-600">{complaint.clientEmail || '—'}</td>
+                              <td className="px-4 py-3 max-w-[340px] truncate text-gray-600" title={complaint.note}>{complaint.note || '—'}</td>
+                              <td className="px-4 py-3">
+                                <button type="button" onClick={() => deleteComplaint(complaint._id)} className="text-sm font-semibold text-red-600 hover:text-red-800">
+                                  Remove
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
           </>
+        ) : (
+          <div className="rounded-3xl border border-gray-200 bg-white px-6 py-12 text-center text-sm text-gray-500 shadow-sm">
+            {loading ? 'Loading report…' : 'Unable to load report.'}
+          </div>
         )}
 
-        {/* Jobs modal */}
-        {modalAdder && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="extension-modal-title" onClick={(e) => e.target === e.currentTarget && closeModal()}>
-            <div className="bg-white rounded-2xl shadow-xl max-w-5xl w-full max-h-[90vh] flex flex-col border border-gray-200">
-              <div className="px-6 py-4 border-b border-gray-100 flex items-start justify-between gap-4">
+        {modalAdder ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={(event) => event.target === event.currentTarget && closeModal()}>
+            <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-2xl">
+              <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-6 py-5">
                 <div>
-                  <h2 id="extension-modal-title" className="text-lg font-semibold text-gray-900">Jobs by {modalAdder}</h2>
-                  <p className="text-sm text-gray-500 mt-0.5">{modalData.total} job{modalData.total !== 1 ? 's' : ''} &middot; {modalData.uniqueClients} unique client{modalData.uniqueClients !== 1 ? 's' : ''} &middot; {MODAL_PAGE_SIZE} per page</p>
+                  <h3 className="text-lg font-semibold text-gray-900">{modalAdder}</h3>
+                  <p className="mt-1 text-sm text-gray-500">{modalData.total} jobs · {modalData.uniqueClients} clients · {MODAL_PAGE_SIZE} rows per page</p>
                 </div>
-                <button type="button" onClick={closeModal} className="p-2 rounded-lg text-gray-500 hover:bg-gray-100" aria-label="Close"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
+                <button type="button" onClick={closeModal} className="rounded-lg p-2 text-gray-500 hover:bg-gray-100" aria-label="Close">
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
               </div>
-              <div className="flex-1 overflow-hidden flex flex-col px-6 py-4 min-h-0">{modalLoading ? <div className="flex justify-center py-12 text-gray-500">Loading\u2026</div> : <JobRowsTable jobs={modalData.jobs} dense={false} />}</div>
-              <div className="px-6 py-4 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
-                <span className="text-sm text-gray-600">Page {modalPage} of {Math.max(modalData.totalPages, 1)}</span>
+              <div className="min-h-0 flex-1 overflow-hidden px-6 py-4">
+                {modalLoading ? <p className="py-10 text-center text-sm text-gray-500">Loading jobs…</p> : <JobRowsTable jobs={modalData.jobs} />}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-6 py-4">
+                <p className="text-sm text-gray-600">Page {modalPage} of {Math.max(modalData.totalPages, 1)}</p>
                 <div className="flex gap-2">
-                  <button type="button" disabled={modalPage <= 1 || modalLoading} onClick={() => loadModalPage(modalPage - 1)} className="px-4 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40">Previous</button>
-                  <button type="button" disabled={modalPage >= modalData.totalPages || modalLoading || modalData.totalPages === 0} onClick={() => loadModalPage(modalPage + 1)} className="px-4 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40">Next</button>
+                  <button type="button" disabled={modalPage <= 1 || modalLoading} onClick={() => loadModalPage(modalPage - 1)} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Previous</button>
+                  <button type="button" disabled={modalPage >= modalData.totalPages || modalLoading || modalData.totalPages === 0} onClick={() => loadModalPage(modalPage + 1)} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Next</button>
                 </div>
               </div>
             </div>
           </div>
-        )}
+        ) : null}
 
-        {/* Reject modal */}
-        {rejectModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={(e) => e.target === e.currentTarget && !rejectSaving && setRejectModal(null)}>
-            <div className="bg-white rounded-2xl shadow-xl max-w-md w-full border border-gray-200 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-1">Reject incentive</h3>
-              <p className="text-sm text-gray-500 mb-4">{rejectModal.addedBy} &mdash; {rejectModal.dateYmd} &mdash; {'\u20B9'}{rejectModal.incentiveAmount}</p>
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Reason for rejection *</label>
-                <textarea value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} rows={3} placeholder="Enter reason for rejecting this incentive\u2026" className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500" required />
+        {rejectModal ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={(event) => event.target === event.currentTarget && !rejectSaving && setRejectModal(null)}>
+            <div className="w-full max-w-md rounded-3xl border border-gray-200 bg-white p-6 shadow-2xl">
+              <h3 className="text-lg font-semibold text-gray-900">Reject incentive</h3>
+              <p className="mt-1 text-sm text-gray-500">{rejectModal.addedBy} · {rejectModal.dateYmd} · {formatCurrency(rejectModal.incentiveAmount)}</p>
+              <div className="mt-4">
+                <label className="mb-1 block text-sm font-medium text-gray-700">Reason</label>
+                <textarea
+                  value={rejectReason}
+                  onChange={(event) => setRejectReason(event.target.value)}
+                  rows={4}
+                  className="w-full rounded-xl border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-100"
+                  placeholder="Explain why this record should be rejected…"
+                />
               </div>
-              <div className="flex justify-end gap-3">
-                <button type="button" onClick={() => setRejectModal(null)} disabled={rejectSaving} className="px-4 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50">Cancel</button>
-                <button type="button" onClick={rejectIncentive} disabled={rejectSaving || !rejectReason.trim()} className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white font-medium hover:bg-red-700 disabled:opacity-50">{rejectSaving ? 'Rejecting\u2026' : 'Reject incentive'}</button>
+              <div className="mt-5 flex justify-end gap-3">
+                <button type="button" onClick={() => setRejectModal(null)} disabled={rejectSaving} className="rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50">Cancel</button>
+                <button type="button" onClick={rejectIncentive} disabled={rejectSaving || !rejectReason.trim()} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+                  {rejectSaving ? 'Rejecting…' : 'Reject'}
+                </button>
               </div>
             </div>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
