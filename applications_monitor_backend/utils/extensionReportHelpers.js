@@ -39,8 +39,8 @@ export function parseJobDateTimeIST(str) {
   return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
-export function incentiveSlabFromTotalJobs(totalJobs) {
-  const n = Number(totalJobs) || 0;
+export function incentiveSlabFromClientsHandled(clientsHandled) {
+  const n = Number(clientsHandled) || 0;
   if (n < 20) return 0;
   if (n <= 29) return 50;
   if (n <= 34) return 70;
@@ -49,8 +49,51 @@ export function incentiveSlabFromTotalJobs(totalJobs) {
 }
 
 /**
- * Incentive slab based on qualified clients (clients with 20+ jobs).
+ * Incentive eligibility gate.
+ * An operator becomes eligible only when they handled 20+ clients
+ * and their average jobs per client is at least 20 for that day.
+ */
+export function isEligibleForExtensionIncentive(clientsHandled, avgJobsPerClient) {
+  const handled = Number(clientsHandled) || 0;
+  const avg = Number(avgJobsPerClient) || 0;
+  return handled >= 20 && avg >= 20;
+}
+
+/**
+ * Round to 1 decimal for stable UI/report output.
+ */
+export function roundToSingleDecimal(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 10) / 10;
+}
+
+/**
+ * Get incentive metrics from total jobs and handled clients.
+ */
+export function getExtensionIncentiveMetrics(totalJobs, clientsHandled) {
+  const jobs = Number(totalJobs) || 0;
+  const clients = Number(clientsHandled) || 0;
+  const avgJobsPerClient = clients > 0 ? roundToSingleDecimal(jobs / clients) : 0;
+  const eligible = isEligibleForExtensionIncentive(clients, avgJobsPerClient);
+  return {
+    clientsHandled: clients,
+    avgJobsPerClient,
+    eligible,
+    incentiveAmount: eligible ? incentiveSlabFromClientsHandled(clients) : 0,
+  };
+}
+
+/**
  * A client "qualifies" when the operator adds 20+ job cards for them in a day.
+ * Kept for row-level visibility even though payout now depends on avg + clients handled.
+ */
+export function countQualifiedClients(clientCounts) {
+  return (clientCounts || []).filter((c) => (c?.jobCount || 0) >= 20).length;
+}
+
+/**
+ * Backward compatible alias.
  */
 export function incentiveSlabFromQualifiedClients(qualifiedClients) {
   const n = Number(qualifiedClients) || 0;
@@ -66,6 +109,14 @@ export function incentiveSlabFromQualifiedClients(qualifiedClients) {
  */
 export function todayIstYmd() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+export function istHourNow() {
+  return Number(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour: '2-digit',
+    hour12: false,
+  }).format(new Date()));
 }
 
 /** Mongo $function body (string): parse dateAdded or createdAt to Date; must be self-contained. */

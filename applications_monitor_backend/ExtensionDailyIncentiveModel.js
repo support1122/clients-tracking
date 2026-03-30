@@ -13,17 +13,21 @@ const ExtensionDailyIncentiveSchema = new mongoose.Schema(
     addedBy: { type: String, required: true, trim: true },
     /** Number of qualified clients (20+ jobs added for them) */
     qualifiedClients: { type: Number, default: 0 },
+    /** Total unique clients handled that day */
+    clientsHandled: { type: Number, default: 0 },
     /** Total jobs added that day */
     totalJobs: { type: Number, default: 0 },
+    /** Average jobs per client for the day */
+    avgJobsPerClient: { type: Number, default: 0 },
     /** Jobs added before 1 PM IST */
     jobsBefore1pm: { type: Number, default: 0 },
     /** Incentive amount in INR (₹) */
     incentiveAmount: { type: Number, default: 0 },
-    /** Status: approved (default from cron), rejected (by admin) */
+    /** Status: pending before 1 PM IST, approved after auto/manual approval, rejected by admin */
     status: {
       type: String,
-      enum: ['approved', 'rejected'],
-      default: 'approved',
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending',
     },
     /** Admin who rejected (if rejected) */
     rejectedBy: { type: String, default: '' },

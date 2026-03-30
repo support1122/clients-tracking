@@ -75,9 +75,10 @@ import { ExtensionIncentiveComplaintModel } from './ExtensionIncentiveComplaintM
 import { ExtensionDailyIncentiveModel } from './ExtensionDailyIncentiveModel.js';
 import {
   istYmdRangeToUtcBounds,
-  incentiveSlabFromTotalJobs,
-  incentiveSlabFromQualifiedClients,
+  getExtensionIncentiveMetrics,
+  countQualifiedClients,
   todayIstYmd,
+  istHourNow,
 } from './utils/extensionReportHelpers.js';
 import multer from 'multer';
 import FormData from 'form-data';
@@ -5013,24 +5014,26 @@ function buildIncentiveDailyRows(dailyMetrics, complaintSet, clientJobCounts) {
     const addedBy = row.addedBy;
     const dateYmd = row.dateYmd;
     const totalJobs = row.totalJobs || 0;
-    const uniqueClients = row.uniqueClients || 0;
+    const clientsHandled = row.uniqueClients || 0;
     const key = `${dateYmd}|${addedBy}`;
     const hasComplaint = complaintSet.has(key);
 
-    // Count qualified clients (clients with 20+ jobs added by this operator on this day)
     const clientCounts = clientJobCounts?.get(key) || [];
-    const qualifiedClients = clientCounts.filter((c) => c.jobCount >= 20).length;
+    const qualifiedClients = countQualifiedClients(clientCounts);
+    const metrics = getExtensionIncentiveMetrics(totalJobs, clientsHandled);
 
     const gateReasons = [];
-    if (qualifiedClients === 0) gateReasons.push('No client with 20+ jobs added');
+    if (clientsHandled < 20) gateReasons.push('Handled fewer than 20 clients');
+    if (metrics.avgJobsPerClient < 20) gateReasons.push('Average jobs per client is below 20');
     if (hasComplaint) gateReasons.push('Complaint recorded for this day');
 
-    const eligible = qualifiedClients > 0 && !hasComplaint;
-    const incentive = eligible ? incentiveSlabFromQualifiedClients(qualifiedClients) : 0;
+    const eligible = metrics.eligible && !hasComplaint;
+    const incentive = eligible ? metrics.incentiveAmount : 0;
     const day = {
       dateYmd,
       totalJobs,
-      uniqueClients,
+      clientsHandled,
+      avgJobsPerClient: metrics.avgJobsPerClient,
       qualifiedClients,
       clientBreakdown: clientCounts,
       hasComplaint,
@@ -5051,9 +5054,99 @@ function buildIncentiveDailyRows(dailyMetrics, complaintSet, clientJobCounts) {
   return Array.from(byAdderMap.values()).sort((a, b) => b.totalIncentive - a.totalIncentive);
 }
 
+async function syncExtensionDailyRecordsForDate(dateYmd) {
+  if (!dateYmd) return;
+
+  const prevDay = new Date(new Date(`${dateYmd}T00:00:00.000+05:30`).getTime() - 86400000);
+  const prevYmd = prevDay.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const dayStart = new Date(`${prevYmd}T23:00:00.000+05:30`);
+  const dayEnd = new Date(`${dateYmd}T12:59:59.999+05:30`);
+  const isPastOnePmIst = istHourNow() >= 13;
+
+  const [results, complaints] = await Promise.all([
+    JobModel.aggregate([
+      ...buildExtensionJobsParsedRangeStages({ start: dayStart, end: dayEnd }),
+      {
+        $addFields: {
+          _clientKey: {
+            $cond: [
+              { $or: [{ $eq: ['$userID', null] }, { $eq: ['$userID', ''] }] },
+              null,
+              { $toLower: { $trim: { input: { $toString: '$userID' } } } },
+            ],
+          },
+        },
+      },
+      { $match: { addedBy: { $nin: [null, ''] }, _clientKey: { $nin: [null, ''] } } },
+      {
+        $group: {
+          _id: { addedBy: '$addedBy', client: '$_clientKey' },
+          jobCount: { $sum: 1 },
+        },
+      },
+      {
+        $group: {
+          _id: '$_id.addedBy',
+          clients: {
+            $push: {
+              clientEmail: '$_id.client',
+              jobCount: '$jobCount',
+              qualified: { $gte: ['$jobCount', 20] },
+            },
+          },
+          totalJobs: { $sum: '$jobCount' },
+        },
+      },
+    ]).allowDiskUse(true),
+    ExtensionIncentiveComplaintModel.find({ dateYmd }).select('addedBy').lean(),
+  ]);
+
+  const complaintOperators = new Set(complaints.map((item) => item.addedBy));
+
+  for (const row of results) {
+    const addedBy = row._id;
+    const qualifiedClients = countQualifiedClients(row.clients);
+    const clientsHandled = row.clients.length;
+    const metrics = getExtensionIncentiveMetrics(row.totalJobs, clientsHandled);
+    const hasComplaint = complaintOperators.has(addedBy);
+    const incentiveAmount = metrics.eligible && !hasComplaint ? metrics.incentiveAmount : 0;
+    const existing = await ExtensionDailyIncentiveModel.findOne({ dateYmd, addedBy }).lean();
+
+    let nextStatus = existing?.status || (isPastOnePmIst ? 'approved' : 'pending');
+    if (existing?.status !== 'rejected' && isPastOnePmIst) nextStatus = 'approved';
+    if (existing?.status !== 'approved' && existing?.status !== 'rejected' && !isPastOnePmIst) nextStatus = 'pending';
+
+    await ExtensionDailyIncentiveModel.findOneAndUpdate(
+      { dateYmd, addedBy },
+      {
+        $set: {
+          qualifiedClients,
+          clientsHandled,
+          totalJobs: row.totalJobs,
+          avgJobsPerClient: metrics.avgJobsPerClient,
+          incentiveAmount,
+          clientBreakdown: row.clients.map((client) => ({
+            clientEmail: client.clientEmail,
+            jobCount: client.jobCount,
+            qualified: client.jobCount >= 20,
+          })),
+          computedAt: new Date(),
+          status: nextStatus,
+          ...(nextStatus !== 'rejected' ? { rejectedBy: '', rejectedAt: null, rejectionReason: '' } : {}),
+        },
+        $setOnInsert: {
+          dateYmd,
+          addedBy,
+        },
+      },
+      { upsert: true, new: true }
+    );
+  }
+}
+
 const getExtensionJobsReport = async (req, res) => {
   try {
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, addedBy, page = '1', limit = '10' } = req.query;
 
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'startDate and endDate are required' });
@@ -5064,14 +5157,26 @@ const getExtensionJobsReport = async (req, res) => {
       return res.status(400).json({ error: 'Invalid date range' });
     }
 
+    const todayYmd = todayIstYmd();
+    if (String(startDate) <= todayYmd && todayYmd <= String(endDate)) {
+      await syncExtensionDailyRecordsForDate(todayYmd);
+    }
+
+    const addedByFilter = typeof addedBy === 'string' ? addedBy.trim() : '';
+    const addedByMatchStage = addedByFilter ? [{ $match: { addedBy: addedByFilter } }] : [];
+    const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+    const limitNum = Math.min(50, Math.max(1, parseInt(String(limit), 10) || 10));
+
     const [complaints, facetResult] = await Promise.all([
       ExtensionIncentiveComplaintModel.find({
         dateYmd: { $gte: String(startDate), $lte: String(endDate) },
+        ...(addedByFilter ? { addedBy: addedByFilter } : {}),
       })
         .select('dateYmd addedBy')
         .lean(),
       JobModel.aggregate([
         ...buildExtensionJobsParsedRangeStages(bounds),
+        ...addedByMatchStage,
         {
           $facet: {
             byAdderAgg: [
@@ -5270,28 +5375,68 @@ const getExtensionJobsReport = async (req, res) => {
     const incentiveTotals = new Map(incentiveByAdder.map((x) => [x.addedBy, x.totalIncentive]));
     const incentiveDailyByAdder = new Map(incentiveByAdder.map((x) => [x.addedBy, x.daily]));
 
-    const byAdderEnriched = byAdder.map((row) => ({
-      ...row,
-      incentiveTotal: incentiveTotals.get(row.addedBy) ?? 0,
-      incentiveDaily: incentiveDailyByAdder.get(row.addedBy) ?? [],
+    const byAdderEnriched = byAdder.map((row) => {
+      const metrics = getExtensionIncentiveMetrics(row.count || 0, row.uniqueClients || 0);
+      return {
+        ...row,
+        clientsHandled: row.uniqueClients || 0,
+        avgJobsPerClient: metrics.avgJobsPerClient,
+        eligibleByAverage: metrics.eligible,
+        incentiveTotal: incentiveTotals.get(row.addedBy) ?? 0,
+        incentiveDaily: incentiveDailyByAdder.get(row.addedBy) ?? [],
+      };
+    });
+
+    const totalOperators = byAdderEnriched.length;
+    const totalPages = totalOperators === 0 ? 0 : Math.ceil(totalOperators / limitNum);
+    const safePage = totalPages === 0 ? 1 : Math.min(pageNum, totalPages);
+    const pageStart = (safePage - 1) * limitNum;
+    const pagedByAdder = byAdderEnriched.slice(pageStart, pageStart + limitNum);
+    const pagedIncentiveByAdder = pagedByAdder.map((row) => ({
+      addedBy: row.addedBy,
+      totalIncentive: row.incentiveTotal ?? 0,
+      daily: row.incentiveDaily ?? [],
     }));
+    const summary = byAdderEnriched.reduce((acc, row) => {
+      acc.totalClientsHandled += row.clientsHandled || 0;
+      acc.totalIncentiveRange += row.incentiveTotal || 0;
+      acc.avgJobsPerClientSum += Number(row.avgJobsPerClient) || 0;
+      return acc;
+    }, { totalClientsHandled: 0, totalIncentiveRange: 0, avgJobsPerClientSum: 0 });
 
     // Also fetch persisted incentive records for this range
     const persistedIncentives = await ExtensionDailyIncentiveModel.find({
       dateYmd: { $gte: String(startDate), $lte: String(endDate) },
+      ...(addedByFilter ? { addedBy: addedByFilter } : {}),
     })
       .sort({ dateYmd: -1, addedBy: 1 })
       .lean();
+
+    const operatorOptions = Array.from(
+      new Set([
+        ...byAdderEnriched.map((row) => row.addedBy).filter(Boolean),
+        ...persistedIncentives.map((row) => row.addedBy).filter(Boolean),
+      ])
+    ).sort((a, b) => a.localeCompare(b));
 
     res.status(200).json({
       success: true,
       startDate,
       endDate,
+      addedBy: addedByFilter,
       totalJobs,
-      byAdder: byAdderEnriched,
-      incentiveByAdder,
+      totalOperators,
+      page: safePage,
+      pageSize: limitNum,
+      totalPages,
+      byAdder: pagedByAdder,
+      incentiveByAdder: pagedIncentiveByAdder,
       samples,
       persistedIncentives,
+      operatorOptions,
+      totalClientsHandled: summary.totalClientsHandled,
+      totalIncentiveRange: summary.totalIncentiveRange,
+      averageJobsPerClientOverall: totalOperators > 0 ? summary.avgJobsPerClientSum / totalOperators : 0,
       isAdmin: req.user?.role === 'admin',
     });
   } catch (error) {
@@ -5414,12 +5559,13 @@ const postExtensionIncentiveComplaint = async (req, res) => {
 
 const listExtensionIncentiveComplaints = async (req, res) => {
   try {
-    const { startYmd, endYmd } = req.query;
+    const { startYmd, endYmd, addedBy } = req.query;
     if (!startYmd || !endYmd) {
       return res.status(400).json({ error: 'startYmd and endYmd are required' });
     }
     const complaints = await ExtensionIncentiveComplaintModel.find({
       dateYmd: { $gte: String(startYmd), $lte: String(endYmd) },
+      ...(addedBy ? { addedBy: String(addedBy).trim() } : {}),
     })
       .sort({ dateYmd: -1, createdAt: -1 })
       .limit(500)
@@ -5474,6 +5620,35 @@ app.delete(
 );
 
 // Incentive management: reject/restore (admin only)
+app.patch(
+  '/api/admin/extension-daily-incentive/:id/approve',
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+        return res.status(400).json({ error: 'Invalid id' });
+      }
+      const doc = await ExtensionDailyIncentiveModel.findByIdAndUpdate(
+        id,
+        {
+          status: 'approved',
+          rejectedBy: '',
+          rejectedAt: null,
+          rejectionReason: '',
+        },
+        { new: true }
+      );
+      if (!doc) return res.status(404).json({ error: 'Incentive record not found' });
+      res.status(200).json({ success: true, incentive: doc });
+    } catch (error) {
+      console.error('approve incentive:', error);
+      res.status(500).json({ error: error.message || 'Server error' });
+    }
+  }
+);
+
 app.patch(
   '/api/admin/extension-daily-incentive/:id/reject',
   verifyToken,
@@ -5543,11 +5718,15 @@ app.get(
   async (req, res) => {
     try {
       const { startYmd, endYmd, addedBy, status, page = '1', limit = '50' } = req.query;
+      const todayYmd = todayIstYmd();
+      if (startYmd && endYmd && String(startYmd) <= todayYmd && todayYmd <= String(endYmd)) {
+        await syncExtensionDailyRecordsForDate(todayYmd);
+      }
       const query = {};
       if (startYmd) query.dateYmd = { ...(query.dateYmd || {}), $gte: String(startYmd) };
       if (endYmd) query.dateYmd = { ...(query.dateYmd || {}), $lte: String(endYmd) };
       if (addedBy) query.addedBy = { $regex: addedBy, $options: 'i' };
-      if (status && ['approved', 'rejected'].includes(status)) query.status = status;
+      if (status && ['pending', 'approved', 'rejected'].includes(status)) query.status = status;
 
       const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
       const limitNum = Math.min(200, Math.max(1, parseInt(String(limit), 10) || 50));
@@ -6879,17 +7058,20 @@ async function runDailyIncentiveSnapshot() {
     let upserted = 0;
     for (const row of results) {
       const addedBy = row._id;
-      const qualifiedClients = row.clients.filter((c) => c.qualified).length;
+      const qualifiedClients = countQualifiedClients(row.clients);
+      const clientsHandled = row.clients.length;
+      const metrics = getExtensionIncentiveMetrics(row.totalJobs, clientsHandled);
       const hasComplaint = complaintOperators.has(addedBy);
-      const eligible = qualifiedClients > 0 && !hasComplaint;
-      const incentiveAmount = eligible ? incentiveSlabFromQualifiedClients(qualifiedClients) : 0;
+      const incentiveAmount = metrics.eligible && !hasComplaint ? metrics.incentiveAmount : 0;
 
       await ExtensionDailyIncentiveModel.findOneAndUpdate(
         { dateYmd, addedBy },
         {
           $set: {
             qualifiedClients,
+            clientsHandled,
             totalJobs: row.totalJobs,
+            avgJobsPerClient: metrics.avgJobsPerClient,
             incentiveAmount,
             clientBreakdown: row.clients.map((c) => ({
               clientEmail: c.clientEmail,
