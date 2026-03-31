@@ -6812,6 +6812,19 @@ function formatLastJobAdderName({ addedBy, operatorName, extensionCode }) {
   return '';
 }
 
+async function postDiscordReminder(webhookUrl, message, tag) {
+  const response = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: message })
+  });
+
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => '');
+    throw new Error(`${tag} Discord webhook failed (${response.status} ${response.statusText}) ${bodyText}`.trim());
+  }
+}
+
 async function runJobCardReminder() {
   if (!DISCORD_JOBCARD_REMINDER_WEBHOOK) return;
   try {
@@ -6886,11 +6899,7 @@ async function runJobCardReminder() {
       const clientName = clientNameMap.get(email) || email;
       const capitalizedOperator = capitalizeOperatorName(operatorName);
       const message = `Hi ${capitalizedOperator}, there are ${saved} job card(s) in saved column for ${clientName}'s dashboard, please apply.`;
-      await fetch(DISCORD_JOBCARD_REMINDER_WEBHOOK, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: message })
-      });
+      await postDiscordReminder(DISCORD_JOBCARD_REMINDER_WEBHOOK, message, '[JobCard Reminder]');
       sentCount += 1;
     }
     console.log(`📬 [JobCard Reminder] Sent Discord reminders for ${sentCount} client(s) with saved jobs`);
@@ -6900,7 +6909,9 @@ async function runJobCardReminder() {
 }
 
 async function runZeroSavedJobReminder() {
-  if (!DISCORD_ZERO_SAVED_WEBHOOK) return;
+  if (!DISCORD_ZERO_SAVED_WEBHOOK) {
+    return { sentCount: 0, skipped: true, reason: 'DISCORD_ZERO_SAVED is not configured' };
+  }
   try {
     const activeUnpausedClients = await ClientModel.find(clientFilterActiveUnpaused())
       .select('email name')
@@ -6908,7 +6919,7 @@ async function runZeroSavedJobReminder() {
 
     if (activeUnpausedClients.length === 0) {
       console.log('📬 [Zero Saved Reminder] No active and unpaused clients found');
-      return;
+      return { sentCount: 0, skipped: true, reason: 'No active and unpaused clients found' };
     }
 
     const clientEmails = activeUnpausedClients.map((c) => (c.email || '').toLowerCase()).filter(Boolean);
@@ -6967,19 +6978,38 @@ async function runZeroSavedJobReminder() {
         }) || 'No job history yet';
       const message = `${clientName} have zero jobs in their dashboard please add jobs — last job cards added by: ${adderLabel}`;
 
-      await fetch(DISCORD_ZERO_SAVED_WEBHOOK, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: message })
-      });
+      await postDiscordReminder(DISCORD_ZERO_SAVED_WEBHOOK, message, '[Zero Saved Reminder]');
       sentCount += 1;
     }
 
     console.log(`📬 [Zero Saved Reminder] Sent Discord reminders for ${sentCount} client(s) with zero saved jobs`);
+    return {
+      sentCount,
+      skipped: false,
+      reason: null
+    };
   } catch (err) {
     console.error('❌ [Zero Saved Reminder] Error:', err);
+    throw err;
   }
 }
+
+app.post('/api/admin/trigger-zero-saved-reminder', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const result = await runZeroSavedJobReminder();
+    return res.status(200).json({
+      success: true,
+      message: 'Zero saved reminder trigger executed',
+      result
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to trigger zero saved reminder',
+      error: error?.message || String(error)
+    });
+  }
+});
 
 // Sync clientNumber from Client model to OnboardingJob (Client is source of truth)
 const syncClientNumbersToOnboardingJobs = async () => {
@@ -7120,11 +7150,13 @@ dbReady
         console.log('📬 [JobCard Reminder] Cron scheduled for 8:00 PM IST daily');
       }
 
-      // Zero saved jobs reminder: 1 PM IST daily (07:30 UTC)
-      if (DISCORD_ZERO_SAVED_WEBHOOK) {
-        cron.schedule('30 7 * * *', runZeroSavedJobReminder);
-        console.log('📬 [Zero Saved Reminder] Cron scheduled for 1 PM IST daily');
-      }
+      // Zero saved jobs reminder: 12:30 AM IST daily
+if (DISCORD_ZERO_SAVED_WEBHOOK) {
+  cron.schedule('30 0 * * *', runZeroSavedJobReminder, { timezone: 'Asia/Kolkata' });
+  console.log('📬 [Zero Saved Reminder] Cron scheduled for 12:30 AM IST daily');
+} else {
+  console.warn('⚠️ [Zero Saved Reminder] DISCORD_ZERO_SAVED is not set; reminders are disabled');
+}
 
       // Daily incentive snapshot: 1:00 PM IST (07:30 UTC)
       cron.schedule('30 7 * * *', runDailyIncentiveSnapshot);
