@@ -2066,17 +2066,26 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
           {(() => {
             const navUser = JSON.parse(localStorage.getItem('user') || '{}');
             const role = navUser?.role;
-            const isTeamLeadOrCsm = role === 'team_lead' || role === 'csm';
+            const hasAlsoCsmRole = Array.isArray(navUser?.roles) && navUser.roles.includes('csm');
+            const isCsmRole = role === 'csm' || hasAlsoCsmRole;
+            const isTeamLead = role === 'team_lead';
 
-            if (isTeamLeadOrCsm) {
+            if (role === 'operations_intern') {
               return (
                 <>
                   <button
-                    onClick={() => navigate('/client-onboarding')}
-                    className="px-3 py-2 text-sm bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors font-medium"
+                    onClick={() => navigate('/operators-performance-report')}
+                    className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
                   >
-                    Client Onboarding
+                    Operators Performance Report
                   </button>
+                </>
+              );
+            }
+
+            if (isTeamLead || isCsmRole) {
+              return (
+                <>
                   <button
                     onClick={() => navigate('/client-job-analysis')}
                     className="px-3 py-2 text-sm bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium"
@@ -2089,6 +2098,20 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
                   >
                     Extension Report
                   </button>
+                  <button
+                    onClick={() => navigate('/operators-performance-report')}
+                    className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium"
+                  >
+                    Operators Performance Report
+                  </button>
+                  {isCsmRole ? (
+                    <button
+                      onClick={() => navigate('/client-onboarding')}
+                      className="px-3 py-2 text-sm bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors font-medium"
+                    >
+                      Client Onboarding
+                    </button>
+                  ) : null}
                 </>
               );
             }
@@ -2101,25 +2124,6 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
                 >
                   Client Onboarding
                 </button>
-              );
-            }
-
-            if (role === 'operations_intern') {
-              return (
-                <>
-                  <button
-                    onClick={() => navigate('/client-job-analysis')}
-                    className="px-3 py-2 text-sm bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium"
-                  >
-                    Client Job Analysis
-                  </button>
-                  <button
-                    onClick={() => navigate('/extension-jobs-report')}
-                    className="px-3 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors font-medium"
-                  >
-                    Extension Report
-                  </button>
-                </>
               );
             }
 
@@ -2144,7 +2148,7 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
                 >
                   Clients
                 </button>
-                <button
+                {/* <button
                   onClick={() => {
                     setShowOperations(true);
                     setShowClients(false);
@@ -2162,7 +2166,7 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
                   className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium ${showOperations ? 'bg-green-700 text-white' : 'bg-green-600 text-white hover:bg-green-700'}`}
                 >
                   Operations Team
-                </button>
+                </button> */}
                 <button
                   onClick={() => navigate('/client-dashboard')}
                   className={`px-3 py-2 text-sm rounded-lg transition-colors font-medium bg-purple-600 text-white hover:bg-purple-700 ${['team_lead', 'operations_intern'].includes(navUser?.role) ? 'hidden' : ''}`}
@@ -2207,12 +2211,12 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
                 >
                   Manager Dashboard
                 </button>
-                <button
+                {/* <button
                   onClick={() => navigate('/job-analytics')}
                   className={`px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium ${navUser?.role === 'operations_intern' ? 'hidden' : ''}`}
                 >
                   Job Analytics
-                </button>
+                </button> */}
                 <button
                   onClick={() => navigate('/client-job-analysis')}
                   className={`px-3 py-2 text-sm bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium ${navUser?.role === 'operations_intern' ? 'hidden' : ''}`}
@@ -2225,12 +2229,12 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
                 >
                   Call Scheduler
                 </button>
-                <button
+                {/* <button
                   onClick={() => navigate('/client-preferences')}
                   className={`px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium ${navUser?.role === 'operations_intern' ? 'hidden' : ''}`}
                 >
                   Client Preferences
-                </button>
+                </button> */}
                 <button
                   onClick={() => navigate('/client-onboarding')}
                   className="px-3 py-2 text-sm bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors font-medium"

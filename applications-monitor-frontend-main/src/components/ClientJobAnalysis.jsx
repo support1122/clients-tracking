@@ -175,6 +175,10 @@ export default function ClientJobAnalysis() {
   }, [date, convertToDMY]);
 
   const handleDashboardManagerChange = async (email, dashboardTeamLeadName) => {
+    if (userRole !== 'admin') {
+      toast.error('Only admins can change Dashboard Manager');
+      return;
+    }
     setSavingDashboardManager(prev => new Set(prev).add(email));
     try {
       const resp = await fetch(`${API_BASE}/api/clients/update-dashboard-team-lead`, {
@@ -602,19 +606,25 @@ export default function ClientJobAnalysis() {
                       </span>
                     </td>
                     <td className="px-2 py-1">
-                      <select
-                        value={selectValueMatchingOption(r.dashboardTeamLeadName, dashboardSelectOptions)}
-                        onChange={(e) => handleDashboardManagerChange(r.email, e.target.value)}
-                        disabled={savingDashboardManager.has(r.email)}
-                        className="px-2 py-1 text-[11px] border border-slate-300 rounded-full bg-white shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <option value="">Not assigned</option>
-                        {dashboardSelectOptions.map((name) => (
-                          <option key={name} value={name}>
-                            {name}
-                          </option>
-                        ))}
-                      </select>
+                      {userRole === 'admin' ? (
+                        <select
+                          value={selectValueMatchingOption(r.dashboardTeamLeadName, dashboardSelectOptions)}
+                          onChange={(e) => handleDashboardManagerChange(r.email, e.target.value)}
+                          disabled={savingDashboardManager.has(r.email)}
+                          className="px-2 py-1 text-[11px] border border-slate-300 rounded-full bg-white shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <option value="">Not assigned</option>
+                          {dashboardSelectOptions.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span className="text-[11px] text-slate-700">
+                          {r.dashboardTeamLeadName || 'Not assigned'}
+                        </span>
+                      )}
                     </td>
                     <td className={`px-2 py-1 text-right font-semibold ${exceeded ? 'text-red-600' : ''}`}>
                       {totalApplications}

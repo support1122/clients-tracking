@@ -32,9 +32,13 @@ function App() {
           if (userData.role === 'admin') {
             navigate('/admin-dashboard');
           } else if (userData.role === 'operations_intern') {
-            navigate('/operations');
-          } else if (userData.role === 'onboarding_team' || userData.role === 'csm' || userData.role === 'team_lead') {
+            navigate('/operators-performance-report');
+          } else if (userData.role === 'onboarding_team') {
             navigate('/client-onboarding');
+          } else if (userData.role === 'csm' || (userData.role === 'team_lead' && Array.isArray(userData.roles) && userData.roles.includes('csm'))) {
+            navigate('/client-onboarding');
+          } else if (userData.role === 'team_lead') {
+            navigate('/client-job-analysis');
           } else {
             navigate('/monitor-clients');
           }
@@ -88,9 +92,13 @@ function App() {
     if (userData.role === 'admin') {
       navigate('/admin-dashboard');
     } else if (userData.role === 'operations_intern') {
-      navigate('/operations');
-    } else if (userData.role === 'onboarding_team' || userData.role === 'csm' || userData.role === 'team_lead') {
+      navigate('/operators-performance-report');
+    } else if (userData.role === 'onboarding_team') {
       navigate('/client-onboarding');
+    } else if (userData.role === 'csm' || (userData.role === 'team_lead' && Array.isArray(userData.roles) && userData.roles.includes('csm'))) {
+      navigate('/client-onboarding');
+    } else if (userData.role === 'team_lead') {
+      navigate('/client-job-analysis');
     } else {
       navigate('/monitor-clients');
     }
@@ -181,6 +189,10 @@ function App() {
   // ===============================
   // ✅ Team Lead / Operations Intern Layout (with Navbar)
   // ===============================
+  const hasAlsoCsmRole = Array.isArray(user.roles) && user.roles.includes('csm');
+  const isOperationsIntern = user.role === 'operations_intern';
+  const isTeamLead = user.role === 'team_lead';
+  const isCsmRole = user.role === 'csm' || hasAlsoCsmRole;
   const roleLabel =
     user.role === 'operations_intern'
       ? 'Operations Intern'
@@ -211,24 +223,43 @@ function App() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              {['team_lead', 'csm', 'onboarding_team'].includes(user.role) && (
+              {isOperationsIntern && (
+                <Link to="/operators-performance-report">
+                  <button className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm">
+                    Operators Performance Report
+                  </button>
+                </Link>
+              )}
+              {(isTeamLead || isCsmRole) && (
+                <>
+                  <Link to="/client-job-analysis">
+                    <button className="px-3 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors text-sm">
+                      Client Job Analysis
+                    </button>
+                  </Link>
+                  <Link to="/extension-jobs-report">
+                    <button className="px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm">
+                      Extension Report
+                    </button>
+                  </Link>
+                  <Link to="/operators-performance-report">
+                    <button className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm">
+                      Operators Performance Report
+                    </button>
+                  </Link>
+                </>
+              )}
+              {isCsmRole && (
                 <Link to="/client-onboarding">
                   <button className="px-3 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors text-sm">
                     Client Onboarding
                   </button>
                 </Link>
               )}
-              {['team_lead', 'csm', 'operations_intern'].includes(user.role) && (
-                <Link to="/client-job-analysis">
-                  <button className="px-3 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors text-sm">
-                    Client Job Analysis
-                  </button>
-                </Link>
-              )}
-              {['team_lead', 'csm', 'operations_intern'].includes(user.role) && (
-                <Link to="/extension-jobs-report">
-                  <button className="px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm">
-                    Extension Report
+              {user.role === 'onboarding_team' && (
+                <Link to="/client-onboarding">
+                  <button className="px-3 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors text-sm">
+                    Client Onboarding
                   </button>
                 </Link>
               )}
