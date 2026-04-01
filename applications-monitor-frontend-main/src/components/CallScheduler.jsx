@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Layout from './Layout';
 import toast from 'react-hot-toast';
-import { Link } from 'react-router-dom';
 import { sanitizePhoneNumber } from '../utils/phoneUtils';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
+const PAGE_SIZE = 5;
 
 export default function CallScheduler() {
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -12,7 +12,17 @@ export default function CallScheduler() {
   const [announceTimeText, setAnnounceTimeText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [logs, setLogs] = useState([]);
+  const [logsPage, setLogsPage] = useState(1);
+  const [logsTotalPages, setLogsTotalPages] = useState(0);
   const [loadingLogs, setLoadingLogs] = useState(false);
+  const [discordLogs, setDiscordLogs] = useState([]);
+  const [discordPage, setDiscordPage] = useState(1);
+  const [discordTotalPages, setDiscordTotalPages] = useState(0);
+  const [loadingDiscordLogs, setLoadingDiscordLogs] = useState(false);
+  const [retryingId, setRetryingId] = useState('');
+  const [triggeringReminder, setTriggeringReminder] = useState(false);
+  const [clearingLogs, setClearingLogs] = useState(false);
+  const [currentRole, setCurrentRole] = useState('');
 
   const minDateTimeLocal = useMemo(() => {
     const d = new Date(Date.now() + 60_000);
@@ -25,24 +35,57 @@ export default function CallScheduler() {
     return `${y}-${m}-${day}T${hh}:${mm}`;
   }, []);
 
-  const fetchLogs = async () => {
+  useEffect(() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      setCurrentRole(user?.role || '');
+    } catch {
+      setCurrentRole('');
+    }
+  }, []);
+
+  const fetchLogs = async (page = logsPage) => {
     setLoadingLogs(true);
     try {
       const token = localStorage.getItem('authToken');
-      const resp = await fetch(`${API_BASE}/api/calls/logs?limit=50`, {
+      const resp = await fetch(`${API_BASE}/api/calls/logs?page=${page}&limit=${PAGE_SIZE}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (!resp.ok) throw new Error('Failed to load logs');
       const data = await resp.json();
       setLogs(data.logs || []);
-    } catch (e) {
+      setLogsPage(data.page || page);
+      setLogsTotalPages(data.totalPages || 0);
+    } catch {
       toast.error('Failed to load call logs');
     } finally {
       setLoadingLogs(false);
     }
   };
 
-  useEffect(() => { fetchLogs(); }, []);
+  const fetchDiscordLogs = async (page = discordPage) => {
+    setLoadingDiscordLogs(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      const resp = await fetch(`${API_BASE}/api/admin/discord-reminder-logs?page=${page}&limit=${PAGE_SIZE}&reminderType=zero_saved`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!resp.ok) throw new Error('Failed to load discord logs');
+      const data = await resp.json();
+      setDiscordLogs(data.logs || []);
+      setDiscordPage(data.page || page);
+      setDiscordTotalPages(data.totalPages || 0);
+    } catch {
+      toast.error('Failed to load Discord reminder logs');
+    } finally {
+      setLoadingDiscordLogs(false);
+    }
+  };
+
+  useEffect(() => { fetchLogs(1); }, []);
+  useEffect(() => {
+    if (currentRole === 'admin') fetchDiscordLogs(1);
+  }, [currentRole]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -70,11 +113,71 @@ export default function CallScheduler() {
       setPhoneNumber('');
       setScheduleTime('');
       setAnnounceTimeText('');
-      fetchLogs();
+      fetchLogs(1);
     } catch (e) {
       toast.error(e.message || 'Failed to schedule');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const clearCallLogs = async () => {
+    if (!window.confirm('Clear all call history logs?')) return;
+    setClearingLogs(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      const resp = await fetch(`${API_BASE}/api/calls/logs`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to clear logs');
+      toast.success('Call logs cleared');
+      fetchLogs(1);
+    } catch (e) {
+      toast.error(e.message || 'Failed to clear logs');
+    } finally {
+      setClearingLogs(false);
+    }
+  };
+
+  const retryDiscordLog = async (id) => {
+    setRetryingId(id);
+    try {
+      const token = localStorage.getItem('authToken');
+      const resp = await fetch(`${API_BASE}/api/admin/discord-reminder-logs/${id}/retry`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Retry failed');
+      toast.success('Reminder sent again');
+      fetchDiscordLogs(discordPage);
+    } catch (e) {
+      toast.error(e.message || 'Retry failed');
+    } finally {
+      setRetryingId('');
+    }
+  };
+
+  const triggerZeroSavedNow = async () => {
+    setTriggeringReminder(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      const resp = await fetch(`${API_BASE}/api/admin/trigger-zero-saved-reminder`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.success) throw new Error(data.error || 'Trigger failed');
+      const sent = data?.result?.sentCount ?? 0;
+      const failed = data?.result?.failedCount ?? 0;
+      toast.success(`Reminder run completed: sent ${sent}, failed ${failed}`);
+      fetchDiscordLogs(1);
+    } catch (e) {
+      toast.error(e.message || 'Failed to trigger reminders');
+    } finally {
+      setTriggeringReminder(false);
     }
   };
 
@@ -133,11 +236,21 @@ export default function CallScheduler() {
         <div className="bg-white rounded-lg shadow mt-6">
           <div className="px-6 py-3 border-b border-gray-200 flex items-center">
             <h2 className="text-lg font-semibold text-gray-900">Recent Call Logs</h2>
-            <button onClick={fetchLogs} disabled={loadingLogs} className="ml-auto px-3 py-1.5 text-sm bg-gray-100 rounded border hover:bg-gray-200 disabled:opacity-50">
+            {currentRole === 'admin' ? (
+              <button
+                onClick={clearCallLogs}
+                disabled={clearingLogs}
+                className="ml-auto mr-2 px-3 py-1.5 text-sm bg-red-50 text-red-700 rounded border border-red-200 hover:bg-red-100 disabled:opacity-50"
+              >
+                {clearingLogs ? 'Clearing...' : 'Clear history'}
+              </button>
+            ) : null}
+            <button onClick={() => fetchLogs(logsPage)} disabled={loadingLogs} className="px-3 py-1.5 text-sm bg-gray-100 rounded border hover:bg-gray-200 disabled:opacity-50">
               {loadingLogs ? 'Refreshing...' : 'Refresh'}
             </button>
           </div>
-          <div className="px-6 py-4 overflow-x-auto">
+          <div className="px-6 py-4">
+            <div className="h-[320px] overflow-auto border border-gray-100 rounded-lg">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
@@ -169,8 +282,119 @@ export default function CallScheduler() {
                 )}
               </tbody>
             </table>
+            </div>
+            <div className="mt-3 flex items-center justify-between">
+              <p className="text-sm text-gray-600">Page {logsPage} of {Math.max(logsTotalPages, 1)}</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={logsPage <= 1 || loadingLogs}
+                  onClick={() => fetchLogs(logsPage - 1)}
+                  className="px-3 py-1.5 text-sm rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  disabled={logsPage >= logsTotalPages || loadingLogs || logsTotalPages === 0}
+                  onClick={() => fetchLogs(logsPage + 1)}
+                  className="px-3 py-1.5 text-sm rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           </div>
         </div>
+
+        {currentRole === 'admin' ? (
+          <div className="bg-white rounded-lg shadow mt-6">
+            <div className="px-6 py-3 border-b border-gray-200 flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-gray-900">Discord Reminder Audit (Zero Saved)</h2>
+              <button
+                onClick={triggerZeroSavedNow}
+                disabled={triggeringReminder}
+                className="ml-auto px-3 py-1.5 text-sm bg-indigo-600 text-white rounded border border-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {triggeringReminder ? 'Sending...' : 'Send Now'}
+              </button>
+              <button onClick={() => fetchDiscordLogs(discordPage)} disabled={loadingDiscordLogs} className="px-3 py-1.5 text-sm bg-gray-100 rounded border hover:bg-gray-200 disabled:opacity-50">
+                {loadingDiscordLogs ? 'Refreshing...' : 'Refresh'}
+              </button>
+            </div>
+            <div className="px-6 py-4">
+              <div className="h-[320px] overflow-auto border border-gray-100 rounded-lg">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Client</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Adder</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Status</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Time</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Error</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-gray-600">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {(discordLogs || []).map((item) => (
+                      <tr key={item._id} className="bg-white">
+                        <td className="px-4 py-2 text-sm text-gray-900">{item.clientName || item.clientEmail || '—'}</td>
+                        <td className="px-4 py-2 text-sm text-gray-700">{item.addedBy || '—'}</td>
+                        <td className="px-4 py-2 text-sm">
+                          <span className={`px-2 py-0.5 rounded-full text-xs border ${item.status === 'sent' ? 'bg-green-100 text-green-700 border-green-300' : 'bg-red-100 text-red-700 border-red-300'}`}>
+                            {item.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2 text-sm">{item.createdAt ? new Date(item.createdAt).toLocaleString() : '-'}</td>
+                        <td className="px-4 py-2 text-sm text-red-600 max-w-[280px] truncate" title={item.error || ''}>{item.error || ''}</td>
+                        <td className="px-4 py-2 text-sm">
+                          {item.status === 'failed' ? (
+                            <button
+                              type="button"
+                              onClick={() => retryDiscordLog(item._id)}
+                              disabled={retryingId === item._id}
+                              className="px-2.5 py-1 rounded border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                            >
+                              {retryingId === item._id ? 'Sending...' : 'Retry'}
+                            </button>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                    {(!discordLogs || discordLogs.length === 0) && (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-8 text-center text-gray-500">No Discord reminder logs</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-3 flex items-center justify-between">
+                <p className="text-sm text-gray-600">Page {discordPage} of {Math.max(discordTotalPages, 1)}</p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={discordPage <= 1 || loadingDiscordLogs}
+                    onClick={() => fetchDiscordLogs(discordPage - 1)}
+                    className="px-3 py-1.5 text-sm rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    disabled={discordPage >= discordTotalPages || loadingDiscordLogs || discordTotalPages === 0}
+                    onClick={() => fetchDiscordLogs(discordPage + 1)}
+                    className="px-3 py-1.5 text-sm rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </Layout>
   );

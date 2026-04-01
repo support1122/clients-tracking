@@ -73,6 +73,7 @@ import {
 import { ensureDbIndexes } from './utils/ensureDbIndexes.js';
 import { ExtensionIncentiveComplaintModel } from './ExtensionIncentiveComplaintModel.js';
 import { ExtensionDailyIncentiveModel } from './ExtensionDailyIncentiveModel.js';
+import { DiscordReminderLogModel } from './DiscordReminderLogModel.js';
 import {
   istYmdRangeToUtcBounds,
   getExtensionIncentiveMetrics,
@@ -3814,11 +3815,17 @@ async function sweepOverdueCalls(graceMs = 120000) {
 app.get('/api/calls/logs', verifyToken, async (req, res) => {
   try {
     await sweepOverdueCalls(2 * 60 * 1000);
-    const limit = Math.min(parseInt(req.query.limit || '50', 10), 200);
-    const raw = await CallLogModel.find({})
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean();
+    const pageNum = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limitNum = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '5'), 10) || 5));
+    const skip = (pageNum - 1) * limitNum;
+    const [raw, total] = await Promise.all([
+      CallLogModel.find({})
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      CallLogModel.countDocuments({}),
+    ]);
     const mapDerived = (l) => {
       const hist = Array.isArray(l.statusHistory) ? l.statusHistory : [];
       const last = hist.length ? hist[hist.length - 1] : null;
@@ -3838,9 +3845,25 @@ app.get('/api/calls/logs', verifyToken, async (req, res) => {
       return { ...l, derivedStatus: derived, lastUpdated };
     };
     const logs = raw.map(mapDerived);
-    res.json({ success: true, logs });
+    res.json({
+      success: true,
+      logs,
+      total,
+      page: pageNum,
+      pageSize: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 0,
+    });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.delete('/api/calls/logs', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    await CallLogModel.deleteMany({});
+    res.status(200).json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || 'Failed to clear logs' });
   }
 });
 
@@ -6812,16 +6835,65 @@ function formatLastJobAdderName({ addedBy, operatorName, extensionCode }) {
   return '';
 }
 
-async function postDiscordReminder(webhookUrl, message, tag) {
-  const response = await fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content: message })
-  });
+async function postDiscordReminder(webhookUrl, message, tag, options = {}) {
+  const {
+    reminderType = 'manual',
+    clientEmail = '',
+    clientName = '',
+    addedBy = '',
+    triggeredBy = '',
+    triggeredSource = 'cron',
+    metadata = {},
+  } = options || {};
 
-  if (!response.ok) {
+  const baseLog = {
+    reminderType,
+    webhookTag: tag || '',
+    message: String(message || ''),
+    clientEmail: String(clientEmail || '').toLowerCase(),
+    clientName: String(clientName || ''),
+    addedBy: String(addedBy || ''),
+    triggeredBy: String(triggeredBy || ''),
+    triggeredSource,
+    metadata,
+  };
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: message })
+    });
+
     const bodyText = await response.text().catch(() => '');
-    throw new Error(`${tag} Discord webhook failed (${response.status} ${response.statusText}) ${bodyText}`.trim());
+    if (!response.ok) {
+      await DiscordReminderLogModel.create({
+        ...baseLog,
+        status: 'failed',
+        responseStatus: response.status,
+        responseText: bodyText || '',
+        error: `${tag} Discord webhook failed (${response.status} ${response.statusText}) ${bodyText}`.trim(),
+      });
+      throw new Error(`${tag} Discord webhook failed (${response.status} ${response.statusText}) ${bodyText}`.trim());
+    }
+
+    await DiscordReminderLogModel.create({
+      ...baseLog,
+      status: 'sent',
+      responseStatus: response.status,
+      responseText: bodyText || '',
+    });
+  } catch (error) {
+    const messageText = error?.message || String(error);
+    const alreadyLogged = messageText.includes('Discord webhook failed');
+    if (!alreadyLogged) {
+      await DiscordReminderLogModel.create({
+        ...baseLog,
+        status: 'failed',
+        error: messageText,
+      });
+    }
+    throw error;
   }
 }
 
@@ -6889,6 +6961,7 @@ async function runJobCardReminder() {
     const savedMap = new Map((savedByUser || []).map((r) => [r._id.toLowerCase(), r.saved]));
 
     let sentCount = 0;
+    let failedCount = 0;
     for (const c of clients || []) {
       const email = (c.email || '').toLowerCase();
       if (!email) continue;
@@ -6899,10 +6972,22 @@ async function runJobCardReminder() {
       const clientName = clientNameMap.get(email) || email;
       const capitalizedOperator = capitalizeOperatorName(operatorName);
       const message = `Hi ${capitalizedOperator}, there are ${saved} job card(s) in saved column for ${clientName}'s dashboard, please apply.`;
-      await postDiscordReminder(DISCORD_JOBCARD_REMINDER_WEBHOOK, message, '[JobCard Reminder]');
-      sentCount += 1;
+      try {
+        await postDiscordReminder(DISCORD_JOBCARD_REMINDER_WEBHOOK, message, '[JobCard Reminder]', {
+          reminderType: 'job_card',
+          clientEmail: email,
+          clientName,
+          addedBy: capitalizedOperator,
+          triggeredSource: 'cron',
+          metadata: { savedCount: saved },
+        });
+        sentCount += 1;
+      } catch (sendErr) {
+        failedCount += 1;
+        console.error(`❌ [JobCard Reminder] Failed for ${email}:`, sendErr?.message || sendErr);
+      }
     }
-    console.log(`📬 [JobCard Reminder] Sent Discord reminders for ${sentCount} client(s) with saved jobs`);
+    console.log(`📬 [JobCard Reminder] Sent ${sentCount}, failed ${failedCount} reminders for clients with saved jobs`);
   } catch (err) {
     console.error('❌ [JobCard Reminder] Error:', err);
   }
@@ -6961,6 +7046,8 @@ async function runZeroSavedJobReminder() {
     const clientNameMap = new Map((activeUnpausedClients || []).map((c) => [c.email.toLowerCase(), c.name || c.email]));
 
     let sentCount = 0;
+    let failedCount = 0;
+    const failures = [];
     for (const client of activeUnpausedClients || []) {
       const email = (client.email || '').toLowerCase();
       if (!email) continue;
@@ -6978,13 +7065,31 @@ async function runZeroSavedJobReminder() {
         }) || 'No job history yet';
       const message = `${clientName} have zero jobs in their dashboard please add jobs — last job cards added by: ${adderLabel}`;
 
-      await postDiscordReminder(DISCORD_ZERO_SAVED_WEBHOOK, message, '[Zero Saved Reminder]');
-      sentCount += 1;
+      try {
+        await postDiscordReminder(DISCORD_ZERO_SAVED_WEBHOOK, message, '[Zero Saved Reminder]', {
+          reminderType: 'zero_saved',
+          clientEmail: email,
+          clientName,
+          addedBy: adderLabel,
+          triggeredSource: 'cron',
+          metadata: { savedCount: saved },
+        });
+        sentCount += 1;
+      } catch (sendErr) {
+        failedCount += 1;
+        failures.push({
+          clientEmail: email,
+          clientName,
+          error: sendErr?.message || String(sendErr),
+        });
+      }
     }
 
-    console.log(`📬 [Zero Saved Reminder] Sent Discord reminders for ${sentCount} client(s) with zero saved jobs`);
+    console.log(`📬 [Zero Saved Reminder] Sent ${sentCount}, failed ${failedCount} reminders for zero saved jobs`);
     return {
       sentCount,
+      failedCount,
+      failures,
       skipped: false,
       reason: null
     };
@@ -7008,6 +7113,75 @@ app.post('/api/admin/trigger-zero-saved-reminder', verifyToken, verifyAdmin, asy
       message: 'Failed to trigger zero saved reminder',
       error: error?.message || String(error)
     });
+  }
+});
+
+app.get('/api/admin/discord-reminder-logs', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const pageNum = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limitNum = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '5'), 10) || 5));
+    const skip = (pageNum - 1) * limitNum;
+    const reminderType = typeof req.query.reminderType === 'string' ? req.query.reminderType.trim() : '';
+    const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
+
+    const query = {};
+    if (['job_card', 'zero_saved', 'manual'].includes(reminderType)) query.reminderType = reminderType;
+    if (['sent', 'failed'].includes(status)) query.status = status;
+
+    const [logs, total] = await Promise.all([
+      DiscordReminderLogModel.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+      DiscordReminderLogModel.countDocuments(query),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      logs,
+      total,
+      page: pageNum,
+      pageSize: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 0,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message || 'Failed to load reminder logs' });
+  }
+});
+
+app.post('/api/admin/discord-reminder-logs/:id/retry', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ success: false, error: 'Invalid id' });
+    }
+    const row = await DiscordReminderLogModel.findById(id).lean();
+    if (!row) return res.status(404).json({ success: false, error: 'Reminder log not found' });
+
+    const webhook =
+      row.reminderType === 'job_card'
+        ? DISCORD_JOBCARD_REMINDER_WEBHOOK
+        : DISCORD_ZERO_SAVED_WEBHOOK;
+    if (!webhook) {
+      return res.status(400).json({
+        success: false,
+        error: `Webhook is not configured for ${row.reminderType}`,
+      });
+    }
+
+    await postDiscordReminder(webhook, row.message, row.webhookTag || '[Reminder Retry]', {
+      reminderType: row.reminderType || 'manual',
+      clientEmail: row.clientEmail || '',
+      clientName: row.clientName || '',
+      addedBy: row.addedBy || '',
+      triggeredBy: req.user?.email || '',
+      triggeredSource: 'retry',
+      metadata: {
+        ...(row.metadata || {}),
+        retryOf: String(row._id),
+      },
+    });
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message || 'Retry failed' });
   }
 });
 
