@@ -226,9 +226,9 @@ function App() {
                 </Link>
               )}
               {['team_lead', 'csm', 'operations_intern'].includes(user.role) && (
-                <Link to="/monitor-clients">
-                  <button className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm">
-                    Client Tracking
+                <Link to="/extension-jobs-report">
+                  <button className="px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm">
+                    Extension Report
                   </button>
                 </Link>
               )}

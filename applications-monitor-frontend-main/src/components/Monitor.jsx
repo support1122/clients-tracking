@@ -2065,8 +2065,35 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
         <div className="flex flex-wrap gap-2 justify-center">
           {(() => {
             const navUser = JSON.parse(localStorage.getItem('user') || '{}');
-            const onlyOnboarding = navUser?.role === 'onboarding_team' || navUser?.role === 'csm' || navUser?.role === 'team_lead';
-            if (onlyOnboarding) {
+            const role = navUser?.role;
+            const isTeamLeadOrCsm = role === 'team_lead' || role === 'csm';
+
+            if (isTeamLeadOrCsm) {
+              return (
+                <>
+                  <button
+                    onClick={() => navigate('/client-onboarding')}
+                    className="px-3 py-2 text-sm bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors font-medium"
+                  >
+                    Client Onboarding
+                  </button>
+                  <button
+                    onClick={() => navigate('/client-job-analysis')}
+                    className="px-3 py-2 text-sm bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium"
+                  >
+                    Client Job Analysis
+                  </button>
+                  <button
+                    onClick={() => navigate('/extension-jobs-report')}
+                    className="px-3 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors font-medium"
+                  >
+                    Extension Report
+                  </button>
+                </>
+              );
+            }
+
+            if (role === 'onboarding_team') {
               return (
                 <button
                   onClick={() => navigate('/client-onboarding')}
@@ -2076,6 +2103,26 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
                 </button>
               );
             }
+
+            if (role === 'operations_intern') {
+              return (
+                <>
+                  <button
+                    onClick={() => navigate('/client-job-analysis')}
+                    className="px-3 py-2 text-sm bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors font-medium"
+                  >
+                    Client Job Analysis
+                  </button>
+                  <button
+                    onClick={() => navigate('/extension-jobs-report')}
+                    className="px-3 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors font-medium"
+                  >
+                    Extension Report
+                  </button>
+                </>
+              );
+            }
+
             return (
               <>
                 <button
