@@ -46,11 +46,13 @@ import { Link, useLocation } from 'react-router-dom';
 export default function Layout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [userRole, setUserRole] = useState(null);
+  const [hasAlsoCsmRole, setHasAlsoCsmRole] = useState(false);
   const location = useLocation();
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
     setUserRole(user?.role || null);
+    setHasAlsoCsmRole(Array.isArray(user?.roles) && user.roles.includes('csm'));
   }, [location])
 
   const isActive = (path) => {
@@ -70,11 +72,90 @@ export default function Layout({ children }) {
     } ${hidden}`;
   };
 
+  const isOperationsIntern = userRole === 'operations_intern';
+  const isTeamLead = userRole === 'team_lead';
+  const isCsmRole = userRole === 'csm' || hasAlsoCsmRole;
+  const isRestrictedRole = isOperationsIntern || isTeamLead || isCsmRole;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-4">
       <div className="min-h-[calc(100vh-2rem)] rounded-xl border border-slate-200 bg-white shadow-lg overflow-hidden flex flex-col">
         <div className="w-full border-b border-slate-200 bg-gradient-to-r from-blue-50 via-indigo-50 to-blue-50">
           <div className="p-3 flex flex-wrap gap-2.5 justify-center">
+            {isRestrictedRole ? (
+              <>
+                {isOperationsIntern ? (
+                  <Link to="/operators-performance-report">
+                    <button className={getButtonClasses(
+                      'bg-indigo-600',
+                      'bg-indigo-700',
+                      '/operators-performance-report'
+                    )}>
+                      {isActive('/operators-performance-report') && (
+                        <span className="absolute -top-1 -right-1 w-3 h-3 bg-white rounded-full border-2 border-indigo-600"></span>
+                      )}
+                      Operators Performance Report
+                    </button>
+                  </Link>
+                ) : null}
+
+                {(isTeamLead || isCsmRole) ? (
+                  <>
+                    <Link to="/client-job-analysis">
+                      <button className={getButtonClasses(
+                        'bg-teal-600',
+                        'bg-teal-700',
+                        '/client-job-analysis'
+                      )}>
+                        {isActive('/client-job-analysis') && (
+                          <span className="absolute -top-1 -right-1 w-3 h-3 bg-white rounded-full border-2 border-teal-600"></span>
+                        )}
+                        Client Job Analysis
+                      </button>
+                    </Link>
+                    <Link to="/extension-jobs-report">
+                      <button className={getButtonClasses(
+                        'bg-orange-600',
+                        'bg-orange-700',
+                        '/extension-jobs-report'
+                      )}>
+                        {isActive('/extension-jobs-report') && (
+                          <span className="absolute -top-1 -right-1 w-3 h-3 bg-white rounded-full border-2 border-orange-600"></span>
+                        )}
+                        Extension Report
+                      </button>
+                    </Link>
+                    <Link to="/operators-performance-report">
+                      <button className={getButtonClasses(
+                        'bg-indigo-600',
+                        'bg-indigo-700',
+                        '/operators-performance-report'
+                      )}>
+                        {isActive('/operators-performance-report') && (
+                          <span className="absolute -top-1 -right-1 w-3 h-3 bg-white rounded-full border-2 border-indigo-600"></span>
+                        )}
+                        Operators Performance Report
+                      </button>
+                    </Link>
+                    {isCsmRole ? (
+                      <Link to="/client-onboarding">
+                        <button className={getButtonClasses(
+                          'bg-sky-600',
+                          'bg-sky-700',
+                          '/client-onboarding'
+                        )}>
+                          {isActive('/client-onboarding') && (
+                            <span className="absolute -top-1 -right-1 w-3 h-3 bg-white rounded-full border-2 border-sky-600"></span>
+                          )}
+                          Client Onboarding
+                        </button>
+                      </Link>
+                    ) : null}
+                  </>
+                ) : null}
+              </>
+            ) : (
+              <>
             <Link to="/monitor-clients">
               <button className={getButtonClasses(
                 'bg-blue-600',
@@ -89,14 +170,14 @@ export default function Layout({ children }) {
               </button>
             </Link>
 
-            <Link to="/operations">
+            {/* <Link to="/operations">
               <button className={getButtonClasses('bg-green-600', 'bg-green-700', '/operations')}>
                 {isActive('/operations') && (
                   <span className="absolute -top-1 -right-1 w-3 h-3 bg-white rounded-full border-2 border-green-600"></span>
                 )}
                 Operations Team
               </button>
-            </Link>
+            </Link> */}
 
             <Link to="/client-dashboard">
               <button className={getButtonClasses(
@@ -140,7 +221,7 @@ export default function Layout({ children }) {
               </button>
             </Link>
 
-            <Link to="/job-analytics">
+            {/* <Link to="/job-analytics">
               <button className={getButtonClasses(
                 'bg-indigo-600',
                 'bg-indigo-700',
@@ -152,7 +233,7 @@ export default function Layout({ children }) {
                 )}
                 Job Analytics
               </button>
-            </Link>
+            </Link> */}
 
             <Link to="/client-job-analysis">
               <button className={getButtonClasses(
@@ -182,7 +263,7 @@ export default function Layout({ children }) {
               </button>
             </Link>
 
-            <Link to="/client-preferences">
+            {/* <Link to="/client-preferences">
               <button className={getButtonClasses(
                 'bg-purple-600',
                 'bg-purple-700',
@@ -194,7 +275,7 @@ export default function Layout({ children }) {
                 )}
                 Client Preferences
               </button>
-            </Link>
+            </Link> */}
 
             <Link to="/operators-performance-report">
               <button className={getButtonClasses(
@@ -209,6 +290,8 @@ export default function Layout({ children }) {
                 Operators Performance
               </button>
             </Link>
+              </>
+            )}
           </div>
         </div>
 
