@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 const API_BASE = import.meta.env.VITE_BASE || 'https://applications-monitor-api.flashfirejobs.com';
 const IST_TIMEZONE = 'Asia/Kolkata';
 const MODAL_PAGE_SIZE = 15;
+const DAILY_MODAL_PAGE_SIZE = 5;
 const OPERATOR_PAGE_SIZE = 8;
 
 function getIstYmd(date = new Date()) {
@@ -197,6 +198,7 @@ export default function ExtensionJobsReport() {
   const [totalIncentiveRange, setTotalIncentiveRange] = useState(0);
   const [averageAcrossOperators, setAverageAcrossOperators] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [currentRole, setCurrentRole] = useState('');
 
   const [complaints, setComplaints] = useState([]);
   const [complaintDateYmd, setComplaintDateYmd] = useState(() => getIstYmd());
@@ -213,6 +215,8 @@ export default function ExtensionJobsReport() {
   const [modalPage, setModalPage] = useState(1);
   const [modalData, setModalData] = useState({ jobs: [], total: 0, totalPages: 0, uniqueClients: 0 });
   const [modalLoading, setModalLoading] = useState(false);
+  const [dailyModal, setDailyModal] = useState(null);
+  const [dailyModalPage, setDailyModalPage] = useState(1);
 
   const [historyPage, setHistoryPage] = useState(1);
   const [historyData, setHistoryData] = useState({ records: [], total: 0, totalPages: 0 });
@@ -225,11 +229,16 @@ export default function ExtensionJobsReport() {
     const savedUser = localStorage.getItem('user');
     if (!savedUser) return;
     try {
-      setIsAdmin(JSON.parse(savedUser)?.role === 'admin');
+      const role = JSON.parse(savedUser)?.role || '';
+      setCurrentRole(role);
+      setIsAdmin(role === 'admin');
     } catch {
+      setCurrentRole('');
       setIsAdmin(false);
     }
   }, []);
+
+  const showExtendedSections = isAdmin || currentRole !== 'team_lead';
 
   useEffect(() => {
     setComplaintDateYmd(reportFilters.startDate);
@@ -513,6 +522,16 @@ export default function ExtensionJobsReport() {
     setModalData({ jobs: [], total: 0, totalPages: 0, uniqueClients: 0 });
   };
 
+  const openDailyModal = (addedBy, rows = []) => {
+    setDailyModal({ addedBy, rows });
+    setDailyModalPage(1);
+  };
+
+  const closeDailyModal = () => {
+    setDailyModal(null);
+    setDailyModalPage(1);
+  };
+
   const submitComplaint = async (event) => {
     event.preventDefault();
     if (!token || !complaintDateYmd || !complaintAddedBy.trim()) return;
@@ -743,6 +762,7 @@ export default function ExtensionJobsReport() {
                         const incentiveTotal = row.incentiveTotal || 0;
                         const isEligible = average >= 20 && clientsHandled >= 20;
                         const daily = row.incentiveDaily || [];
+                        const dailyPreview = daily.slice(0, DAILY_MODAL_PAGE_SIZE);
 
                         return (
                           <Fragment key={row.addedBy}>
@@ -830,6 +850,18 @@ export default function ExtensionJobsReport() {
                                         <p className="py-6 text-sm text-gray-500">No daily incentive rows in this range.</p>
                                       ) : (
                                         <div className="overflow-x-auto rounded-xl border border-gray-200">
+                                          <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2">
+                                            <p className="text-xs text-gray-500">Showing latest {Math.min(daily.length, DAILY_MODAL_PAGE_SIZE)} of {daily.length} days</p>
+                                            {daily.length > DAILY_MODAL_PAGE_SIZE ? (
+                                              <button
+                                                type="button"
+                                                onClick={() => openDailyModal(row.addedBy, daily)}
+                                                className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-800 hover:bg-orange-100"
+                                              >
+                                                View all {daily.length} days
+                                              </button>
+                                            ) : null}
+                                          </div>
                                           <table className="min-w-full text-xs sm:text-sm">
                                             <thead className="bg-gray-50 text-left text-gray-600">
                                               <tr>
@@ -842,7 +874,7 @@ export default function ExtensionJobsReport() {
                                               </tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-100">
-                                              {daily.map((day) => {
+                                              {dailyPreview.map((day) => {
                                                 const dayHasComplaint = complaintKeySet.has(`${day.dateYmd}|${row.addedBy}`);
                                                 return (
                                                   <tr key={day.dateYmd} className={dayHasComplaint ? 'bg-red-50/70' : ''}>
@@ -891,6 +923,7 @@ export default function ExtensionJobsReport() {
               ) : null}
             </div>
 
+            {showExtendedSections ? (
             <div className="mb-8 rounded-3xl border border-gray-200 bg-white shadow-sm">
               <SectionHeading
                 title="Recent jobs"
@@ -900,7 +933,9 @@ export default function ExtensionJobsReport() {
                 {samples.length === 0 ? <p className="px-3 py-8 text-center text-sm text-gray-500">No sample rows found.</p> : <JobRowsTable jobs={samples} />}
               </div>
             </div>
+            ) : null}
 
+            {showExtendedSections ? (
             <div className="mb-8 rounded-3xl border border-gray-200 bg-white shadow-sm">
               <SectionHeading
                 title="Incentive records"
@@ -1027,7 +1062,9 @@ export default function ExtensionJobsReport() {
                 </>
               )}
             </div>
+            ) : null}
 
+            {showExtendedSections ? (
             <div className="mb-8 rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 shadow-sm">
               <SectionHeading
                 title="Incentive rules"
@@ -1053,8 +1090,9 @@ export default function ExtensionJobsReport() {
                 </div>
               </div>
             </div>
+            ) : null}
 
-            {isAdmin ? (
+            {showExtendedSections && isAdmin ? (
               <div className="rounded-3xl border border-gray-200 bg-white shadow-sm">
                 <SectionHeading
                   title="Complaint log"
@@ -1150,6 +1188,87 @@ export default function ExtensionJobsReport() {
                 <div className="flex gap-2">
                   <button type="button" disabled={modalPage <= 1 || modalLoading} onClick={() => loadModalPage(modalPage - 1)} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Previous</button>
                   <button type="button" disabled={modalPage >= modalData.totalPages || modalLoading || modalData.totalPages === 0} onClick={() => loadModalPage(modalPage + 1)} className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Next</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {dailyModal ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" onClick={(event) => event.target === event.currentTarget && closeDailyModal()}>
+            <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-2xl">
+              <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-6 py-5">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">{dailyModal.addedBy}</h3>
+                  <p className="mt-1 text-sm text-gray-500">Daily payout breakdown · {dailyModal.rows.length} days · {DAILY_MODAL_PAGE_SIZE} rows per page</p>
+                </div>
+                <button type="button" onClick={closeDailyModal} className="rounded-lg p-2 text-gray-500 hover:bg-gray-100" aria-label="Close">
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
+                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                  <table className="min-w-full text-xs sm:text-sm">
+                    <thead className="bg-gray-50 text-left text-gray-600">
+                      <tr>
+                        <th className="px-3 py-2">Day</th>
+                        <th className="px-3 py-2 text-right">Clients</th>
+                        <th className="px-3 py-2 text-right">Jobs</th>
+                        <th className="px-3 py-2 text-right">Avg</th>
+                        <th className="px-3 py-2 text-right">₹</th>
+                        <th className="px-3 py-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {dailyModal.rows
+                        .slice((dailyModalPage - 1) * DAILY_MODAL_PAGE_SIZE, dailyModalPage * DAILY_MODAL_PAGE_SIZE)
+                        .map((day) => {
+                          const dayHasComplaint = complaintKeySet.has(`${day.dateYmd}|${dailyModal.addedBy}`);
+                          return (
+                            <tr key={`${dailyModal.addedBy}-${day.dateYmd}`} className={dayHasComplaint ? 'bg-red-50/70' : ''}>
+                              <td className="px-3 py-2 whitespace-nowrap text-gray-900">
+                                {day.dateYmd}
+                                {dayHasComplaint ? <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">Complaint</span> : null}
+                              </td>
+                              <td className="px-3 py-2 text-right tabular-nums">{day.clientsHandled || 0}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">{day.totalJobs || 0}</td>
+                              <td className="px-3 py-2 text-right tabular-nums font-semibold">{formatAverage(day.avgJobsPerClient)}</td>
+                              <td className="px-3 py-2 text-right tabular-nums font-semibold">{day.incentive || 0}</td>
+                              <td className="px-3 py-2 min-w-[240px]">
+                                {day.eligible ? (
+                                  <StatusBadge tone="good">Eligible</StatusBadge>
+                                ) : (
+                                  <span className="text-xs text-red-600">{day.gateReasons?.join(' · ') || 'Not eligible'}</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-6 py-4">
+                <p className="text-sm text-gray-600">
+                  Page {dailyModalPage} of {Math.max(Math.ceil(dailyModal.rows.length / DAILY_MODAL_PAGE_SIZE), 1)}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={dailyModalPage <= 1}
+                    onClick={() => setDailyModalPage((prev) => prev - 1)}
+                    className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    disabled={dailyModalPage >= Math.ceil(dailyModal.rows.length / DAILY_MODAL_PAGE_SIZE)}
+                    onClick={() => setDailyModalPage((prev) => prev + 1)}
+                    className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+                  >
+                    Next
+                  </button>
                 </div>
               </div>
             </div>
