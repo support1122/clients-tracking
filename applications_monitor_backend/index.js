@@ -7326,8 +7326,8 @@ dbReady
 
       // Zero saved jobs reminder: 1:00 PM IST daily
 if (DISCORD_ZERO_SAVED_WEBHOOK) {
-  cron.schedule('0 13 * * *', runZeroSavedJobReminder, { timezone: 'Asia/Kolkata' });
-  console.log('📬 [Zero Saved Reminder] Cron scheduled for 1:00 PM IST daily');
+  cron.schedule('30 13 * * *', runZeroSavedJobReminder, { timezone: 'Asia/Kolkata' });
+  console.log('📬 [Zero Saved Reminder] Cron scheduled for 1:30 PM IST daily');
 } else {
   console.warn('⚠️ [Zero Saved Reminder] DISCORD_ZERO_SAVED is not set; reminders are disabled');
 }
