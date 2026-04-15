@@ -317,28 +317,32 @@ export default function ClientJobAnalysis() {
     });
   }, [rows, date, sortDir, lastAppliedByFilter, getSortingNumber]);
 
+  const isAdmin = userRole === 'admin';
+
   return (
     <Layout>
       <div className="p-6 w-full">
 
         {/* Summary from DB (dashboardtrackings): Active, Inactive, New, Paused, Unpaused */}
-        <div className="px-4 py-2 flex items-center gap-6 flex-wrap">
-          <span className="text-sm font-medium text-gray-700">
-            <span className="text-green-600 font-semibold">{summaryCounts.active}</span> Active
-          </span>
-          <span className="text-sm font-medium text-gray-700">
-            <span className="text-red-600 font-semibold">{summaryCounts.inactive}</span> Inactive
-          </span>
-          <span className="text-sm font-medium text-gray-700">
-            <span className="text-slate-600 font-semibold">{summaryCounts.new}</span> New
-          </span>
-          <span className="text-sm font-medium text-gray-700">
-            <span className="text-yellow-600 font-semibold">{summaryCounts.paused}</span> Paused
-          </span>
-          <span className="text-sm font-medium text-gray-700">
-            <span className="text-emerald-600 font-semibold">{summaryCounts.unpaused}</span> Unpaused
-          </span>
-        </div>
+        {isAdmin && (
+          <div className="px-4 py-2 flex items-center gap-6 flex-wrap">
+            <span className="text-sm font-medium text-gray-700">
+              <span className="text-green-600 font-semibold">{summaryCounts.active}</span> Active
+            </span>
+            <span className="text-sm font-medium text-gray-700">
+              <span className="text-red-600 font-semibold">{summaryCounts.inactive}</span> Inactive
+            </span>
+            <span className="text-sm font-medium text-gray-700">
+              <span className="text-slate-600 font-semibold">{summaryCounts.new}</span> New
+            </span>
+            <span className="text-sm font-medium text-gray-700">
+              <span className="text-yellow-600 font-semibold">{summaryCounts.paused}</span> Paused
+            </span>
+            <span className="text-sm font-medium text-gray-700">
+              <span className="text-emerald-600 font-semibold">{summaryCounts.unpaused}</span> Unpaused
+            </span>
+          </div>
+        )}
 
         <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-3 flex-wrap">
           <h1 className="text-xl font-semibold text-gray-900">Client Job Analysis</h1>
