@@ -178,7 +178,7 @@ const allowedOrigins = [
   "https://hq.flashfirejobs.com",
   "https://portal.flashfirejobs.com",
   "https://portal.flashfirejobs.com/",
-  "https://portal.flashfirejobs.com"
+  "https://portal.flashfirejobs.com",
 
   // Additional origins from environment variable
   ...(process.env.ALLOWED_ORIGINS?.split(",") || [])
