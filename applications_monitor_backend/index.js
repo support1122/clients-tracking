@@ -176,6 +176,9 @@ const allowedOrigins = [
   "https://flashfire-dashboard.vercel.app",
   "https://hq.flashfirejobs.com/",
   "https://hq.flashfirejobs.com",
+  "https://portal.flashfirejobs.com",
+  "https://portal.flashfirejobs.com/",
+  "https://portal.flashfirejobs.com",
 
   // Additional origins from environment variable
   ...(process.env.ALLOWED_ORIGINS?.split(",") || [])
