@@ -1207,10 +1207,24 @@ export async function getNonResolvedIssues(req, res) {
               $map: {
                 input: { $ifNull: ['$comments.resolvedByTagged', []] },
                 as: 'r',
-                in: { $toLower: '$$r.email' }
+                in: {
+                  $toLower: {
+                    $trim: { input: { $ifNull: ['$$r.email', ''] } }
+                  }
+                }
               }
             },
-            taggedEmails: { $map: { input: { $ifNull: ['$comments.taggedUserIds', []] }, as: 't', in: { $toLower: '$$t' } } }
+            taggedEmails: {
+              $map: {
+                input: { $ifNull: ['$comments.taggedUserIds', []] },
+                as: 't',
+                in: {
+                  $toLower: {
+                    $trim: { input: { $ifNull: ['$$t', ''] } }
+                  }
+                }
+              }
+            }
           }
         },
         {
@@ -1219,7 +1233,12 @@ export async function getNonResolvedIssues(req, res) {
               $filter: {
                 input: '$taggedEmails',
                 as: 'e',
-                cond: { $not: { $in: ['$$e', '$resolvedEmails'] } }
+                cond: {
+                  $and: [
+                    { $ne: ['$$e', ''] },
+                    { $not: { $in: ['$$e', '$resolvedEmails'] } }
+                  ]
+                }
               }
             }
           }
@@ -1302,20 +1321,39 @@ export async function getNonResolvedIssues(req, res) {
     const pipeline = [
       { $match: { 'comments.0': { $exists: true } } },
       { $unwind: '$comments' },
-      { $match: { 'comments.taggedUserIds': userEmail } },
       {
         $addFields: {
+          taggedEmails: {
+            $map: {
+              input: { $ifNull: ['$comments.taggedUserIds', []] },
+              as: 't',
+              in: {
+                $toLower: {
+                  $trim: { input: { $ifNull: ['$$t', ''] } }
+                }
+              }
+            }
+          },
           resolvedEmails: {
             $map: {
               input: { $ifNull: ['$comments.resolvedByTagged', []] },
               as: 'r',
-              in: { $toLower: '$$r.email' }
+              in: {
+                $toLower: {
+                  $trim: { input: { $ifNull: ['$$r.email', ''] } }
+                }
+              }
             }
           }
         }
       },
-      { $addFields: { userResolved: { $in: [userEmail, '$resolvedEmails'] } } },
-      { $match: { userResolved: false } },
+      {
+        $addFields: {
+          userTagged: { $in: [userEmail, '$taggedEmails'] },
+          userResolved: { $in: [userEmail, '$resolvedEmails'] }
+        }
+      },
+      { $match: { userTagged: true, userResolved: false } },
       {
         $project: {
           jobId: '$_id',
