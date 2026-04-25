@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import Layout from './Layout';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { Pencil, X, Loader2 } from 'lucide-react';
+import { Pencil, X, Loader2, Play, Square, CheckCircle2, XCircle, Clock, SkipForward } from 'lucide-react';
 import {
   buildDashboardManagerSelectOptions,
   selectValueMatchingOption
@@ -10,6 +10,10 @@ import {
 import { fetchDashboardManagerFullNames } from '../utils/fetchDashboardManagerCatalog.js';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
+// Scraper backend (local internal tool at DASH/scraper). Configurable via
+// VITE_SCRAPER_BASE — default is the dev port. The Scrape column is
+// admin-only and talks to this service directly.
+const SCRAPER_BASE = import.meta.env.VITE_SCRAPER_BASE || 'http://localhost:8092';
 const AUTH_HEADERS = () => ({
   'Content-Type': 'application/json',
   Authorization: `Bearer ${localStorage.getItem('authToken') || ''}`
@@ -44,6 +48,17 @@ export default function ClientJobAnalysis() {
   const [savingDashboardManager, setSavingDashboardManager] = useState(new Set());
   const [savingStatus, setSavingStatus] = useState(new Set());
   const [savingPause, setSavingPause] = useState(new Set());
+  // Scrape-column state: per-email count inputs, in-flight set, inline errors.
+  const [scrapeCountByEmail, setScrapeCountByEmail] = useState({});
+  const [scrapingEmails, setScrapingEmails] = useState(new Set());
+  const [scrapeErrors, setScrapeErrors] = useState({});
+  const scrapeSaveTimers = useRef({}); // email → debounce timeout
+  // Batch ("Scrape All") modal state.
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchConfirmEligible, setBatchConfirmEligible] = useState([]); // [{email,name,count}]
+  const [batchStarting, setBatchStarting] = useState(false);
+  const [batchState, setBatchState] = useState(null); // snapshot from SSE
+  const batchSourceRef = useRef(null); // active EventSource
   const [userRole, setUserRole] = useState(null);
   const [lastAppliedByFilter, setLastAppliedByFilter] = useState(''); // Filter for "Last applied by" operator name
   const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
@@ -139,6 +154,49 @@ export default function ClientJobAnalysis() {
   useEffect(() => {
     fetchAnalysis();
   }, [fetchAnalysis]);
+
+  // One-time bulk load of saved scrape counts from the scraper service.
+  // Failures here never block the page — the Scrape column just starts
+  // with empty inputs, and the admin can still type + save.
+  useEffect(() => {
+    if (userRole !== 'admin') return;
+    (async () => {
+      try {
+        const res = await fetch(`${SCRAPER_BASE}/api/client-settings`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const map = {};
+        (data.settings || []).forEach((s) => {
+          if (s.email && Number.isInteger(s.scrapeCount)) {
+            map[s.email] = String(s.scrapeCount);
+          }
+        });
+        if (Object.keys(map).length) {
+          setScrapeCountByEmail((prev) => ({ ...map, ...prev }));
+        }
+      } catch {
+        /* scraper offline is not fatal */
+      }
+    })();
+  }, [userRole]);
+
+  // persistScrapeCount: debounced PUT to the scraper service. Runs on each
+  // input change; skips invalid values silently (the visible validation
+  // happens when the admin hits Scrape).
+  const persistScrapeCount = useCallback((email, rawValue) => {
+    const n = Number.parseInt(rawValue, 10);
+    if (!Number.isInteger(n) || n < 1 || n > 50) return;
+    clearTimeout(scrapeSaveTimers.current[email]);
+    scrapeSaveTimers.current[email] = setTimeout(() => {
+      fetch(`${SCRAPER_BASE}/api/client-settings/${encodeURIComponent(email)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scrapeCount: n }),
+      }).catch(() => {
+        /* best-effort; admin can still click Scrape */
+      });
+    }, 400);
+  }, []);
 
   const dashboardSelectOptions = useMemo(
     () =>
@@ -276,6 +334,185 @@ export default function ClientJobAnalysis() {
     }
   };
 
+  // handleScrape: admin-only. Kicks the internal JR scraper (DASH/scraper
+  // service on SCRAPER_BASE) to find + push `count` jobs into the client's
+  // dashboard. Pipeline runs fire-and-forget on that service; completion +
+  // error alerts already go to the ops Discord channel.
+  const handleScrape = useCallback(async (email, clientName, count) => {
+    if (userRole !== 'admin') {
+      toast.error('Only admins can trigger scrapes');
+      return;
+    }
+    const n = Number.parseInt(count, 10);
+    if (!Number.isInteger(n) || n < 1 || n > 50) {
+      setScrapeErrors(prev => ({ ...prev, [email]: 'Count 1–50' }));
+      return;
+    }
+    setScrapeErrors(prev => {
+      const next = { ...prev };
+      delete next[email];
+      return next;
+    });
+    setScrapingEmails(prev => new Set(prev).add(email));
+    try {
+      const res = await fetch(`${SCRAPER_BASE}/api/runs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientEmail: email,
+          clientName: clientName || '',
+          count: n,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.run?.id) {
+        const shortMsg = data?.error === 'COOLDOWN'
+          ? 'JR cooldown active'
+          : data?.error === 'RESUME_MISSING'
+            ? 'No resume attached'
+            : (data?.error || data?.message || `HTTP ${res.status}`);
+        setScrapeErrors(prev => ({ ...prev, [email]: shortMsg }));
+        toast.error(`Scrape: ${shortMsg}`);
+        return;
+      }
+      toast.success(`Scrape started (${n}) — Discord will post on completion`);
+    } catch (e) {
+      // Most common here: scraper service not reachable (CORS / offline).
+      const shortMsg = /failed to fetch/i.test(e.message) ? 'Scraper offline' : e.message;
+      setScrapeErrors(prev => ({ ...prev, [email]: shortMsg }));
+      toast.error(`Scrape: ${shortMsg}`);
+    } finally {
+      setScrapingEmails(prev => {
+        const next = new Set(prev);
+        next.delete(email);
+        return next;
+      });
+    }
+  }, [userRole]);
+
+  // --- Scrape All (batch) handlers --------------------------------------
+
+  // Eligible for batch: Active + Unpaused (NOT new, NOT paused). Inactive
+  // clients are always skipped; new/paused are skipped per admin's ask.
+  const computeBatchEligible = useCallback(() => {
+    const eligibleRows = rows.filter((r) => {
+      const status = String(r.status || 'active').toLowerCase();
+      if (status !== 'active') return false;
+      if (r.isPaused) return false;
+      if (r.onboardingPhase) return false;
+      return true;
+    });
+    return eligibleRows.map((r) => {
+      const raw = scrapeCountByEmail[r.email];
+      const parsed = Number.parseInt(raw, 10);
+      const count = Number.isInteger(parsed) && parsed >= 1 && parsed <= 50 ? parsed : 10;
+      return { email: r.email, name: r.name || '', count };
+    });
+  }, [rows, scrapeCountByEmail]);
+
+  const openBatchConfirm = useCallback(() => {
+    if (userRole !== 'admin') {
+      toast.error('Admins only');
+      return;
+    }
+    const eligible = computeBatchEligible();
+    if (!eligible.length) {
+      toast.error('No eligible (Active + Unpaused) clients');
+      return;
+    }
+    setBatchConfirmEligible(eligible);
+    setBatchState(null);
+    setBatchModalOpen(true);
+  }, [userRole, computeBatchEligible]);
+
+  const updateBatchItemCount = useCallback((email, value) => {
+    const n = Number.parseInt(value, 10);
+    setBatchConfirmEligible((prev) =>
+      prev.map((item) =>
+        item.email === email
+          ? { ...item, count: Number.isInteger(n) && n >= 1 && n <= 50 ? n : item.count }
+          : item,
+      ),
+    );
+  }, []);
+
+  const subscribeBatch = useCallback((batchId) => {
+    // Close any stale source first.
+    if (batchSourceRef.current) {
+      try { batchSourceRef.current.close(); } catch { /* ignore */ }
+      batchSourceRef.current = null;
+    }
+    const es = new EventSource(`${SCRAPER_BASE}/api/batches/${batchId}/events`);
+    batchSourceRef.current = es;
+    es.addEventListener('state', (evt) => {
+      try {
+        const state = JSON.parse(evt.data);
+        setBatchState(state);
+        if (state.status && state.status !== 'running') {
+          try { es.close(); } catch { /* ignore */ }
+          if (batchSourceRef.current === es) batchSourceRef.current = null;
+        }
+      } catch {
+        /* ignore malformed events */
+      }
+    });
+    es.onerror = () => {
+      // Browser auto-retries; nothing to do unless we closed already.
+    };
+  }, []);
+
+  const startBatch = useCallback(async () => {
+    if (userRole !== 'admin' || !batchConfirmEligible.length) return;
+    setBatchStarting(true);
+    try {
+      const res = await fetch(`${SCRAPER_BASE}/api/batches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clients: batchConfirmEligible }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.batch?.id) {
+        toast.error(data?.message || data?.error || `Start failed (HTTP ${res.status})`);
+        return;
+      }
+      setBatchState(data.batch);
+      subscribeBatch(data.batch.id);
+    } catch (e) {
+      toast.error(/failed to fetch/i.test(e.message) ? 'Scraper offline' : e.message);
+    } finally {
+      setBatchStarting(false);
+    }
+  }, [userRole, batchConfirmEligible, subscribeBatch]);
+
+  const cancelBatch = useCallback(async () => {
+    if (!batchState?.id) return;
+    try {
+      await fetch(`${SCRAPER_BASE}/api/batches/${batchState.id}/cancel`, { method: 'POST' });
+    } catch { /* ignore */ }
+  }, [batchState]);
+
+  const closeBatchModal = useCallback(() => {
+    if (batchSourceRef.current) {
+      try { batchSourceRef.current.close(); } catch { /* ignore */ }
+      batchSourceRef.current = null;
+    }
+    setBatchModalOpen(false);
+    setBatchState(null);
+    setBatchConfirmEligible([]);
+    // Refresh the table — pushed jobs should now appear in counters.
+    fetchAnalysis(date);
+  }, [date, fetchAnalysis]);
+
+  // Cleanup SSE on unmount.
+  useEffect(() => {
+    return () => {
+      if (batchSourceRef.current) {
+        try { batchSourceRef.current.close(); } catch { /* ignore */ }
+        batchSourceRef.current = null;
+      }
+    };
+  }, []);
+
   // Memoize unique operator names for filter dropdown
   const uniqueOperatorNames = useMemo(
     () => [...new Set(rows.map(r => r.lastAppliedOperatorName).filter(Boolean))].sort(),
@@ -367,6 +604,16 @@ export default function ClientJobAnalysis() {
             >
               {loading ? 'Loading...' : 'Refresh'}
             </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={openBatchConfirm}
+                title="Scrape N jobs for every Active + Unpaused client (sequentially)."
+                className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-md hover:bg-indigo-700 inline-flex items-center gap-1.5"
+              >
+                <Play className="w-3.5 h-3.5" /> Scrape All
+              </button>
+            )}
             {/* <Link to="/call-scheduler" className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">Call Scheduler</Link> */}
           </div>
         </div>
@@ -419,6 +666,11 @@ export default function ClientJobAnalysis() {
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Offer</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Rejected</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Removed</th>
+                {isAdmin && (
+                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700" title="Admin: trigger internal JR scraper for this client. Completion + errors post to Discord.">
+                    Scrape
+                  </th>
+                )}
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                   <div className="flex items-center gap-2">
                     <span className="font-semibold">
@@ -454,12 +706,15 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    {isAdmin && (
+                      <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-20" /></td>
+                    )}
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-10 ml-auto" /></td>
                   </tr>
                 ))
               ) : processedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="px-2 py-8 text-center text-gray-500 text-sm">
+                  <td colSpan={isAdmin ? 16 : 15} className="px-2 py-8 text-center text-gray-500 text-sm">
                     {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
                   </td>
                 </tr>
@@ -640,6 +895,50 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1 text-right">{r.offer}</td>
                     <td className="px-2 py-1 text-right">{r.rejected}</td>
                     <td className="px-2 py-1 text-right">{r.removed}</td>
+                    {isAdmin && (
+                      <td className="px-2 py-1">
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={1}
+                            max={50}
+                            value={scrapeCountByEmail[r.email] ?? ''}
+                            onChange={(e) => {
+                              setScrapeCountByEmail(prev => ({ ...prev, [r.email]: e.target.value }));
+                              persistScrapeCount(r.email, e.target.value);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const n = scrapeCountByEmail[r.email] ?? '';
+                                handleScrape(r.email, r.name, n);
+                              }
+                            }}
+                            disabled={scrapingEmails.has(r.email)}
+                            placeholder="N"
+                            title="Number of jobs to scrape (1–50)"
+                            className="w-12 px-1.5 py-0.5 text-[11px] border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleScrape(r.email, r.name, scrapeCountByEmail[r.email] ?? '')}
+                            disabled={scrapingEmails.has(r.email)}
+                            title="Trigger internal JR scraper. Completion + errors post to Discord."
+                            className="px-2 py-0.5 text-[11px] bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 inline-flex items-center gap-1"
+                          >
+                            {scrapingEmails.has(r.email) ? (
+                              <><Loader2 className="w-3 h-3 animate-spin" /> …</>
+                            ) : (
+                              'Scrape'
+                            )}
+                          </button>
+                        </div>
+                        {scrapeErrors[r.email] && (
+                          <div className="text-[10px] text-red-600 mt-0.5 truncate max-w-[160px]" title={scrapeErrors[r.email]}>
+                            ⚠ {scrapeErrors[r.email]}
+                          </div>
+                        )}
+                      </td>
+                    )}
                     <td className={`px-2 py-1 font-semibold text-right ${date ? (r.appliedOnDate > 0 ? 'text-blue-800' : 'text-slate-500') : ''}`}>
                       {date ? (
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] ${r.appliedOnDate > 0 ? 'bg-blue-100 border border-blue-300' : 'bg-slate-100 border border-slate-300 text-slate-600'}`}>
@@ -656,6 +955,206 @@ export default function ClientJobAnalysis() {
           </table>
         </div>
       </div>
+
+      {/* Scrape All — confirm + progress + summary modal */}
+      {batchModalOpen && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target !== e.currentTarget) return;
+            // Allow dismiss only when not running, or when the run has terminated.
+            const running = batchState?.status === 'running';
+            if (!running) closeBatchModal();
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">
+                  {batchState
+                    ? batchState.status === 'running'
+                      ? 'Scrape All — running'
+                      : batchState.status === 'cancelled'
+                        ? 'Scrape All — cancelled'
+                        : 'Scrape All — done'
+                    : 'Scrape All — confirm'}
+                </h2>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {batchState
+                    ? 'Jobs are pushed directly to each client\'s dashboard. Discord receives per-run alerts.'
+                    : 'Runs sequentially across every Active + Unpaused client. Inactive / New / Paused are skipped.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeBatchModal}
+                disabled={batchState?.status === 'running'}
+                title={batchState?.status === 'running' ? 'Cancel the run first' : 'Close'}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              {!batchState ? (
+                // --- Confirmation view ---
+                <div className="space-y-3">
+                  <div className="text-sm text-gray-700">
+                    <span className="font-semibold">{batchConfirmEligible.length}</span> eligible client(s).
+                    Total jobs requested:{' '}
+                    <span className="font-semibold">
+                      {batchConfirmEligible.reduce((a, b) => a + (b.count || 0), 0)}
+                    </span>
+                  </div>
+                  <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-[50vh] overflow-y-auto">
+                    {batchConfirmEligible.map((c) => (
+                      <div key={c.email} className="flex items-center justify-between px-3 py-2 text-xs">
+                        <div className="flex-1 min-w-0 pr-3">
+                          <div className="font-medium text-gray-900 truncate">{c.name || c.email}</div>
+                          <div className="text-[10px] text-gray-500 truncate">{c.email}</div>
+                        </div>
+                        <input
+                          type="number"
+                          min={1}
+                          max={50}
+                          value={c.count}
+                          onChange={(e) => updateBatchItemCount(c.email, e.target.value)}
+                          className="w-16 px-2 py-1 text-xs border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                // --- Progress / summary view ---
+                <div className="space-y-4">
+                  {/* Overall bar + totals */}
+                  {(() => {
+                    const t = batchState.totals || {};
+                    const total = t.clients || 0;
+                    const doneish = (t.done || 0) + (t.failed || 0) + (t.aborted || 0) + (t.skipped || 0);
+                    const pct = total ? Math.round((doneish / total) * 100) : 0;
+                    return (
+                      <div>
+                        <div className="flex items-center justify-between text-xs font-medium text-gray-700 mb-1.5">
+                          <span>
+                            {doneish} / {total} clients
+                            {batchState.status === 'running' && batchState.currentIndex >= 0 && batchState.items[batchState.currentIndex] ? (
+                              <span className="ml-2 text-indigo-600">
+                                · running: {batchState.items[batchState.currentIndex].name || batchState.items[batchState.currentIndex].email}
+                              </span>
+                            ) : null}
+                          </span>
+                          <span>{pct}%</span>
+                        </div>
+                        <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all duration-500 ${
+                              batchState.status === 'running' ? 'bg-indigo-500' : batchState.status === 'cancelled' ? 'bg-yellow-500' : 'bg-green-500'
+                            }`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-3 text-[11px]">
+                          <span className="text-green-700">✓ {t.done || 0} done</span>
+                          <span className="text-red-600">✗ {t.failed || 0} failed</span>
+                          <span className="text-gray-500">⊘ {t.aborted || 0} aborted</span>
+                          <span className="text-gray-500">↷ {t.skipped || 0} skipped</span>
+                          <span className="text-indigo-700 ml-auto">
+                            {t.jobsPushed || 0} / {t.jobsRequested || 0} jobs pushed
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Per-client list */}
+                  <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-[45vh] overflow-y-auto">
+                    {(batchState.items || []).map((item, i) => {
+                      const isCurrent = batchState.status === 'running' && batchState.currentIndex === i;
+                      const icon =
+                        item.status === 'done' ? <CheckCircle2 className="w-4 h-4 text-green-600" /> :
+                        item.status === 'failed' ? <XCircle className="w-4 h-4 text-red-600" /> :
+                        item.status === 'aborted' ? <Square className="w-4 h-4 text-gray-500" /> :
+                        item.status === 'skipped' ? <SkipForward className="w-4 h-4 text-gray-400" /> :
+                        item.status === 'running' ? <Loader2 className="w-4 h-4 text-indigo-500 animate-spin" /> :
+                        <Clock className="w-4 h-4 text-gray-400" />;
+                      return (
+                        <div key={item.email + i} className={`flex items-center px-3 py-2 text-xs ${isCurrent ? 'bg-indigo-50' : ''}`}>
+                          <div className="w-6 flex-shrink-0">{icon}</div>
+                          <div className="flex-1 min-w-0 pr-2">
+                            <div className="font-medium text-gray-900 truncate">{item.name || item.email}</div>
+                            <div className="text-[10px] text-gray-500 truncate">
+                              {item.email}
+                              {item.relaxationRounds > 0 ? (
+                                <span className="ml-1.5 text-amber-600">· filter relaxations auto-declined ({item.relaxationRounds})</span>
+                              ) : null}
+                              {item.phase && item.status === 'running' ? (
+                                <span className="ml-1.5 text-indigo-600">· {item.phase}</span>
+                              ) : null}
+                            </div>
+                            {item.error ? (
+                              <div className="text-[10px] text-red-600 truncate" title={item.error}>
+                                {item.errorCode ? `${item.errorCode} — ` : ''}{item.error}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="text-right text-[11px]">
+                            <div className="font-semibold">
+                              {item.pushed != null ? item.pushed : '—'} / {item.requested || item.count}
+                            </div>
+                            <div className="text-[10px] text-gray-500">jobs pushed</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-3">
+              {!batchState ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={closeBatchModal}
+                    className="px-4 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startBatch}
+                    disabled={batchStarting || batchConfirmEligible.length === 0}
+                    className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 inline-flex items-center gap-2"
+                  >
+                    {batchStarting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                    Start — {batchConfirmEligible.length} client(s)
+                  </button>
+                </>
+              ) : batchState.status === 'running' ? (
+                <button
+                  type="button"
+                  onClick={cancelBatch}
+                  className="px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-lg hover:bg-red-700 inline-flex items-center gap-2"
+                >
+                  <Square className="w-4 h-4" /> Cancel batch
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={closeBatchModal}
+                  className="px-4 py-2 text-sm font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-700"
+                >
+                  Close
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit Client Number Modal */}
       {editingClientNumberEmail && (
