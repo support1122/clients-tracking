@@ -6945,8 +6945,21 @@ async function postDiscordReminder(webhookUrl, message, tag, options = {}) {
   }
 }
 
+// Sunday is a no-send day for both reminders (job card saved-column +
+// zero-saved). Operations team requested no Discord pings on weekends so
+// recruiters aren't pinged outside working days. Asia/Kolkata governs
+// "Sunday" — the cron itself runs in IST already.
+function isISTSunday(now = new Date()) {
+  const day = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' }).format(now);
+  return day === 'Sun';
+}
+
 async function runJobCardReminder() {
   if (!DISCORD_JOBCARD_REMINDER_WEBHOOK) return;
+  if (isISTSunday()) {
+    console.log('[JobCard Reminder] Skipping — Sunday (Asia/Kolkata)');
+    return;
+  }
   try {
     const savedByUser = await JobModel.aggregate([
       { $match: { currentStatus: { $regex: /save/i } } },
@@ -7044,6 +7057,10 @@ async function runJobCardReminder() {
 async function runZeroSavedJobReminder() {
   if (!DISCORD_ZERO_SAVED_WEBHOOK) {
     return { sentCount: 0, skipped: true, reason: 'DISCORD_ZERO_SAVED is not configured' };
+  }
+  if (isISTSunday()) {
+    console.log('[Zero Saved Reminder] Skipping — Sunday (Asia/Kolkata)');
+    return { sentCount: 0, skipped: true, reason: 'Sunday no-send day (Asia/Kolkata)' };
   }
   try {
     const activeUnpausedClients = await ClientModel.find(clientFilterActiveUnpaused())
