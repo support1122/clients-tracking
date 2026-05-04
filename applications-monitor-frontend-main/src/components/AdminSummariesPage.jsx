@@ -209,6 +209,11 @@ export default function AdminSummariesPage() {
                         </div>
                     )}
 
+                    {/* GLOBAL OPENAI KEY — single source of truth for every
+                        client. Extension falls back to this when a profile
+                        doesn't carry its own override. */}
+                    <GlobalOpenaiKeyCard />
+
                     {/* STAT TILES */}
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-5">
                         <StatTile label="Clients" value={totals.clients} />
@@ -379,10 +384,6 @@ function ClientDetailPane({ row, onProfileChanged }) {
     const [saving, setSaving] = useState(false);
     const [targetDraft, setTargetDraft] = useState('');
     const [savingTarget, setSavingTarget] = useState(false);
-    const [openaiKeyDraft, setOpenaiKeyDraft] = useState('');
-    const [savingKey, setSavingKey] = useState(false);
-    const [keyVisible, setKeyVisible] = useState(false);
-
     function showMessage(text, kind = 'ok') {
         setMessage({ text, kind });
         setError(null);
@@ -407,7 +408,6 @@ function ClientDetailPane({ row, onProfileChanged }) {
             setProfile(p);
             setDraft(p?.aiSummary || '');
             setTargetDraft(p?.targetJobCount != null ? String(p.targetJobCount) : '');
-            setOpenaiKeyDraft(p?.openaiKey || '');
         } catch (e) {
             showError(`Network error: ${e.message}`);
         } finally {
@@ -523,39 +523,9 @@ function ClientDetailPane({ row, onProfileChanged }) {
         }
     }
 
-    async function saveOpenaiKey() {
-        const v = openaiKeyDraft.trim();
-        if (v && !/^sk-/.test(v)) {
-            showError('OpenAI key must start with "sk-".');
-            return;
-        }
-        setSavingKey(true);
-        try {
-            const r = await fetch(`${DASHBOARD_BASE}/update-openai-key`, {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ email: row.email, openaiKey: v }),
-            });
-            const body = await r.json().catch(() => null);
-            if (!r.ok || body?.success === false) {
-                showError(`Save key failed: ${body?.message || `HTTP ${r.status}`}`);
-                return;
-            }
-            showMessage(v ? 'OpenAI key saved.' : 'OpenAI key cleared.');
-            await loadProfile();
-            onProfileChanged?.();
-        } catch (e) {
-            showError(`Network error: ${e.message}`);
-        } finally {
-            setSavingKey(false);
-        }
-    }
-
     const summary = profile?.aiSummary || '';
     const meta = profile?.aiSummaryMeta || {};
     const builtAt = meta.builtAt ? new Date(meta.builtAt).toLocaleString() : null;
-    const savedKey = profile?.openaiKey || '';
-    const keyMasked = savedKey ? `${savedKey.slice(0, 7)}…${savedKey.slice(-4)}` : '';
 
     return (
         <div className="space-y-5">
@@ -720,67 +690,9 @@ function ClientDetailPane({ row, onProfileChanged }) {
                 </div>
             </div>
 
-            {/* OpenAI API key (per-client). The JR-direct extension's SW
-                fetches this on /extension/clientLogin and uses it for the
-                auto-judge call. Plain text per ops decision. */}
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-start justify-between gap-3">
-                    <div>
-                        <h3 className="font-bold text-slate-900 flex items-center gap-2">
-                            🔑 OpenAI API key
-                        </h3>
-                        <div className="text-xs mt-1">
-                            {savedKey ? (
-                                <span className="text-emerald-700">Saved · <code className="font-mono bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">{keyMasked}</code></span>
-                            ) : (
-                                <span className="text-amber-700">No key on file. Auto-judge in the extension will be disabled until set.</span>
-                            )}
-                        </div>
-                        <p className="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
-                            Used by the JR-direct extension's service worker to call <code>api.openai.com</code> for relevance judging. Model is locked to <code>gpt-4o-mini</code>. Stored plain-text on this client's profile and delivered to the extension on login.
-                        </p>
-                    </div>
-                </div>
-                <div className="p-5">
-                    <div className="flex gap-2">
-                        <div className="flex-1 relative">
-                            <input
-                                type={keyVisible ? 'text' : 'password'}
-                                value={openaiKeyDraft}
-                                onChange={(e) => setOpenaiKeyDraft(e.target.value)}
-                                placeholder="sk-…"
-                                spellCheck={false}
-                                autoComplete="off"
-                                className="w-full px-3 py-2 pr-20 border border-slate-300 rounded-lg bg-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400"
-                            />
-                            <button
-                                type="button"
-                                onClick={() => setKeyVisible((v) => !v)}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-700 px-2 py-1"
-                            >
-                                {keyVisible ? 'Hide' : 'Show'}
-                            </button>
-                        </div>
-                        <button
-                            onClick={saveOpenaiKey}
-                            disabled={savingKey}
-                            className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50"
-                        >
-                            {savingKey ? 'Saving…' : (savedKey ? 'Update key' : 'Save key')}
-                        </button>
-                        {savedKey && (
-                            <button
-                                onClick={() => { setOpenaiKeyDraft(''); }}
-                                disabled={savingKey}
-                                className="px-3 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium hover:bg-slate-300 disabled:opacity-50"
-                                title="Clear input — click Update key to remove the saved key."
-                            >
-                                Clear
-                            </button>
-                        )}
-                    </div>
-                </div>
-            </div>
+            {/* Per-client OpenAI key card removed — single global key now lives
+                in the page header. Extension falls back to that global key
+                whenever a client profile doesn't carry its own. */}
         </div>
     );
 }
@@ -909,6 +821,170 @@ function StatTile({ label, value, sub, accent = 'slate' }) {
             <div className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">{label}</div>
             <div className={`text-2xl font-bold mt-1 ${accentMap[accent]}`}>{value}</div>
             {sub && <div className="text-xs text-slate-500 mt-0.5">{sub}</div>}
+        </div>
+    );
+}
+
+// -------------------------------------------------------------------------
+// Global OpenAI key card — single source of truth for every client. Replaces
+// the per-client key UI we used to render in the right pane. Backend exposes
+// it at /admin/global-openai-key. Extension's clientLogin / get-profile
+// overlay this onto profile.openaiKey when the per-client key is empty.
+// -------------------------------------------------------------------------
+
+function GlobalOpenaiKeyCard() {
+    const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [keyState, setKeyState] = useState(null); // { keySet, maskedKey, updatedAt, updatedBy }
+    const [draft, setDraft] = useState('');
+    const [visible, setVisible] = useState(false);
+    const [msg, setMsg] = useState(null); // { kind, text }
+
+    async function load() {
+        setLoading(true);
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/admin/global-openai-key`);
+            const body = await r.json().catch(() => null);
+            if (r.ok && body?.success) {
+                setKeyState({
+                    keySet: !!body.keySet,
+                    maskedKey: body.maskedKey || '',
+                    updatedAt: body.updatedAt || null,
+                    updatedBy: body.updatedBy || '',
+                });
+            } else {
+                setMsg({ kind: 'error', text: `Load failed: ${body?.message || `HTTP ${r.status}`}` });
+            }
+        } catch (e) {
+            setMsg({ kind: 'error', text: `Network error: ${e.message}` });
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    useEffect(() => { load(); }, []);
+
+    async function save() {
+        const v = draft.trim();
+        if (v && !/^sk-/.test(v)) {
+            setMsg({ kind: 'error', text: 'OpenAI key must start with "sk-".' });
+            return;
+        }
+        setSaving(true);
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/admin/global-openai-key`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ openaiKey: v }),
+            });
+            const body = await r.json().catch(() => null);
+            if (!r.ok || !body?.success) {
+                setMsg({ kind: 'error', text: `Save failed: ${body?.message || `HTTP ${r.status}`}` });
+                return;
+            }
+            setKeyState({
+                keySet: !!body.keySet,
+                maskedKey: body.maskedKey || '',
+                updatedAt: body.updatedAt || null,
+                updatedBy: body.updatedBy || '',
+            });
+            setDraft('');
+            setMsg({ kind: 'ok', text: v ? 'Global OpenAI key saved — all clients now use this key.' : 'Global OpenAI key cleared.' });
+            setTimeout(() => setMsg(null), 4500);
+        } catch (e) {
+            setMsg({ kind: 'error', text: `Network error: ${e.message}` });
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    return (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-gradient-to-r from-slate-900 to-slate-800 text-white p-4">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex-1 min-w-[260px]">
+                    <h3 className="font-bold flex items-center gap-2 text-sm">
+                        🔑 Global OpenAI API key
+                        {loading && <span className="text-xs text-slate-400 font-normal">loading…</span>}
+                    </h3>
+                    <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                        One key powers every client. Used by the JR-Direct extension's auto-judge calls and by AI Summary builds whenever the backend env var <code>OPENAI_API_KEY</code> is unset. Per-client overrides are no longer required — set it once here.
+                    </p>
+                    <div className="text-xs mt-2">
+                        {keyState?.keySet ? (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono">
+                                ✓ active · {keyState.maskedKey}
+                            </span>
+                        ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/40">
+                                ⚠ no key set — extension auto-judge will be disabled
+                            </span>
+                        )}
+                        {keyState?.updatedAt && (
+                            <span className="ml-2 text-slate-400">
+                                updated {new Date(keyState.updatedAt).toLocaleString()}
+                            </span>
+                        )}
+                    </div>
+                </div>
+                <div className="flex gap-2 items-stretch flex-1 min-w-[280px]">
+                    <div className="flex-1 relative">
+                        <input
+                            type={visible ? 'text' : 'password'}
+                            value={draft}
+                            onChange={(e) => setDraft(e.target.value)}
+                            placeholder={keyState?.keySet ? 'Enter new key to rotate…' : 'sk-…'}
+                            spellCheck={false}
+                            autoComplete="off"
+                            className="w-full px-3 py-2 pr-16 border border-slate-600 rounded-lg bg-slate-950 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400 placeholder:text-slate-500"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setVisible((v) => !v)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-white px-2 py-1"
+                        >
+                            {visible ? 'Hide' : 'Show'}
+                        </button>
+                    </div>
+                    <button
+                        onClick={save}
+                        disabled={saving || !draft.trim()}
+                        className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-900 rounded-lg text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                        {saving ? 'Saving…' : (keyState?.keySet ? 'Rotate' : 'Save')}
+                    </button>
+                    {keyState?.keySet && (
+                        <button
+                            onClick={async () => {
+                                if (!window.confirm('Clear the global OpenAI key? Extension auto-judge will stop working until a new key is set.')) return;
+                                setDraft('');
+                                setSaving(true);
+                                try {
+                                    const r = await fetch(`${DASHBOARD_BASE}/admin/global-openai-key`, {
+                                        method: 'POST',
+                                        headers: { 'content-type': 'application/json' },
+                                        body: JSON.stringify({ openaiKey: '' }),
+                                    });
+                                    const body = await r.json().catch(() => null);
+                                    if (r.ok && body?.success) {
+                                        setKeyState({ keySet: false, maskedKey: '', updatedAt: body.updatedAt, updatedBy: '' });
+                                        setMsg({ kind: 'ok', text: 'Global OpenAI key cleared.' });
+                                        setTimeout(() => setMsg(null), 4500);
+                                    }
+                                } finally { setSaving(false); }
+                            }}
+                            disabled={saving}
+                            className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-sm font-medium disabled:opacity-50"
+                        >
+                            Clear
+                        </button>
+                    )}
+                </div>
+            </div>
+            {msg && (
+                <div className={`mt-3 px-3 py-2 rounded text-xs ${msg.kind === 'error' ? 'bg-red-500/20 text-red-200 border border-red-500/40' : 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40'}`}>
+                    {msg.text}
+                </div>
+            )}
         </div>
     );
 }
