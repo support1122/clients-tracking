@@ -4183,6 +4183,73 @@ app.post('/api/clients/update-operations-name', updateClientOperationsName);
 app.post('/api/clients/update-dashboard-team-lead', updateClientDashboardTeamLead);
 app.put('/api/clients/:email/upgrade-plan', verifyToken, upgradeClientPlan);
 app.post('/api/clients/:email/add-addon', verifyToken, addClientAddon);
+app.post('/api/clients/payment-emails/bulk', verifyToken, async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    if (rows.length === 0) return res.status(400).json({ error: 'rows required' });
+    if (rows.length > 5000) return res.status(400).json({ error: 'too many rows (max 5000)' });
+
+    const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
+    const nowStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+
+    let updated = 0;
+    let unchanged = 0;
+    let notFound = 0;
+    let failed = 0;
+    const notFoundEmails = [];
+    const failedEmails = [];
+
+    for (const r of rows) {
+      const assignedEmail = String(r?.assignedEmail || '').toLowerCase().trim();
+      const paymentEmail = String(r?.paymentEmail || '').toLowerCase().trim();
+      if (!assignedEmail || !emailRx.test(assignedEmail)) { failed++; failedEmails.push(assignedEmail || '(blank)'); continue; }
+      if (paymentEmail && !emailRx.test(paymentEmail)) { failed++; failedEmails.push(assignedEmail); continue; }
+      try {
+        const existing = await ClientModel.findOne({ email: assignedEmail }).select('paymentEmail').lean();
+        if (!existing) { notFound++; notFoundEmails.push(assignedEmail); continue; }
+        const prev = (existing.paymentEmail || '').trim();
+        if (prev === paymentEmail) { unchanged++; continue; }
+        await ClientModel.updateOne(
+          { email: assignedEmail },
+          { $set: { paymentEmail, updatedAt: nowStr } }
+        );
+        let actionType = null;
+        if (!prev && paymentEmail) actionType = 'payment_email_set';
+        else if (prev && !paymentEmail) actionType = 'payment_email_cleared';
+        else if (prev && paymentEmail && prev !== paymentEmail) actionType = 'payment_email_updated';
+        if (actionType) {
+          try {
+            await addClientActionToJobMoveHistory(assignedEmail, actionType, {
+              ...movedBy,
+              meta: { from: prev || null, to: paymentEmail || null, source: 'bulk_import' }
+            });
+          } catch (e) {
+            console.error('[bulk payment-email] move history append failed:', e?.message);
+          }
+        }
+        updated++;
+      } catch (e) {
+        console.error(`[bulk payment-email] ${assignedEmail} error:`, e?.message);
+        failed++;
+        failedEmails.push(assignedEmail);
+      }
+    }
+
+    res.json({
+      total: rows.length,
+      updated,
+      unchanged,
+      notFound,
+      failed,
+      notFoundEmails,
+      failedEmails
+    });
+  } catch (e) {
+    console.error('[bulk payment-email] error:', e?.message);
+    res.status(500).json({ error: 'bulk import failed' });
+  }
+});
 app.put('/api/clients/:email/payment-email', verifyToken, async (req, res) => {
   try {
     const emailLower = String(req.params.email || '').toLowerCase().trim();

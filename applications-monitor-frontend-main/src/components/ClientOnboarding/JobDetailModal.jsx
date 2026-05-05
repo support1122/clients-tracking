@@ -233,10 +233,9 @@ const JobDetailModal = React.memo(({
   }, [selectedJob?.clientEmail, paymentEmailDraft, fetchEmailLogs]);
 
   useEffect(() => {
-    const inAppIp = selectedJob?.status === 'applications_in_progress' || selectedJob?.status === 'completed';
-    if (inAppIp && selectedJob?.clientEmail) fetchEmailLogs(selectedJob.clientEmail);
-    else setEmailLogs([]);
-  }, [selectedJob?.clientEmail, selectedJob?.status, fetchEmailLogs]);
+    if (selectedJob?.clientEmail) fetchEmailLogs(selectedJob.clientEmail);
+    else { setEmailLogs([]); setPaymentEmailValue(''); setPaymentEmailDraft(''); }
+  }, [selectedJob?.clientEmail, fetchEmailLogs]);
 
   // Fetch operator managed users
   const fetchOperatorManagedUsers = useCallback(async (operatorEmail) => {
@@ -877,6 +876,36 @@ const JobDetailModal = React.memo(({
                     <span className="block text-xs font-semibold text-gray-700 mb-1">Assigned Email</span>
                     <span className="text-sm text-gray-900 font-mono bg-white px-2 py-1 rounded border border-gray-200">{selectedJob.clientEmail}</span>
                   </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="block text-xs font-semibold text-gray-700">Payment Email</span>
+                      {!editingPaymentEmail && (
+                        <button type="button" onClick={() => setEditingPaymentEmail(true)} className="text-[11px] text-orange-600 hover:text-orange-700 font-semibold flex items-center gap-1"><Pencil className="w-3 h-3" /> {paymentEmailValue ? 'Edit' : 'Add'}</button>
+                      )}
+                    </div>
+                    {editingPaymentEmail ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="email"
+                          value={paymentEmailDraft}
+                          onChange={(e) => setPaymentEmailDraft(e.target.value)}
+                          placeholder="payer@example.com"
+                          className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-orange-500 focus:border-orange-500 bg-white"
+                          autoFocus
+                        />
+                        <button type="button" disabled={savingPaymentEmail} onClick={savePaymentEmail} className="px-3 py-1.5 text-xs bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50 font-semibold">
+                          {savingPaymentEmail ? '…' : 'Save'}
+                        </button>
+                        <button type="button" disabled={savingPaymentEmail} onClick={() => { setPaymentEmailDraft(paymentEmailValue); setEditingPaymentEmail(false); }} className="px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded-md border border-gray-200">Cancel</button>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-gray-900 font-mono bg-white px-2 py-1 rounded border border-gray-200">
+                        {paymentEmailValue || <span className="text-gray-400 italic font-sans text-xs">not set — milestone emails will be skipped</span>}
+                      </div>
+                    )}
+                    <p className="text-[10px] text-gray-500 mt-1">Recipient for resume-ready, applications-started, and 30/50/75/100% milestone emails.</p>
+                  </div>
                 </div>
               </div>
 
@@ -972,35 +1001,6 @@ const JobDetailModal = React.memo(({
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center gap-2"><Mail className="w-3 h-3" /> Email Activity</h3>
                     <button type="button" onClick={() => fetchEmailLogs(selectedJob.clientEmail)} className="text-[10px] text-gray-500 hover:text-orange-600 font-medium">Refresh</button>
-                  </div>
-
-                  {/* Payment Email editor */}
-                  <div className="bg-white border border-gray-200 rounded-lg p-3 mb-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Payment Email</label>
-                      {!editingPaymentEmail && (
-                        <button type="button" onClick={() => setEditingPaymentEmail(true)} className="text-[10px] text-orange-600 hover:text-orange-700 font-semibold flex items-center gap-1"><Pencil className="w-3 h-3" /> {paymentEmailValue ? 'Edit' : 'Add'}</button>
-                      )}
-                    </div>
-                    {editingPaymentEmail ? (
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="email"
-                          value={paymentEmailDraft}
-                          onChange={(e) => setPaymentEmailDraft(e.target.value)}
-                          placeholder="payer@example.com"
-                          className="flex-1 px-2 py-1.5 text-xs border border-gray-300 rounded-md focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
-                        />
-                        <button type="button" disabled={savingPaymentEmail} onClick={savePaymentEmail} className="px-3 py-1.5 text-xs bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50 font-semibold">
-                          {savingPaymentEmail ? '…' : 'Save'}
-                        </button>
-                        <button type="button" disabled={savingPaymentEmail} onClick={() => { setPaymentEmailDraft(paymentEmailValue); setEditingPaymentEmail(false); }} className="px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded-md border border-gray-200">Cancel</button>
-                      </div>
-                    ) : (
-                      <div className="text-xs text-gray-700 font-mono bg-gray-50 px-2 py-1.5 rounded">
-                        {paymentEmailValue || <span className="text-gray-400 italic">not set — milestone emails will be skipped</span>}
-                      </div>
-                    )}
                   </div>
 
                   {emailLogsLoading ? (
