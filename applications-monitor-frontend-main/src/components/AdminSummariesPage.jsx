@@ -581,8 +581,11 @@ function ClientDetailPane({ row, onProfileChanged }) {
                 </div>
             )}
 
-            {/* Operator breakdown — who worked this client */}
-            <OperatorBreakdownCard rows={row.operatorBreakdown || []} ext={row.extensionStats} />
+            {/* Today numbers — scraped / LinkedIn skip / added (server-truth) */}
+            <OperatorBreakdownCard clientEmail={row.email} />
+
+            {/* Day-by-day performance — last 14 days */}
+            <DailyHistoryCard clientEmail={row.email} />
 
             {/* Push history */}
             <PushHistoryCard history={history} loading={historyLoading} onReload={loadHistory} />
@@ -1032,54 +1035,261 @@ function OperatorActivityTable() {
 
 // -------------------------------------------------------------------------
 // OperatorBreakdownCard: per-client list of which operator pushed how many,
-// captured how many, and skipped how many LinkedIn-only postings.
+// captured how many, rejected how many, and saved how many. Each operator
+// row carries an English breakdown sentence plus structured chips.
 // -------------------------------------------------------------------------
-function OperatorBreakdownCard({ rows, ext }) {
-    if ((!rows || rows.length === 0) && !ext) return null;
-    const list = rows || [];
+function fmtRelative(date) {
+    if (!date) return '';
+    const d = new Date(date);
+    const diffMs = Date.now() - d.getTime();
+    const min = Math.round(diffMs / 60000);
+    if (min < 1) return 'just now';
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.round(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    const day = Math.round(hr / 24);
+    if (day < 30) return `${day}d ago`;
+    return d.toLocaleDateString();
+}
+
+// Today-only summary card. Shows the three numbers operators actually need
+// at a glance: how many we scraped via extension today, how many LinkedIn-
+// only postings were skipped, how many landed in the client's dashboard.
+// Pulls from /extension/today-stats so the source matches the extension's
+// own TODAY tile.
+function OperatorBreakdownCard({ clientEmail }) {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState(null);
+
+    useEffect(() => {
+        if (!clientEmail) return;
+        let cancelled = false;
+        const load = async () => {
+            try {
+                const r = await fetch(`${DASHBOARD_BASE}/extension/today-stats?clientEmail=${encodeURIComponent(clientEmail)}&_=${Date.now()}`, { cache: 'no-store' });
+                const body = await r.json().catch(() => null);
+                if (cancelled) return;
+                if (r.ok && body?.success) { setData(body); setErr(null); }
+                else setErr(body?.message || `HTTP ${r.status}`);
+            } catch (e) { if (!cancelled) setErr(e.message); }
+        };
+        load();
+        // Poll every 8s while card mounted so SCRAPED ticks live as
+        // operators scroll (extension heartbeats every ~500ms during scroll).
+        const t = setInterval(load, 8000);
+        return () => { cancelled = true; clearInterval(t); };
+    }, [clientEmail]);
+
+    const t = data?.today || {};
+    const scraped = t.captures || 0;
+    const linkedin = t.linkedinSkipped || 0;
+    const pushed = data?.pushed ?? 0;
+    const operators = data?.operators || [];
+
     return (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-            <h3 className="font-bold text-slate-900 flex items-center gap-2 mb-1">
-                👥 Operator breakdown
-                <span className="text-[10px] font-normal text-slate-500">who worked this client</span>
-            </h3>
-            {ext && (
-                <div className="text-xs text-slate-600 mb-3 flex flex-wrap gap-3">
-                    <span className="px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-800">
-                        Captures: <strong>{ext.captures}</strong>
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-800">
-                        LinkedIn skipped: <strong>{ext.linkedinSkipped}</strong>
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800">
-                        Pushed (ext): <strong>{ext.pushed}</strong>
-                    </span>
-                    {ext.lastSessionAt && (
-                        <span className="text-slate-500">
-                            last session {new Date(ext.lastSessionAt).toLocaleString()}
-                        </span>
-                    )}
-                </div>
-            )}
-            {list.length === 0 ? (
-                <div className="text-xs text-slate-400 italic">No ops jobs pushed yet for this client.</div>
-            ) : (
-                <div className="space-y-1.5">
-                    {list.map((o) => (
-                        <div key={o.operator} className="flex items-center gap-3 text-sm">
-                            <div className="flex-1 min-w-0 truncate font-medium text-slate-800">{o.operator}</div>
-                            <div className="text-xs text-emerald-700 font-bold w-10 text-right">{o.todayCount} today</div>
-                            <div className="text-xs text-slate-700 font-mono w-16 text-right">{o.count} total</div>
-                            {(o.captures > 0 || o.linkedinSkipped > 0) && (
-                                <div className="text-[10px] text-slate-500 flex gap-1.5">
-                                    {o.captures > 0 && <span title="captures">📥{o.captures}</span>}
-                                    {o.linkedinSkipped > 0 && <span title="LinkedIn skipped">🚫{o.linkedinSkipped}</span>}
+            <div className="flex items-center justify-between mb-3">
+                <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                    📊 Today
+                    <span className="text-[10px] font-normal text-slate-500">resets at 00:00 IST</span>
+                </h3>
+                {err && <span className="text-[10px] text-red-600">{err}</span>}
+            </div>
+
+            {/* Client-wide totals */}
+            <div className="grid grid-cols-3 gap-3 mb-4">
+                <TodayTile label="Scraped" value={scraped} color="blue" />
+                <TodayTile label="LinkedIn skip" value={linkedin} color="rose" />
+                <TodayTile label="Added" value={pushed} color="emerald" />
+            </div>
+
+            {/* Per-operator breakdown — one row per code (or per name if pre-v1.15) */}
+            {operators.length > 0 ? (
+                <div className="space-y-2">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Per operator</div>
+                    {operators.map((o, idx) => (
+                        <div key={`${o.extensionCode || 'noc'}-${o.operatorName}-${idx}`} className="rounded-lg border border-slate-100 bg-slate-50/40 p-3">
+                            <div className="flex items-center justify-between gap-3 mb-2">
+                                <div className="min-w-0 flex-1">
+                                    <div className="font-semibold text-slate-900 text-sm truncate">{o.operatorName}</div>
+                                    <div className="text-[10px] font-mono text-slate-500">
+                                        {o.extensionCode ? `code · ${o.extensionCode}` : 'no code'}
+                                        {o.sessions > 0 && <span> · {o.sessions} session{o.sessions === 1 ? '' : 's'}</span>}
+                                    </div>
                                 </div>
-                            )}
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                                <TodayTile label="Scraped" value={o.captures} color="blue" tight />
+                                <TodayTile label="LinkedIn skip" value={o.linkedinSkipped} color="rose" tight />
+                                <TodayTile label="Added" value={o.pushed} color="emerald" tight />
+                            </div>
                         </div>
                     ))}
                 </div>
+            ) : (
+                <div className="text-xs text-slate-400 italic">No operator activity recorded today.</div>
             )}
+        </div>
+    );
+}
+
+// -------------------------------------------------------------------------
+// DailyHistoryCard: per-day rollup for a single client over the last N days.
+// Lets the operator "go back to" a particular day and see the full breakdown
+// for that client. Pulls from /extension/daily-history. Compact strip view
+// + click-to-expand details for the selected day.
+// -------------------------------------------------------------------------
+function DailyHistoryCard({ clientEmail }) {
+    const [days, setDays] = useState([]);
+    const [windowDays, setWindowDays] = useState(14);
+    const [loading, setLoading] = useState(false);
+    const [err, setErr] = useState(null);
+    const [selectedDate, setSelectedDate] = useState(null);
+
+    useEffect(() => {
+        if (!clientEmail) return;
+        let cancelled = false;
+        const load = async () => {
+            setLoading(true); setErr(null);
+            try {
+                const r = await fetch(
+                    `${DASHBOARD_BASE}/extension/daily-history?clientEmail=${encodeURIComponent(clientEmail)}&days=${windowDays}&_=${Date.now()}`,
+                    { cache: 'no-store' },
+                );
+                const body = await r.json().catch(() => null);
+                if (cancelled) return;
+                if (r.ok && body?.success) {
+                    setDays(body.days || []);
+                    setSelectedDate((d) => d || body.days?.[0]?.date || null);
+                } else setErr(body?.message || `HTTP ${r.status}`);
+            } catch (e) { if (!cancelled) setErr(e.message); }
+            finally { if (!cancelled) setLoading(false); }
+        };
+        load();
+        return () => { cancelled = true; };
+    }, [clientEmail, windowDays]);
+
+    // Reset selected day when client switches.
+    useEffect(() => { setSelectedDate(null); }, [clientEmail]);
+
+    const selected = useMemo(
+        () => days.find((d) => d.date === selectedDate) || days[0] || null,
+        [days, selectedDate],
+    );
+    const max = Math.max(1, ...days.map((d) => d.captures || 0));
+
+    return (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+                <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                    📅 Day-by-day performance
+                    <span className="text-[10px] font-normal text-slate-500">click any day for details</span>
+                </h3>
+                <div className="flex gap-1">
+                    {[7, 14, 30].map((n) => (
+                        <button
+                            key={n}
+                            onClick={() => setWindowDays(n)}
+                            className={`px-2 py-0.5 rounded text-[11px] font-medium border ${
+                                windowDays === n
+                                    ? 'bg-slate-900 text-white border-slate-900'
+                                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                            }`}
+                        >{n}d</button>
+                    ))}
+                    {loading && <span className="text-[10px] text-slate-500 self-center">loading…</span>}
+                </div>
+            </div>
+
+            {err && <div className="text-[11px] text-red-600 mb-2">{err}</div>}
+
+            {/* Day strip — most recent on the right, like a calendar tail */}
+            <div className="flex gap-1 mb-4 overflow-x-auto" style={{ scrollbarWidth: 'thin' }}>
+                {[...days].reverse().map((d) => {
+                    const captureH = Math.max(4, Math.round(((d.captures || 0) / max) * 56));
+                    const active = d.date === selected?.date;
+                    const empty = (d.captures || 0) === 0 && (d.pushed || 0) === 0;
+                    return (
+                        <button
+                            key={d.date}
+                            onClick={() => setSelectedDate(d.date)}
+                            className={`flex flex-col items-center gap-1 px-1.5 py-1.5 rounded text-[10px] font-mono border transition flex-shrink-0 ${
+                                active
+                                    ? 'bg-slate-900 text-white border-slate-900'
+                                    : empty
+                                        ? 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100'
+                                        : 'bg-white text-slate-700 border-slate-200 hover:bg-blue-50 hover:border-blue-300'
+                            }`}
+                            title={`${d.date} · scraped ${d.captures} · LinkedIn ${d.linkedinSkipped} · pushed ${d.pushed}`}
+                        >
+                            <span>{d.date.slice(5)}</span>
+                            <div
+                                className={`w-2 rounded-t ${active ? 'bg-emerald-300' : empty ? 'bg-slate-300' : 'bg-blue-400'}`}
+                                style={{ height: `${captureH}px` }}
+                            />
+                            <span className={`text-[9px] ${active ? 'text-emerald-200' : empty ? 'text-slate-300' : 'text-slate-500'}`}>
+                                {d.captures || 0}
+                            </span>
+                        </button>
+                    );
+                })}
+            </div>
+
+            {/* Selected-day breakdown */}
+            {selected ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                        <div className="text-sm font-semibold text-slate-800">
+                            📊 {selected.date}
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                            {selected.sessions} session{selected.sessions === 1 ? '' : 's'}
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-xs">
+                        <DayMetric label="Scraped" value={selected.captures} color="blue" />
+                        <DayMetric label="LinkedIn" value={selected.linkedinSkipped} color="rose" />
+                        <DayMetric label="Judged" value={selected.judged} color="indigo" />
+                        <DayMetric label="Picks" value={selected.picks} color="indigo" />
+                        <DayMetric label="Role-miss" value={selected.roleMismatch} color="amber" />
+                        <DayMetric label="Added" value={selected.pushed} color="emerald" />
+                    </div>
+                </div>
+            ) : (
+                <div className="text-xs text-slate-400 italic">No history yet for this client.</div>
+            )}
+        </div>
+    );
+}
+
+function DayMetric({ label, value, color }) {
+    const map = {
+        blue:    'bg-blue-50 border-blue-200 text-blue-900',
+        rose:    'bg-rose-50 border-rose-200 text-rose-900',
+        indigo:  'bg-indigo-50 border-indigo-200 text-indigo-900',
+        amber:   'bg-amber-50 border-amber-200 text-amber-900',
+        emerald: 'bg-emerald-50 border-emerald-200 text-emerald-900',
+    };
+    return (
+        <div className={`rounded-md border px-2 py-1.5 text-center ${map[color]}`}>
+            <div className="text-[9px] uppercase tracking-wide opacity-70 font-semibold">{label}</div>
+            <div className="text-base font-bold tabular-nums leading-tight">{Number(value || 0).toLocaleString()}</div>
+        </div>
+    );
+}
+
+function TodayTile({ label, value, color, tight = false }) {
+    const map = {
+        blue:    'border-blue-200 bg-blue-50 text-blue-900 [&_.lbl]:text-blue-700',
+        rose:    'border-rose-200 bg-rose-50 text-rose-900 [&_.lbl]:text-rose-700',
+        emerald: 'border-emerald-200 bg-emerald-50 text-emerald-900 [&_.lbl]:text-emerald-700',
+    };
+    const padding = tight ? 'p-2' : 'p-3';
+    const numSize = tight ? 'text-lg' : 'text-2xl';
+    return (
+        <div className={`rounded-lg border text-center ${padding} ${map[color]}`}>
+            <div className="lbl text-[10px] uppercase tracking-wide font-semibold">{label}</div>
+            <div className={`${numSize} font-bold tabular-nums mt-0.5`}>{Number(value || 0).toLocaleString()}</div>
         </div>
     );
 }
