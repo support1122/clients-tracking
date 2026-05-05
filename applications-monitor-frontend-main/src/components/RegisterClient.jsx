@@ -16,6 +16,7 @@ const RegisterClient = () => {
     amountPaid: '',
     currency: '$',
     clientNumber: '',
+    paymentEmail: '',
     // Max number of jobs operators can push for this client. Enforced by
     // dashboard /addjob via ProfileModel.targetJobCount. Empty = no cap.
     targetJobCount: ''
@@ -212,6 +213,7 @@ const RegisterClient = () => {
         : 0,
       amountPaidDate: "",
       modeOfPayment: "paypal",
+      paymentEmail: (formData.paymentEmail || "").toLowerCase().trim(),
       status: "active",
       clientNumber: formData.clientNumber ? parseInt(formData.clientNumber.trim(), 10) : undefined,
       currentPath: window.location.pathname, // 👈 this captures /monitor-clients or /clients/new
@@ -305,6 +307,7 @@ const RegisterClient = () => {
         amountPaid: "",
         currency: "$",
         clientNumber: "",
+        paymentEmail: "",
         targetJobCount: "",
       });
       setErrors({});
@@ -510,7 +513,7 @@ const RegisterClient = () => {
                   <button
                     onClick={() => {
                       setShowForm(false);
-                      setFormData({ firstName: '', lastName: '', email: '', oldEmail: '', password: '', confirmPassword: '', planType: 'Free Trial', dashboardManager: '', amountPaid: '', currency: '$', clientNumber: '' });
+                      setFormData({ firstName: '', lastName: '', email: '', oldEmail: '', password: '', confirmPassword: '', planType: 'Free Trial', dashboardManager: '', amountPaid: '', currency: '$', clientNumber: '', paymentEmail: '' });
                       setErrors({});
                     }}
                     className="text-gray-400 hover:text-gray-600"
@@ -678,6 +681,26 @@ const RegisterClient = () => {
                       />
                       {errors.amountPaid && <p className="text-red-500 text-xs mt-1">{errors.amountPaid}</p>}
                     </div>
+                  </div>
+
+                  {/* Payment Email — recipient for milestone notifications */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Payment Email <span className="text-gray-500 text-xs">(milestone notifications)</span>
+                    </label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="email"
+                        name="paymentEmail"
+                        value={formData.paymentEmail}
+                        onChange={handleInputChange}
+                        placeholder="payer@example.com"
+                        className={`w-full pl-9 pr-3 py-2 border rounded-md focus:ring-2 focus:ring-orange-500 focus:border-orange-500 ${errors.paymentEmail ? 'border-red-400' : 'border-gray-300'}`}
+                      />
+                    </div>
+                    {errors.paymentEmail && <p className="text-red-500 text-xs mt-1">{errors.paymentEmail}</p>}
+                    <p className="text-[11px] text-gray-500 mt-1">Where milestone emails (resume ready, applications started, 30/50/75/100%) will be delivered.</p>
                   </div>
 
                   {/* Client ID */}

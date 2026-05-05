@@ -11,7 +11,8 @@ import {
   Plus,
   FileText,
   ChevronDown,
-  CheckCircle
+  CheckCircle,
+  Mail
 } from 'lucide-react';
 import {
   useOnboardingStore,
@@ -77,6 +78,14 @@ const JobDetailModal = React.memo(({
   const [showEditClientNumberModal, setShowEditClientNumberModal] = useState(false);
   const [editingClientNameJobId, setEditingClientNameJobId] = useState(null);
   const [editingClientNameValue, setEditingClientNameValue] = useState('');
+  const [emailLogs, setEmailLogs] = useState([]);
+  const [emailLogsLoading, setEmailLogsLoading] = useState(false);
+  const [emailLogsError, setEmailLogsError] = useState(null);
+  const [showEmailActivity, setShowEmailActivity] = useState(false);
+  const [paymentEmailValue, setPaymentEmailValue] = useState('');
+  const [paymentEmailDraft, setPaymentEmailDraft] = useState('');
+  const [editingPaymentEmail, setEditingPaymentEmail] = useState(false);
+  const [savingPaymentEmail, setSavingPaymentEmail] = useState(false);
   const [savingClientName, setSavingClientName] = useState(false);
   const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
   const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
@@ -162,6 +171,72 @@ const JobDetailModal = React.memo(({
     if (selectedJob?.clientEmail && canViewOperations) fetchOperationsForClient(selectedJob.clientEmail);
     else { setOperationsForClient([]); setClientIdForOperations(null); }
   }, [selectedJob?.clientEmail, canViewOperations, fetchOperationsForClient]);
+
+  const fetchEmailLogs = useCallback(async (clientEmail) => {
+    if (!clientEmail) { setEmailLogs([]); return; }
+    setEmailLogsLoading(true);
+    setEmailLogsError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}/email-logs?limit=100`, { headers: AUTH_HEADERS() });
+      if (!res.ok) {
+        if (res.status === 401) handleAuthFailure();
+        setEmailLogsError('Failed to load email logs');
+        setEmailLogs([]);
+        return;
+      }
+      const data = await res.json();
+      setEmailLogs(Array.isArray(data?.logs) ? data.logs : []);
+      const pe = (data?.paymentEmail || '').trim();
+      setPaymentEmailValue(pe);
+      setPaymentEmailDraft(pe);
+    } catch {
+      setEmailLogsError('Failed to load email logs');
+      setEmailLogs([]);
+    } finally {
+      setEmailLogsLoading(false);
+    }
+  }, []);
+
+  const savePaymentEmail = useCallback(async () => {
+    const clientEmail = selectedJob?.clientEmail;
+    if (!clientEmail) return;
+    const next = (paymentEmailDraft || '').toLowerCase().trim();
+    if (next && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next)) {
+      toastUtils.error('Enter a valid email');
+      return;
+    }
+    setSavingPaymentEmail(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}/payment-email`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS() },
+        body: JSON.stringify({ paymentEmail: next })
+      });
+      if (!res.ok) {
+        if (res.status === 401) handleAuthFailure();
+        const err = await res.json().catch(() => ({}));
+        toastUtils.error(err?.error || 'Failed to save');
+        return;
+      }
+      const data = await res.json();
+      const saved = (data?.paymentEmail || '').trim();
+      setPaymentEmailValue(saved);
+      setPaymentEmailDraft(saved);
+      setEditingPaymentEmail(false);
+      toastUtils.success('Payment email saved');
+      fetchEmailLogs(clientEmail);
+    } catch {
+      toastUtils.error('Failed to save');
+    } finally {
+      setSavingPaymentEmail(false);
+    }
+  }, [selectedJob?.clientEmail, paymentEmailDraft, fetchEmailLogs]);
+
+  useEffect(() => {
+    const inAppIp = selectedJob?.status === 'applications_in_progress' || selectedJob?.status === 'completed';
+    if (inAppIp && selectedJob?.clientEmail) fetchEmailLogs(selectedJob.clientEmail);
+    else setEmailLogs([]);
+  }, [selectedJob?.clientEmail, selectedJob?.status, fetchEmailLogs]);
 
   // Fetch operator managed users
   const fetchOperatorManagedUsers = useCallback(async (operatorEmail) => {
@@ -888,6 +963,145 @@ const JobDetailModal = React.memo(({
                       )}
                     </div>
                   ) : (<div className="text-sm text-gray-500 py-4 text-center">No data available</div>)}
+                </div>
+              )}
+
+              {/* Email Activity (milestone notifications + move history) */}
+              {(selectedJob.status === 'applications_in_progress' || selectedJob.status === 'completed') && (
+                <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center gap-2"><Mail className="w-3 h-3" /> Email Activity</h3>
+                    <button type="button" onClick={() => fetchEmailLogs(selectedJob.clientEmail)} className="text-[10px] text-gray-500 hover:text-orange-600 font-medium">Refresh</button>
+                  </div>
+
+                  {/* Payment Email editor */}
+                  <div className="bg-white border border-gray-200 rounded-lg p-3 mb-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">Payment Email</label>
+                      {!editingPaymentEmail && (
+                        <button type="button" onClick={() => setEditingPaymentEmail(true)} className="text-[10px] text-orange-600 hover:text-orange-700 font-semibold flex items-center gap-1"><Pencil className="w-3 h-3" /> {paymentEmailValue ? 'Edit' : 'Add'}</button>
+                      )}
+                    </div>
+                    {editingPaymentEmail ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="email"
+                          value={paymentEmailDraft}
+                          onChange={(e) => setPaymentEmailDraft(e.target.value)}
+                          placeholder="payer@example.com"
+                          className="flex-1 px-2 py-1.5 text-xs border border-gray-300 rounded-md focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                        />
+                        <button type="button" disabled={savingPaymentEmail} onClick={savePaymentEmail} className="px-3 py-1.5 text-xs bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:opacity-50 font-semibold">
+                          {savingPaymentEmail ? '…' : 'Save'}
+                        </button>
+                        <button type="button" disabled={savingPaymentEmail} onClick={() => { setPaymentEmailDraft(paymentEmailValue); setEditingPaymentEmail(false); }} className="px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded-md border border-gray-200">Cancel</button>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-700 font-mono bg-gray-50 px-2 py-1.5 rounded">
+                        {paymentEmailValue || <span className="text-gray-400 italic">not set — milestone emails will be skipped</span>}
+                      </div>
+                    )}
+                  </div>
+
+                  {emailLogsLoading ? (
+                    <div className="text-sm text-gray-500 py-3 text-center flex items-center justify-center gap-2"><Loader2 className="w-3 h-3 animate-spin" /> Loading…</div>
+                  ) : emailLogsError ? (
+                    <div className="text-xs text-red-600 py-2">{emailLogsError}</div>
+                  ) : emailLogs.length === 0 ? (
+                    <div className="text-xs text-gray-500 py-3 text-center">No emails sent yet.</div>
+                  ) : (
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                      {emailLogs.map((l) => {
+                        const typeLabel = ({
+                          resume_ready: 'Resume ready',
+                          apps_started: 'Applications started',
+                          pct30: '30% milestone',
+                          pct50: '50% milestone',
+                          pct75: '75% milestone',
+                          pct100: '100% milestone'
+                        })[l.type] || l.type;
+                        const ok = l.status === 'success';
+                        return (
+                          <div key={l._id} className="bg-white border border-gray-200 rounded-lg p-3">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${ok ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>{typeLabel}</span>
+                              <span className="text-[10px] text-gray-500">{new Date(l.createdAt).toLocaleString()}</span>
+                            </div>
+                            <div className="text-xs text-gray-700 truncate" title={l.subject}>{l.subject}</div>
+                            <div className="text-[11px] text-gray-500 mt-1">to {l.paymentEmail} · {ok ? 'sent' : `failed${l.errorMessage ? ` — ${l.errorMessage}` : ''}`}{l.snapshot?.planCap ? ` · ${l.snapshot.currentCount}/${l.snapshot.planCap} (${Math.round(l.snapshot.percent || 0)}%)` : ''}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {Array.isArray(selectedJob?.moveHistory) && selectedJob.moveHistory.length > 0 && (
+                    <div className="mt-4 pt-3 border-t border-gray-200">
+                      <div className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2 flex items-center gap-1"><History className="w-3 h-3" /> Move history</div>
+                      <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                        {selectedJob.moveHistory.slice().reverse().map((m, i) => {
+                          const who = m.movedByName || m.movedBy || 'unknown';
+                          const when = m.movedAt ? new Date(m.movedAt).toLocaleString() : '';
+                          const milestoneLabel = ({
+                            resume_ready: 'Resume ready',
+                            apps_started: 'Applications started',
+                            pct30: '30% milestone',
+                            pct50: '50% milestone',
+                            pct75: '75% milestone',
+                            pct100: '100% milestone'
+                          })[m.meta?.type] || m.meta?.type;
+                          let line;
+                          switch (m.actionType) {
+                            case 'payment_email_set':
+                              line = <span><strong>Payment email set</strong> → <span className="font-mono text-[10px]">{m.meta?.to || '—'}</span> · by {who}</span>;
+                              break;
+                            case 'payment_email_updated':
+                              line = <span><strong>Payment email updated</strong> · <span className="font-mono text-[10px]">{m.meta?.from || '—'}</span> → <span className="font-mono text-[10px]">{m.meta?.to || '—'}</span> · by {who}</span>;
+                              break;
+                            case 'payment_email_cleared':
+                              line = <span><strong>Payment email cleared</strong> · was <span className="font-mono text-[10px]">{m.meta?.from || '—'}</span> · by {who}</span>;
+                              break;
+                            case 'milestone_email_sent':
+                              line = (
+                                <span>
+                                  📧 <strong>{milestoneLabel}</strong> email sent → <span className="font-mono text-[10px]">{m.meta?.paymentEmail || '—'}</span>
+                                  {typeof m.meta?.currentCount === 'number' && m.meta?.planCap ? <span className="text-gray-500"> · {m.meta.currentCount}/{m.meta.planCap} ({m.meta.percent || 0}%)</span> : null}
+                                </span>
+                              );
+                              break;
+                            case 'milestone_email_skipped':
+                              line = (
+                                <span>
+                                  ⚠️ <strong>{milestoneLabel}</strong> skipped
+                                  {m.meta?.reason ? <span className="text-gray-500"> · {m.meta.reason}</span> : null}
+                                </span>
+                              );
+                              break;
+                            case 'client_paused':
+                              line = <span><strong>Client paused</strong> · by {who}</span>;
+                              break;
+                            case 'client_unpaused':
+                              line = <span><strong>Client unpaused</strong> (entered Apps In Progress) · by {who}</span>;
+                              break;
+                            case 'assignment':
+                              line = <span><strong>{m.targetRole || 'Assignment'}</strong>{m.targetName ? ` → ${m.targetName}` : ''} · by {who}</span>;
+                              break;
+                            case 'comment_resolved':
+                              line = <span><strong>Comment resolved</strong> · by {who}</span>;
+                              break;
+                            default:
+                              line = <span>{m.fromStatus || '—'} → <strong>{m.toStatus || '—'}</strong> · by {who}</span>;
+                          }
+                          return (
+                            <div key={i} className="text-[11px] text-gray-600 flex items-start justify-between gap-2 bg-white px-2 py-1.5 rounded border border-gray-100">
+                              <span className="flex-1 min-w-0">{line}</span>
+                              <span className="text-gray-400 whitespace-nowrap">{when}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

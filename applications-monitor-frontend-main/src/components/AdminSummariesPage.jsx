@@ -215,13 +215,22 @@ export default function AdminSummariesPage() {
                     <GlobalOpenaiKeyCard />
 
                     {/* STAT TILES */}
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-5">
+                    <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mt-5">
                         <StatTile label="Clients" value={totals.clients} />
                         <StatTile label="Summaries built" value={totals.withSummary} sub={`${coverage}% coverage`} accent="emerald" />
                         <StatTile label="Missing summary" value={totals.withoutSummary} sub="needs build" accent="amber" />
                         <StatTile label="Profile changed" value={totals.stale || 0} sub="needs rebuild" accent="orange" />
-                        <StatTile label="Ops jobs pushed" value={totals.opsTotal} sub={`${totals.withCap} capped`} accent="blue" />
+                        <StatTile label="Ops today" value={totals.opsToday || 0} sub={`${totals.opsTotal} lifetime`} accent="blue" />
+                        <StatTile label="LinkedIn skipped" value={totals.linkedinSkippedTotal || 0} sub="ext sessions" accent="rose" />
                     </div>
+
+                    {/* TOP OPERATORS — who pushed how many today + lifetime */}
+                    <OperatorsLeaderboard operators={overview?.operators || []} />
+
+                    {/* PER-CODE PER-DAY ACTIVITY — captures / linkedin-skip /
+                        role-mismatch / other / picks / pushed for each operator
+                        identified by their 5-digit extension code. */}
+                    <OperatorActivityTable />
                 </div>
             </div>
 
@@ -572,6 +581,9 @@ function ClientDetailPane({ row, onProfileChanged }) {
                 </div>
             )}
 
+            {/* Operator breakdown — who worked this client */}
+            <OperatorBreakdownCard rows={row.operatorBreakdown || []} ext={row.extensionStats} />
+
             {/* Push history */}
             <PushHistoryCard history={history} loading={historyLoading} onReload={loadHistory} />
 
@@ -583,17 +595,23 @@ function ClientDetailPane({ row, onProfileChanged }) {
                             🎯 Target job count cap
                         </h3>
                         <p className="text-xs text-slate-500 mt-1">
-                            <code>/addjob</code> refuses ops pushes once {row.currentOpsCount} jobs reach this cap. Empty = no cap.
+                            Daily cap. <code>/addjob</code> refuses ops pushes once today's count hits this number — resets at 00:00 IST. Empty = falls back to default 30/day.
                         </p>
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                        row.targetJobCount == null ? 'bg-slate-100 text-slate-600'
-                        : row.capStatus === 'reached' || row.capStatus === 'over' ? 'bg-red-100 text-red-700'
-                        : 'bg-emerald-100 text-emerald-700'
-                    }`}>
-                        {row.targetJobCount == null ? '∞ no cap'
-                        : `${row.currentOpsCount} / ${row.targetJobCount}`}
-                    </span>
+                    {(() => {
+                        const ci = history?.capInfo || {};
+                        const todayOps = Number.isFinite(Number(ci.currentOps)) ? ci.currentOps : 0;
+                        const eff = ci.effectiveCap ?? row.targetJobCount ?? 30;
+                        const isDefault = ci.isDefaultCap === true || row.targetJobCount == null;
+                        const reached = todayOps >= eff;
+                        return (
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                reached ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'
+                            }`}>
+                                {todayOps} / {eff}{isDefault ? ' (default)' : ''} today
+                            </span>
+                        );
+                    })()}
                 </div>
                 <div className="flex gap-2">
                     <input
@@ -707,8 +725,12 @@ function PushHistoryCard({ history, loading, onReload }) {
     }
     const totalOps = history?.totals?.ops || 0;
     const totalAll = history?.totals?.all || 0;
-    const cap = history?.capInfo?.targetJobCount;
-    const remaining = history?.capInfo?.remaining;
+    const ci = history?.capInfo || {};
+    const explicitCap = ci.targetJobCount;
+    const effectiveCap = ci.effectiveCap ?? explicitCap;
+    const isDefaultCap = ci.isDefaultCap === true;
+    const todayOps = Number.isFinite(Number(ci.currentOps)) ? ci.currentOps : 0;
+    const remaining = ci.remaining;
     const rows = history?.history || [];
     const days = history?.days || 30;
     const today = new Date();
@@ -732,10 +754,11 @@ function PushHistoryCard({ history, loading, onReload }) {
                 <button onClick={() => onReload(days)} className="text-xs text-blue-600 hover:underline">↻ Refresh</button>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 mb-4">
-                <MiniStat label="Ops pushed" value={totalOps} color="blue" />
+            <div className="grid grid-cols-4 gap-2 mb-4">
+                <MiniStat label="Today" value={todayOps} sub={isDefaultCap ? `of ${effectiveCap} (default)` : `of ${effectiveCap}`} color="blue" />
+                <MiniStat label="Cap left" value={effectiveCap == null ? '∞' : remaining ?? Math.max(0, effectiveCap - todayOps)} color="amber" />
+                <MiniStat label="Ops lifetime" value={totalOps} color="indigo" />
                 <MiniStat label="All jobs" value={totalAll} color="emerald" />
-                <MiniStat label="Cap left" value={cap == null ? '∞' : remaining} color="amber" />
             </div>
 
             {/* Bar chart — full window */}
@@ -776,16 +799,19 @@ function PushHistoryCard({ history, loading, onReload }) {
     );
 }
 
-function MiniStat({ label, value, color }) {
+function MiniStat({ label, value, sub, color }) {
     const colorMap = {
         blue: 'bg-blue-50 border-blue-200 text-blue-900',
         emerald: 'bg-emerald-50 border-emerald-200 text-emerald-900',
         amber: 'bg-amber-50 border-amber-200 text-amber-900',
+        indigo: 'bg-indigo-50 border-indigo-200 text-indigo-900',
+        slate: 'bg-slate-50 border-slate-200 text-slate-900',
     };
     return (
-        <div className={`border rounded-lg p-2 text-center ${colorMap[color]}`}>
+        <div className={`border rounded-lg p-2 text-center ${colorMap[color] || colorMap.slate}`}>
             <div className="text-[10px] uppercase tracking-wide opacity-70">{label}</div>
             <div className="text-xl font-bold">{value}</div>
+            {sub && <div className="text-[9px] opacity-60 mt-0.5">{sub}</div>}
         </div>
     );
 }
@@ -815,12 +841,245 @@ function StatTile({ label, value, sub, accent = 'slate' }) {
         amber: 'text-amber-700',
         orange: 'text-orange-700',
         blue: 'text-blue-700',
+        rose: 'text-rose-700',
     };
     return (
         <div className="rounded-lg border border-slate-200 bg-white px-4 py-3">
             <div className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">{label}</div>
             <div className={`text-2xl font-bold mt-1 ${accentMap[accent]}`}>{value}</div>
             {sub && <div className="text-xs text-slate-500 mt-0.5">{sub}</div>}
+        </div>
+    );
+}
+
+// -------------------------------------------------------------------------
+// OperatorsLeaderboard: shows who's pushing jobs and how much. Lifetime +
+// today + clients-served, sorted by today desc. Drives ops visibility for
+// admins ("who is working and who is not"). Renders nothing when empty.
+// -------------------------------------------------------------------------
+function OperatorsLeaderboard({ operators }) {
+    if (!operators || operators.length === 0) return null;
+    const top = operators.slice(0, 12);
+    const max = Math.max(...top.map((o) => o.jobsToday), 1);
+    return (
+        <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                    👥 Operator activity
+                    <span className="text-[11px] font-normal text-slate-500">
+                        sorted by today's pushes — top {top.length} of {operators.length}
+                    </span>
+                </h3>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {top.map((o) => (
+                    <div key={o.operator} className="flex items-center gap-3 px-3 py-2 rounded-lg border border-slate-100 bg-slate-50/40 hover:bg-slate-50 transition">
+                        <div className="flex-1 min-w-0">
+                            <div className="text-sm font-semibold text-slate-900 truncate">{o.operator}</div>
+                            <div className="text-[10px] text-slate-500">
+                                {o.clientsServed} client{o.clientsServed === 1 ? '' : 's'} · {o.jobsLifetime} lifetime
+                            </div>
+                        </div>
+                        <div className="text-right">
+                            <div className={`text-base font-bold ${o.jobsToday > 0 ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                {o.jobsToday}
+                            </div>
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wide">today</div>
+                        </div>
+                        <div className="w-12 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                            <div
+                                className="h-full bg-emerald-500"
+                                style={{ width: `${(o.jobsToday / max) * 100}%` }}
+                            />
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+// -------------------------------------------------------------------------
+// OperatorActivityTable: per-day per-extension-code rollup of every metric
+// the JR-direct extension reports. One row per (code, date). Filter buttons
+// for "today / 7d / 30d". Sortable by code. Tight table — fits on screen.
+// -------------------------------------------------------------------------
+function OperatorActivityTable() {
+    const [days, setDays] = useState(7);
+    const [rows, setRows] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [err, setErr] = useState(null);
+    const [collapsed, setCollapsed] = useState(false);
+
+    async function load(d = days) {
+        setLoading(true); setErr(null);
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/admin/operator-activity?days=${d}`);
+            const body = await r.json().catch(() => null);
+            if (r.ok && body?.success) setRows(body.rows || []);
+            else setErr(body?.message || `HTTP ${r.status}`);
+        } catch (e) {
+            setErr(e.message);
+        } finally { setLoading(false); }
+    }
+    useEffect(() => { load(days); /* eslint-disable-next-line */ }, [days]);
+
+    // Group rows by extension code so we can render code → days collapsed.
+    const byCode = useMemo(() => {
+        const m = new Map();
+        for (const r of rows) {
+            const key = r.extensionCode || '(no code)';
+            if (!m.has(key)) m.set(key, { code: key, name: r.operatorName, email: r.operatorEmail, days: [] });
+            m.get(key).days.push(r);
+            // Update display name to most recent.
+            if (r.operatorName) m.get(key).name = r.operatorName;
+        }
+        return [...m.values()].sort((a, b) => {
+            const ap = a.days.reduce((s, x) => s + x.pushed, 0);
+            const bp = b.days.reduce((s, x) => s + x.pushed, 0);
+            return bp - ap;
+        });
+    }, [rows]);
+
+    return (
+        <div className="mt-5 rounded-xl border border-slate-200 bg-white overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-slate-50">
+                <div className="flex items-center gap-3">
+                    <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                        🧑‍💻 Operator activity (per code · per day)
+                    </h3>
+                    <div className="flex gap-1">
+                        {[1, 7, 30].map((d) => (
+                            <button
+                                key={d}
+                                onClick={() => setDays(d)}
+                                className={`px-2 py-0.5 rounded text-[11px] font-medium border ${
+                                    days === d
+                                        ? 'bg-slate-900 text-white border-slate-900'
+                                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                                }`}
+                            >
+                                {d === 1 ? 'Today' : `${d}d`}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div className="flex gap-2 items-center">
+                    {loading && <span className="text-[11px] text-slate-500">loading…</span>}
+                    <button onClick={() => load(days)} className="text-[11px] text-blue-600 hover:underline">↻ Refresh</button>
+                    <button onClick={() => setCollapsed((v) => !v)} className="text-[11px] text-slate-600 hover:underline">
+                        {collapsed ? '▼ Expand' : '▲ Collapse'}
+                    </button>
+                </div>
+            </div>
+            {err && <div className="px-4 py-2 text-xs text-red-700 bg-red-50">{err}</div>}
+            {!collapsed && (
+                <div className="overflow-x-auto">
+                    {byCode.length === 0 ? (
+                        <div className="p-6 text-center text-xs text-slate-400 italic">
+                            No extension activity in the last {days} day{days === 1 ? '' : 's'}. Operators must reload the JR-Direct extension to v1.15+ for stats to appear here.
+                        </div>
+                    ) : (
+                        <table className="w-full text-xs">
+                            <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
+                                <tr>
+                                    <th className="px-3 py-2 text-left font-semibold">Code · Operator</th>
+                                    <th className="px-2 py-2 text-left font-semibold">Date</th>
+                                    <th className="px-2 py-2 text-right font-semibold" title="Jobs captured by scrolling JR">📥 Cap</th>
+                                    <th className="px-2 py-2 text-right font-semibold text-rose-700" title="LinkedIn-only postings auto-skipped">🚫 LI</th>
+                                    <th className="px-2 py-2 text-right font-semibold" title="Sent to AI judge">⚖ Judged</th>
+                                    <th className="px-2 py-2 text-right font-semibold text-amber-700" title="AI rejected: title doesn't match preferred role">Role-miss</th>
+                                    <th className="px-2 py-2 text-right font-semibold text-slate-500" title="Other skips: threshold/seniority/location/auth/company">Other-skip</th>
+                                    <th className="px-2 py-2 text-right font-semibold text-blue-700" title="AI picked">✓ Picks</th>
+                                    <th className="px-2 py-2 text-right font-semibold text-emerald-700" title="Successfully pushed to dashboard">→ Pushed</th>
+                                    <th className="px-2 py-2 text-right font-semibold text-slate-400" title="Sessions logged">Sess</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {byCode.map((g, gi) => (
+                                    g.days.map((r, ri) => (
+                                        <tr key={`${g.code}-${r.date}`} className={`border-b border-slate-100 hover:bg-slate-50/60 ${ri === 0 ? 'border-t-2 border-t-slate-200' : ''}`}>
+                                            <td className="px-3 py-1.5">
+                                                {ri === 0 ? (
+                                                    <div>
+                                                        <div className="font-mono text-[10px] text-slate-500">{g.code}</div>
+                                                        <div className="font-semibold text-slate-800">{g.name || '(no name)'}</div>
+                                                    </div>
+                                                ) : <span className="text-slate-300">↪</span>}
+                                            </td>
+                                            <td className="px-2 py-1.5 font-mono text-slate-600">{r.date}</td>
+                                            <td className="px-2 py-1.5 text-right tabular-nums">{r.captures || 0}</td>
+                                            <td className={`px-2 py-1.5 text-right tabular-nums ${r.linkedinSkipped > 0 ? 'text-rose-700 font-semibold' : 'text-slate-400'}`}>{r.linkedinSkipped || 0}</td>
+                                            <td className="px-2 py-1.5 text-right tabular-nums">{r.judged || 0}</td>
+                                            <td className={`px-2 py-1.5 text-right tabular-nums ${r.roleMismatch > 0 ? 'text-amber-700 font-semibold' : 'text-slate-400'}`}>{r.roleMismatch || 0}</td>
+                                            <td className="px-2 py-1.5 text-right tabular-nums text-slate-500">{
+                                                (r.threshold || 0) + (r.seniorityMismatch || 0) + (r.locationMismatch || 0) + (r.authMismatch || 0) + (r.companyBlocked || 0) + (r.otherSkip || 0)
+                                            }</td>
+                                            <td className={`px-2 py-1.5 text-right tabular-nums ${r.picks > 0 ? 'text-blue-700 font-semibold' : 'text-slate-400'}`}>{r.picks || 0}</td>
+                                            <td className={`px-2 py-1.5 text-right tabular-nums ${r.pushed > 0 ? 'text-emerald-700 font-bold' : 'text-slate-400'}`}>{r.pushed || 0}</td>
+                                            <td className="px-2 py-1.5 text-right tabular-nums text-slate-400">{r.sessions || 0}</td>
+                                        </tr>
+                                    ))
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// -------------------------------------------------------------------------
+// OperatorBreakdownCard: per-client list of which operator pushed how many,
+// captured how many, and skipped how many LinkedIn-only postings.
+// -------------------------------------------------------------------------
+function OperatorBreakdownCard({ rows, ext }) {
+    if ((!rows || rows.length === 0) && !ext) return null;
+    const list = rows || [];
+    return (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <h3 className="font-bold text-slate-900 flex items-center gap-2 mb-1">
+                👥 Operator breakdown
+                <span className="text-[10px] font-normal text-slate-500">who worked this client</span>
+            </h3>
+            {ext && (
+                <div className="text-xs text-slate-600 mb-3 flex flex-wrap gap-3">
+                    <span className="px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-800">
+                        Captures: <strong>{ext.captures}</strong>
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-800">
+                        LinkedIn skipped: <strong>{ext.linkedinSkipped}</strong>
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800">
+                        Pushed (ext): <strong>{ext.pushed}</strong>
+                    </span>
+                    {ext.lastSessionAt && (
+                        <span className="text-slate-500">
+                            last session {new Date(ext.lastSessionAt).toLocaleString()}
+                        </span>
+                    )}
+                </div>
+            )}
+            {list.length === 0 ? (
+                <div className="text-xs text-slate-400 italic">No ops jobs pushed yet for this client.</div>
+            ) : (
+                <div className="space-y-1.5">
+                    {list.map((o) => (
+                        <div key={o.operator} className="flex items-center gap-3 text-sm">
+                            <div className="flex-1 min-w-0 truncate font-medium text-slate-800">{o.operator}</div>
+                            <div className="text-xs text-emerald-700 font-bold w-10 text-right">{o.todayCount} today</div>
+                            <div className="text-xs text-slate-700 font-mono w-16 text-right">{o.count} total</div>
+                            {(o.captures > 0 || o.linkedinSkipped > 0) && (
+                                <div className="text-[10px] text-slate-500 flex gap-1.5">
+                                    {o.captures > 0 && <span title="captures">📥{o.captures}</span>}
+                                    {o.linkedinSkipped > 0 && <span title="LinkedIn skipped">🚫{o.linkedinSkipped}</span>}
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

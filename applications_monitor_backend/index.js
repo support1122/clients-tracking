@@ -84,6 +84,9 @@ import {
 import multer from 'multer';
 import FormData from 'form-data';
 import cron from 'node-cron';
+import { ClientEmailLogModel } from './ClientEmailLogModel.js';
+import { sendMilestoneEmail } from './utils/clientMilestoneEmails.js';
+import { getPlanCap, MIN_JOBS_FOR_EMAIL } from './utils/planCaps.js';
 
 const FLASHFIRE_API_BASE_URL = process.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
 
@@ -1162,17 +1165,23 @@ const upgradeClientPlan = async (req, res) => {
     const upgradeDifference = planPrice - currentPlanPrice;
     const newAmountPaid = currentAmountPaid + upgradeDifference;
 
+    const planChanged = String(existingClient.planType || '').toLowerCase() !== planTypeLower;
+    const upgradeSet = {
+      planType: planTypeLower,
+      planPrice: planPrice,
+      amountPaid: newAmountPaid.toString(),
+      amountPaidDate: currentDate,
+      updatedAt: currentDate
+    };
+    if (planChanged) {
+      upgradeSet['milestonesNotified.pct30'] = { sent: false, at: null, count: 0 };
+      upgradeSet['milestonesNotified.pct50'] = { sent: false, at: null, count: 0 };
+      upgradeSet['milestonesNotified.pct75'] = { sent: false, at: null, count: 0 };
+      upgradeSet['milestonesNotified.pct100'] = { sent: false, at: null, count: 0 };
+    }
     await ClientModel.updateOne(
       { email: emailLower },
-      {
-        $set: {
-          planType: planTypeLower,
-          planPrice: planPrice,
-          amountPaid: newAmountPaid.toString(),
-          amountPaidDate: currentDate,
-          updatedAt: currentDate
-        }
-      },
+      { $set: upgradeSet },
       { runValidators: false }
     );
 
@@ -4174,6 +4183,65 @@ app.post('/api/clients/update-operations-name', updateClientOperationsName);
 app.post('/api/clients/update-dashboard-team-lead', updateClientDashboardTeamLead);
 app.put('/api/clients/:email/upgrade-plan', verifyToken, upgradeClientPlan);
 app.post('/api/clients/:email/add-addon', verifyToken, addClientAddon);
+app.put('/api/clients/:email/payment-email', verifyToken, async (req, res) => {
+  try {
+    const emailLower = String(req.params.email || '').toLowerCase().trim();
+    const paymentEmail = String(req.body?.paymentEmail || '').toLowerCase().trim();
+    if (!emailLower) return res.status(400).json({ error: 'email required' });
+    if (paymentEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paymentEmail)) {
+      return res.status(400).json({ error: 'invalid paymentEmail' });
+    }
+    const existing = await ClientModel.findOne({ email: emailLower }).select('paymentEmail').lean();
+    if (!existing) return res.status(404).json({ error: 'client not found' });
+    const prev = (existing.paymentEmail || '').trim();
+    const updated = await ClientModel.findOneAndUpdate(
+      { email: emailLower },
+      { $set: { paymentEmail, updatedAt: new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) } },
+      { new: true }
+    ).lean();
+    try {
+      const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
+      let actionType = null;
+      if (!prev && paymentEmail) actionType = 'payment_email_set';
+      else if (prev && !paymentEmail) actionType = 'payment_email_cleared';
+      else if (prev && paymentEmail && prev !== paymentEmail) actionType = 'payment_email_updated';
+      if (actionType) {
+        await addClientActionToJobMoveHistory(emailLower, actionType, {
+          ...movedBy,
+          meta: { from: prev || null, to: paymentEmail || null }
+        });
+      }
+    } catch (e) {
+      console.error('[payment-email] move history append failed:', e?.message);
+    }
+    res.json({ success: true, paymentEmail: updated.paymentEmail });
+  } catch (e) {
+    console.error('[payment-email] error:', e?.message);
+    res.status(500).json({ error: 'failed to update paymentEmail' });
+  }
+});
+app.get('/api/clients/:email/email-logs', verifyToken, async (req, res) => {
+  try {
+    const emailLower = String(req.params.email || '').toLowerCase().trim();
+    if (!emailLower) return res.status(400).json({ error: 'email required' });
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const skip = Math.max(Number(req.query.skip) || 0, 0);
+    const [logs, total, client] = await Promise.all([
+      ClientEmailLogModel.find({ clientEmail: emailLower }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      ClientEmailLogModel.countDocuments({ clientEmail: emailLower }),
+      ClientModel.findOne({ email: emailLower }).select('paymentEmail planType').lean()
+    ]);
+    res.json({
+      total,
+      logs,
+      paymentEmail: client?.paymentEmail || '',
+      planType: client?.planType || ''
+    });
+  } catch (e) {
+    console.error('[email-logs] error:', e?.message);
+    res.status(500).json({ error: 'failed to load email logs' });
+  }
+});
 app.get('/api/managers/names', getDashboardManagerNames);
 
 app.get('/api/onboarding/jobs', verifyToken, listOnboardingJobs);
@@ -6575,6 +6643,27 @@ app.post('/api/internal/sync-document-upload', express.json(), async (req, res) 
         { $set: { resumeSent: true, resumeSentDate: dateStr, updatedAt: dateStr } }
       );
       updated = true;
+      // Resume_ready email is gated on count >= MIN_JOBS_FOR_EMAIL.
+      // If gate not met yet, leave milestonesNotified.resumeReady.sent=false → cron will fire later.
+      try {
+        const fresh = await ClientModel.findOne({ email: emailLower }).lean();
+        if (fresh && !(fresh.milestonesNotified?.resumeReady?.sent)) {
+          const jobCount = await JobModel.countDocuments({ userID: emailLower, currentStatus: { $ne: 'removed' } });
+          if (jobCount >= MIN_JOBS_FOR_EMAIL) {
+            await ClientModel.updateOne(
+              { email: emailLower },
+              { $set: { 'milestonesNotified.resumeReady.sent': true, 'milestonesNotified.resumeReady.at': new Date() } }
+            );
+            sendMilestoneEmail({ client: fresh, type: 'resume_ready', snapshot: { currentCount: jobCount } })
+              .then((r) => recordMilestoneInMoveHistory(emailLower, 'resume_ready', r, fresh.paymentEmail, { currentCount: jobCount }))
+              .catch((e) => console.error('resume_ready email error:', e?.message));
+          } else {
+            console.log(`[resume_ready] gated for ${emailLower}: jobCount=${jobCount} < ${MIN_JOBS_FOR_EMAIL}`);
+          }
+        }
+      } catch (e) {
+        console.error('resume_ready dispatch error:', e?.message);
+      }
     }
     if (documentType === 'coverLetter' && !client.coverLetterSent) {
       await ClientModel.updateOne(
@@ -7366,6 +7455,115 @@ async function runDailyIncentiveSnapshot() {
   }
 }
 
+const MILESTONE_TIERS = [
+  { key: 'pct30', threshold: 30 },
+  { key: 'pct50', threshold: 50 },
+  { key: 'pct75', threshold: 75 },
+  { key: 'pct100', threshold: 100 }
+];
+
+async function recordMilestoneInMoveHistory(clientEmail, type, sendResult, paymentEmail, snapshot = {}) {
+  try {
+    const meta = {
+      type,
+      paymentEmail: paymentEmail || null,
+      currentCount: snapshot.currentCount || 0,
+      planCap: snapshot.planCap || 0,
+      percent: Math.round(snapshot.percent || 0),
+      status: sendResult?.success ? 'success' : (sendResult?.skipped ? 'skipped' : 'failed'),
+      reason: sendResult?.reason || sendResult?.error || null
+    };
+    const action = sendResult?.success ? 'milestone_email_sent' : 'milestone_email_skipped';
+    await addClientActionToJobMoveHistory(clientEmail, action, {
+      email: 'system',
+      name: 'Milestone bot',
+      meta
+    });
+  } catch (e) {
+    console.error('[milestone moveHistory] write failed:', e?.message);
+  }
+}
+
+async function runClientMilestoneCron() {
+  console.log('[Client Milestones] Cron tick start');
+  try {
+    const clients = await ClientModel.find({
+      status: 'active',
+      isPaused: { $ne: true },
+      paymentEmail: { $exists: true, $ne: '' }
+    }).lean();
+
+    let processed = 0;
+    let sent = 0;
+
+    for (const client of clients) {
+      processed++;
+      const planCap = getPlanCap(client.planType);
+
+      const currentCount = await JobModel.countDocuments({
+        userID: client.email,
+        currentStatus: { $ne: 'removed' }
+      });
+      const notified = client.milestonesNotified || {};
+
+      // Catch-up: resume_ready (gated on jobs >= MIN_JOBS_FOR_EMAIL)
+      if (client.resumeSent && !notified.resumeReady?.sent && currentCount >= MIN_JOBS_FOR_EMAIL) {
+        const r = await sendMilestoneEmail({ client, type: 'resume_ready', snapshot: { currentCount, planCap } });
+        await ClientModel.updateOne(
+          { email: client.email },
+          { $set: { 'milestonesNotified.resumeReady.sent': true, 'milestonesNotified.resumeReady.at': new Date() } }
+        );
+        await recordMilestoneInMoveHistory(client.email, 'resume_ready', r, client.paymentEmail, { currentCount, planCap });
+        if (r?.success) sent++;
+      }
+
+      // Catch-up: apps_started (gated on jobs >= MIN_JOBS_FOR_EMAIL and out of onboarding phase)
+      if (!client.onboardingPhase && !notified.applicationsStarted?.sent && currentCount >= MIN_JOBS_FOR_EMAIL) {
+        const r = await sendMilestoneEmail({ client, type: 'apps_started', snapshot: { currentCount, planCap, percent: planCap ? (currentCount / planCap) * 100 : 0 } });
+        await ClientModel.updateOne(
+          { email: client.email },
+          { $set: { 'milestonesNotified.applicationsStarted.sent': true, 'milestonesNotified.applicationsStarted.at': new Date() } }
+        );
+        await recordMilestoneInMoveHistory(client.email, 'apps_started', r, client.paymentEmail, { currentCount, planCap });
+        if (r?.success) sent++;
+      }
+
+      // Pct tiers — only after client is out of onboarding and plan has a cap
+      if (!planCap) continue;
+      if (client.onboardingPhase) continue;
+      const percent = (currentCount / planCap) * 100;
+
+      for (const tier of MILESTONE_TIERS) {
+        if (percent < tier.threshold) continue;
+        if (notified[tier.key]?.sent) continue;
+
+        const result = await sendMilestoneEmail({
+          client,
+          type: tier.key,
+          snapshot: { planCap, currentCount, percent }
+        });
+
+        await ClientModel.updateOne(
+          { email: client.email },
+          {
+            $set: {
+              [`milestonesNotified.${tier.key}.sent`]: true,
+              [`milestonesNotified.${tier.key}.at`]: new Date(),
+              [`milestonesNotified.${tier.key}.count`]: currentCount
+            }
+          }
+        );
+        await recordMilestoneInMoveHistory(client.email, tier.key, result, client.paymentEmail, { currentCount, planCap, percent });
+        if (result?.success) sent++;
+      }
+    }
+
+    console.log(`[Client Milestones] Done. processed=${processed} sent=${sent}`);
+  } catch (error) {
+    console.error('[Client Milestones] Error:', error);
+  }
+}
+
 // Start HTTP server only after MongoDB is connected (prevents startup tasks from hitting buffer timeout)
 dbReady
   .then(async () => {
@@ -7400,6 +7598,10 @@ if (DISCORD_ZERO_SAVED_WEBHOOK) {
       // Daily incentive snapshot: 1:00 PM IST (07:30 UTC)
       cron.schedule('30 7 * * *', runDailyIncentiveSnapshot);
       console.log('📬 [Incentive Cron] Scheduled for 1:00 PM IST daily');
+
+      // Client milestone email cron: 00:00 IST daily
+      cron.schedule('0 0 * * *', runClientMilestoneCron, { timezone: 'Asia/Kolkata' });
+      console.log('📬 [Client Milestones] Cron scheduled for 00:00 IST daily');
     });
   })
   .catch(() => {
