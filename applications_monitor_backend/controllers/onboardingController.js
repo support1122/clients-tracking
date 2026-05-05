@@ -9,6 +9,8 @@ import { ManagerModel } from '../ManagerModel.js';
 import OperationsModel from '../OperationsModel.js';
 import { NewUserModel } from '../schema_models/UserModel.js';
 import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
+import { sendMilestoneEmail } from '../utils/clientMilestoneEmails.js';
+import { getPlanCap, MIN_JOBS_FOR_EMAIL } from '../utils/planCaps.js';
 import { clearAnalysisCache } from '../utils/analysisCache.js';
 import { useServerMemoryCache } from '../utils/serverMemoryCache.js';
 
@@ -70,13 +72,16 @@ export async function addClientActionToJobMoveHistory(clientEmail, actionType, m
   if (!job) return;
   const email = typeof movedByPayload === 'string' ? (movedByPayload || 'unknown') : (movedByPayload?.email || 'unknown');
   const name = typeof movedByPayload === 'string' ? '' : (movedByPayload?.name || '');
+  const meta = (typeof movedByPayload === 'object' && movedByPayload?.meta) ? movedByPayload.meta : null;
   if (!job.moveHistory) job.moveHistory = [];
-  job.moveHistory.push({
+  const entry = {
     actionType,
     movedBy: email,
     movedByName: name,
     movedAt: new Date()
-  });
+  };
+  if (meta) entry.meta = meta;
+  job.moveHistory.push(entry);
   await job.save();
   jobListCache.clear();
 }
@@ -890,12 +895,44 @@ export async function patchOnboardingJob(req, res) {
       const clientEmail = (job.clientEmail || '').toLowerCase().trim();
       if (clientEmail) {
         try {
+          const clientBefore = await ClientModel.findOne({ email: clientEmail }).lean();
           await ClientModel.updateOne(
             { email: clientEmail },
             { $set: { onboardingPhase: false, isPaused: false, pausedAt: null } }
           );
           const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
           await addClientActionToJobMoveHistory(clientEmail, 'client_unpaused', movedBy);
+          if (clientBefore && !(clientBefore.milestonesNotified?.applicationsStarted?.sent)) {
+            const jobCount = await JobModel.countDocuments({ userID: clientEmail, currentStatus: { $ne: 'removed' } });
+            if (jobCount >= MIN_JOBS_FOR_EMAIL) {
+              await ClientModel.updateOne(
+                { email: clientEmail },
+                { $set: { 'milestonesNotified.applicationsStarted.sent': true, 'milestonesNotified.applicationsStarted.at': new Date() } }
+              );
+              const planCap = getPlanCap(clientBefore.planType);
+              const r = await sendMilestoneEmail({
+                client: clientBefore,
+                type: 'apps_started',
+                snapshot: { planCap, currentCount: jobCount, percent: planCap ? (jobCount / planCap) * 100 : 0 }
+              }).catch((e) => { console.error('apps_started email error:', e?.message); return { success: false, error: e?.message }; });
+              try {
+                const meta = {
+                  type: 'apps_started',
+                  paymentEmail: clientBefore.paymentEmail || null,
+                  currentCount: jobCount,
+                  planCap,
+                  percent: planCap ? Math.round((jobCount / planCap) * 100) : 0,
+                  status: r?.success ? 'success' : (r?.skipped ? 'skipped' : 'failed'),
+                  reason: r?.reason || r?.error || null
+                };
+                await addClientActionToJobMoveHistory(clientEmail, r?.success ? 'milestone_email_sent' : 'milestone_email_skipped', { email: 'system', name: 'Milestone bot', meta });
+              } catch (e) {
+                console.error('apps_started moveHistory error:', e?.message);
+              }
+            } else {
+              console.log(`[apps_started] gated for ${clientEmail}: jobCount=${jobCount} < ${MIN_JOBS_FOR_EMAIL}`);
+            }
+          }
           const refetched = await OnboardingJobModel.findById(id);
           if (refetched) jobForResponse = refetched;
         } catch (err) {

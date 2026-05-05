@@ -29,7 +29,10 @@ import {
   Search,
   Pencil,
   CheckCircle,
-  Image
+  Image,
+  Upload,
+  Download,
+  Mail
 } from 'lucide-react';
 
 // Extracted sub-components
@@ -68,6 +71,12 @@ export default function ClientOnboarding() {
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [, startSearchTransition] = useTransition();
+  const [showPaymentImportModal, setShowPaymentImportModal] = useState(false);
+  const [paymentImportRows, setPaymentImportRows] = useState([]);
+  const [paymentImportErrors, setPaymentImportErrors] = useState([]);
+  const [paymentImportFileName, setPaymentImportFileName] = useState('');
+  const [paymentImporting, setPaymentImporting] = useState(false);
+  const [paymentImportResult, setPaymentImportResult] = useState(null);
   const [filteredClientEmail, setFilteredClientEmail] = useState(null);
   const [clientJobAnalysis, setClientJobAnalysis] = useState({});
   const [clientJobAnalysisLoading, setClientJobAnalysisLoading] = useState(true);
@@ -1042,6 +1051,113 @@ export default function ClientOnboarding() {
     );
   }
 
+  // ── Bulk import: Payment Email by Assigned Email ──
+  const parsePaymentImportFile = useCallback((file) => {
+    setPaymentImportErrors([]);
+    setPaymentImportRows([]);
+    setPaymentImportResult(null);
+    setPaymentImportFileName(file?.name || '');
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = String(reader.result || '');
+        const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        if (lines.length < 2) {
+          setPaymentImportErrors(['File is empty or missing header row']);
+          return;
+        }
+        const splitLine = (line) => {
+          const out = [];
+          let cur = '';
+          let inQuote = false;
+          for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (ch === '"') { inQuote = !inQuote; continue; }
+            if ((ch === ',' || ch === '\t') && !inQuote) { out.push(cur); cur = ''; continue; }
+            cur += ch;
+          }
+          out.push(cur);
+          return out.map((c) => c.trim());
+        };
+        const header = splitLine(lines[0]).map((h) => h.toLowerCase());
+        const aIdx = header.findIndex((h) => h === 'assigned email' || h === 'client email' || h === 'email');
+        const pIdx = header.findIndex((h) => h === 'payment email' || h === 'paymentemail');
+        if (aIdx === -1 || pIdx === -1) {
+          setPaymentImportErrors(['Header must contain "Assigned Email" and "Payment Email" columns']);
+          return;
+        }
+        const rows = [];
+        const errs = [];
+        const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        for (let i = 1; i < lines.length; i++) {
+          const cols = splitLine(lines[i]);
+          const a = (cols[aIdx] || '').toLowerCase();
+          const p = (cols[pIdx] || '').toLowerCase();
+          if (!a) { errs.push(`Row ${i + 1}: missing Assigned Email`); continue; }
+          if (!emailRx.test(a)) { errs.push(`Row ${i + 1}: invalid Assigned Email "${a}"`); continue; }
+          if (p && !emailRx.test(p)) { errs.push(`Row ${i + 1}: invalid Payment Email "${p}"`); continue; }
+          rows.push({ assignedEmail: a, paymentEmail: p });
+        }
+        setPaymentImportRows(rows);
+        setPaymentImportErrors(errs);
+      } catch {
+        setPaymentImportErrors(['Failed to parse file. Use a CSV with columns: Assigned Email, Payment Email']);
+      }
+    };
+    reader.readAsText(file);
+  }, []);
+
+  const downloadPaymentImportTemplate = useCallback(() => {
+    const csv = 'Assigned Email,Payment Email\nclient1@example.com,payer1@example.com\nclient2@example.com,payer2@example.com\n';
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'payment-emails-template.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const submitPaymentImport = useCallback(async () => {
+    if (!paymentImportRows.length) {
+      toastUtils.error('No valid rows to import');
+      return;
+    }
+    setPaymentImporting(true);
+    setPaymentImportResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/clients/payment-emails/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS() },
+        body: JSON.stringify({ rows: paymentImportRows })
+      });
+      if (!res.ok) {
+        if (res.status === 401) handleAuthFailure();
+        const err = await res.json().catch(() => ({}));
+        toastUtils.error(err?.error || 'Import failed');
+        return;
+      }
+      const data = await res.json();
+      setPaymentImportResult(data);
+      toastUtils.success(`Imported: ${data.updated} updated, ${data.notFound} not found, ${data.failed} failed`);
+    } catch {
+      toastUtils.error('Import failed');
+    } finally {
+      setPaymentImporting(false);
+    }
+  }, [paymentImportRows]);
+
+  const closePaymentImportModal = useCallback(() => {
+    setShowPaymentImportModal(false);
+    setPaymentImportRows([]);
+    setPaymentImportErrors([]);
+    setPaymentImportFileName('');
+    setPaymentImportResult(null);
+  }, []);
+
   // ══════════════════════════════════════════════════════════════════
   //  JSX
   // ══════════════════════════════════════════════════════════════════
@@ -1074,6 +1190,17 @@ export default function ClientOnboarding() {
                 className="pl-10 pr-4 py-2 w-72 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white shadow-sm text-sm"
               />
             </div>
+
+            {/* Import Payment Emails */}
+            <button
+              type="button"
+              onClick={() => setShowPaymentImportModal(true)}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-gray-200 bg-white hover:bg-orange-50 hover:border-orange-300 text-sm font-medium text-gray-700 hover:text-orange-700 shadow-sm transition-colors"
+              title="Bulk import Payment Emails (CSV)"
+            >
+              <Upload className="w-4 h-4" />
+              <span className="hidden sm:inline">Import Payment Emails</span>
+            </button>
 
             {/* Notification Bell */}
             <div className="relative">
@@ -1625,6 +1752,109 @@ export default function ClientOnboarding() {
           onFetchNonResolvedIssues={fetchNonResolvedIssues}
           dashboardManagerNames={dashboardManagerNames}
         />
+      )}
+
+      {/* Bulk Import Payment Emails Modal */}
+      {showPaymentImportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) closePaymentImportModal(); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-orange-100 flex items-center justify-center"><Upload className="w-5 h-5 text-orange-600" /></div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Import Payment Emails</h2>
+                  <p className="text-xs text-gray-500">Bulk-set Payment Email for many clients via CSV</p>
+                </div>
+              </div>
+              <button type="button" onClick={closePaymentImportModal} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors" aria-label="Close">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-5">
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+                <div className="text-xs text-orange-900 font-semibold mb-2">CSV format</div>
+                <div className="text-xs text-orange-800 mb-2">First column: <strong>Assigned Email</strong>. Second column: <strong>Payment Email</strong>. Header row required.</div>
+                <pre className="text-[11px] bg-white border border-orange-200 rounded-lg p-2 font-mono text-gray-700 overflow-x-auto">Assigned Email,Payment Email
+client1@example.com,payer1@example.com
+client2@example.com,payer2@example.com</pre>
+                <button type="button" onClick={downloadPaymentImportTemplate} className="mt-3 inline-flex items-center gap-2 text-xs font-semibold text-orange-700 hover:text-orange-900">
+                  <Download className="w-3.5 h-3.5" /> Download template (.csv)
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-2">Upload CSV file</label>
+                <input
+                  type="file"
+                  accept=".csv,.tsv,text/csv,text/plain"
+                  onChange={(e) => parsePaymentImportFile(e.target.files?.[0])}
+                  className="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100 file:cursor-pointer cursor-pointer"
+                />
+                {paymentImportFileName && (
+                  <p className="mt-2 text-xs text-gray-600">Selected: <span className="font-mono">{paymentImportFileName}</span> · parsed {paymentImportRows.length} valid row{paymentImportRows.length === 1 ? '' : 's'}</p>
+                )}
+              </div>
+
+              {paymentImportErrors.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                  <div className="text-xs font-bold text-red-800 mb-2">Validation issues ({paymentImportErrors.length})</div>
+                  <ul className="space-y-1 max-h-40 overflow-y-auto">
+                    {paymentImportErrors.map((e, i) => (<li key={i} className="text-xs text-red-700">• {e}</li>))}
+                  </ul>
+                </div>
+              )}
+
+              {paymentImportRows.length > 0 && !paymentImportResult && (
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-2 text-xs font-bold text-gray-600 uppercase tracking-wider">Preview ({paymentImportRows.length})</div>
+                  <div className="max-h-56 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                        <tr><th className="px-4 py-2 text-left font-semibold text-gray-700">Assigned Email</th><th className="px-4 py-2 text-left font-semibold text-gray-700">Payment Email</th></tr>
+                      </thead>
+                      <tbody>
+                        {paymentImportRows.slice(0, 50).map((r, i) => (
+                          <tr key={i} className="border-b border-gray-100 last:border-0">
+                            <td className="px-4 py-1.5 font-mono text-gray-800">{r.assignedEmail}</td>
+                            <td className="px-4 py-1.5 font-mono text-gray-800">{r.paymentEmail || <span className="italic text-gray-400">— (will clear)</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {paymentImportRows.length > 50 && <div className="px-4 py-2 text-[11px] text-gray-500 bg-gray-50 border-t border-gray-200">…and {paymentImportRows.length - 50} more</div>}
+                  </div>
+                </div>
+              )}
+
+              {paymentImportResult && (
+                <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+                  <div className="text-xs font-bold text-green-900 mb-2">Import complete</div>
+                  <div className="text-xs text-green-800 grid grid-cols-3 gap-2">
+                    <div className="bg-white rounded-lg p-2 border border-green-200"><div className="font-bold text-lg text-green-700">{paymentImportResult.updated || 0}</div><div className="text-[10px] uppercase tracking-wider text-gray-500">Updated</div></div>
+                    <div className="bg-white rounded-lg p-2 border border-green-200"><div className="font-bold text-lg text-orange-600">{paymentImportResult.notFound || 0}</div><div className="text-[10px] uppercase tracking-wider text-gray-500">Not found</div></div>
+                    <div className="bg-white rounded-lg p-2 border border-green-200"><div className="font-bold text-lg text-red-600">{paymentImportResult.failed || 0}</div><div className="text-[10px] uppercase tracking-wider text-gray-500">Failed</div></div>
+                  </div>
+                  {Array.isArray(paymentImportResult.notFoundEmails) && paymentImportResult.notFoundEmails.length > 0 && (
+                    <div className="mt-3 text-[11px] text-orange-800">
+                      <div className="font-semibold mb-1">Not found:</div>
+                      <div className="font-mono break-all">{paymentImportResult.notFoundEmails.slice(0, 20).join(', ')}{paymentImportResult.notFoundEmails.length > 20 ? `, …(+${paymentImportResult.notFoundEmails.length - 20} more)` : ''}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-2">
+              <button type="button" onClick={closePaymentImportModal} disabled={paymentImporting} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 rounded-lg disabled:opacity-50">Close</button>
+              {!paymentImportResult && (
+                <button type="button" onClick={submitPaymentImport} disabled={paymentImporting || paymentImportRows.length === 0} className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                  {paymentImporting ? <><Loader2 className="w-4 h-4 animate-spin" /> Importing…</> : <><Mail className="w-4 h-4" /> Import {paymentImportRows.length || ''}</>}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Add Client Modal */}

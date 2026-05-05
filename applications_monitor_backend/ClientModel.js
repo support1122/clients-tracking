@@ -223,6 +223,43 @@ export const ClientSchema = new mongoose.Schema({
     required: false,
     default: []
   },
+  paymentEmail: {
+    type: String,
+    required: false,
+    lowercase: true,
+    trim: true,
+    default: ""
+  },
+  milestonesNotified: {
+    resumeReady: {
+      sent: { type: Boolean, default: false },
+      at: { type: Date, default: null }
+    },
+    applicationsStarted: {
+      sent: { type: Boolean, default: false },
+      at: { type: Date, default: null }
+    },
+    pct30: {
+      sent: { type: Boolean, default: false },
+      at: { type: Date, default: null },
+      count: { type: Number, default: 0 }
+    },
+    pct50: {
+      sent: { type: Boolean, default: false },
+      at: { type: Date, default: null },
+      count: { type: Number, default: 0 }
+    },
+    pct75: {
+      sent: { type: Boolean, default: false },
+      at: { type: Date, default: null },
+      count: { type: Number, default: 0 }
+    },
+    pct100: {
+      sent: { type: Boolean, default: false },
+      at: { type: Date, default: null },
+      count: { type: Number, default: 0 }
+    }
+  },
   createdAt: {
     type: String,
     default: () => new Date().toLocaleString('en-US', 'Asia/Kolkata'),
