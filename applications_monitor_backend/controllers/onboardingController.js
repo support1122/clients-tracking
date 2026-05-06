@@ -902,37 +902,8 @@ export async function patchOnboardingJob(req, res) {
           );
           const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
           await addClientActionToJobMoveHistory(clientEmail, 'client_unpaused', movedBy);
-          if (clientBefore && !(clientBefore.milestonesNotified?.applicationsStarted?.sent)) {
-            const jobCount = await JobModel.countDocuments({ userID: clientEmail, currentStatus: { $ne: 'removed' } });
-            if (jobCount >= MIN_JOBS_FOR_EMAIL) {
-              await ClientModel.updateOne(
-                { email: clientEmail },
-                { $set: { 'milestonesNotified.applicationsStarted.sent': true, 'milestonesNotified.applicationsStarted.at': new Date() } }
-              );
-              const planCap = getPlanCap(clientBefore.planType);
-              const r = await sendMilestoneEmail({
-                client: clientBefore,
-                type: 'apps_started',
-                snapshot: { planCap, currentCount: jobCount, percent: planCap ? (jobCount / planCap) * 100 : 0 }
-              }).catch((e) => { console.error('apps_started email error:', e?.message); return { success: false, error: e?.message }; });
-              try {
-                const meta = {
-                  type: 'apps_started',
-                  paymentEmail: clientBefore.paymentEmail || null,
-                  currentCount: jobCount,
-                  planCap,
-                  percent: planCap ? Math.round((jobCount / planCap) * 100) : 0,
-                  status: r?.success ? 'success' : (r?.skipped ? 'skipped' : 'failed'),
-                  reason: r?.reason || r?.error || null
-                };
-                await addClientActionToJobMoveHistory(clientEmail, r?.success ? 'milestone_email_sent' : 'milestone_email_skipped', { email: 'system', name: 'Milestone bot', meta });
-              } catch (e) {
-                console.error('apps_started moveHistory error:', e?.message);
-              }
-            } else {
-              console.log(`[apps_started] gated for ${clientEmail}: jobCount=${jobCount} < ${MIN_JOBS_FOR_EMAIL}`);
-            }
-          }
+          // Combined "started" email is dispatched by hourly cron once:
+          // resumeSent + !onboardingPhase + count >= MIN_JOBS_FOR_EMAIL. No fire here.
           const refetched = await OnboardingJobModel.findById(id);
           if (refetched) jobForResponse = refetched;
         } catch (err) {

@@ -77,6 +77,21 @@ export default function ClientOnboarding() {
   const [paymentImportFileName, setPaymentImportFileName] = useState('');
   const [paymentImporting, setPaymentImporting] = useState(false);
   const [paymentImportResult, setPaymentImportResult] = useState(null);
+  // Send previous milestones (admin)
+  const [showSendPrevModal, setShowSendPrevModal] = useState(false);
+  const [sendPrevRunning, setSendPrevRunning] = useState(false);
+  const [sendPrevResult, setSendPrevResult] = useState(null);
+  // Export logs modal
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportMode, setExportMode] = useState('all');
+  const [exportSelected, setExportSelected] = useState([]);
+  const [exportSearch, setExportSearch] = useState('');
+  const [exportFormat, setExportFormat] = useState('csv');
+  const [exportRows, setExportRows] = useState([]);
+  const [exportSummary, setExportSummary] = useState(null);
+  const [exportPending, setExportPending] = useState([]);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportError, setExportError] = useState(null);
   const [filteredClientEmail, setFilteredClientEmail] = useState(null);
   const [clientJobAnalysis, setClientJobAnalysis] = useState({});
   const [clientJobAnalysisLoading, setClientJobAnalysisLoading] = useState(true);
@@ -1158,6 +1173,117 @@ export default function ClientOnboarding() {
     setPaymentImportResult(null);
   }, []);
 
+  // ── Export milestone email logs ──
+  const fetchExportRows = useCallback(async ({ example = false } = {}) => {
+    setExportLoading(true);
+    setExportError(null);
+    try {
+      const body = example
+        ? { example: true }
+        : { mode: exportMode, clientEmails: exportMode === 'selected' ? exportSelected : [] };
+      const res = await fetch(`${API_BASE}/api/clients/email-export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS() },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        if (res.status === 401) handleAuthFailure();
+        const err = await res.json().catch(() => ({}));
+        setExportError(err?.error || 'Failed to load logs');
+        setExportRows([]);
+        setExportSummary(null);
+        setExportPending([]);
+        return;
+      }
+      const data = await res.json();
+      setExportRows(Array.isArray(data?.rows) ? data.rows : []);
+      setExportSummary(data?.summary || null);
+      setExportPending(Array.isArray(data?.pending) ? data.pending : []);
+    } catch {
+      setExportError('Failed to load logs');
+      setExportRows([]);
+    } finally {
+      setExportLoading(false);
+    }
+  }, [exportMode, exportSelected]);
+
+  const downloadExport = useCallback(() => {
+    if (!exportRows.length) {
+      toastUtils.error('No rows to export');
+      return;
+    }
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const baseName = `flashfire-email-logs-${ts}`;
+    if (exportFormat === 'json') {
+      const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), total: exportRows.length, rows: exportRows }, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `${baseName}.json`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      return;
+    }
+    // CSV
+    const headers = ['clientEmail', 'clientName', 'receiverEmail', 'senderEmail', 'senderName', 'subject', 'template', 'templateLabel', 'sentAt', 'status', 'errorMessage', 'planType', 'planCap', 'currentCount', 'percent'];
+    const escape = (v) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [headers.join(',')];
+    for (const r of exportRows) lines.push(headers.map((h) => escape(r[h])).join(','));
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${baseName}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [exportRows, exportFormat]);
+
+  const closeExportModal = useCallback(() => {
+    setShowExportModal(false);
+    setExportRows([]);
+    setExportSummary(null);
+    setExportPending([]);
+    setExportError(null);
+    setExportSelected([]);
+    setExportSearch('');
+    setExportMode('all');
+  }, []);
+
+  const toggleExportClient = useCallback((email) => {
+    setExportSelected((prev) => prev.includes(email) ? prev.filter((e) => e !== email) : [...prev, email]);
+  }, []);
+
+  const runSendPrevious = useCallback(async () => {
+    setSendPrevRunning(true);
+    setSendPrevResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/clients/email-export/send-previous`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS() }
+      });
+      if (!res.ok) {
+        if (res.status === 401) handleAuthFailure();
+        const err = await res.json().catch(() => ({}));
+        toastUtils.error(err?.error || 'Send-previous failed');
+        return;
+      }
+      const data = await res.json();
+      setSendPrevResult(data);
+      toastUtils.success(`Done · processed ${data.processed} · sent ${data.sent} · skipped ${data.skipped}`);
+    } catch {
+      toastUtils.error('Send-previous failed');
+    } finally {
+      setSendPrevRunning(false);
+    }
+  }, []);
+
+  const closeSendPrevModal = useCallback(() => {
+    if (sendPrevRunning) return;
+    setShowSendPrevModal(false);
+    setSendPrevResult(null);
+  }, [sendPrevRunning]);
+
   // ══════════════════════════════════════════════════════════════════
   //  JSX
   // ══════════════════════════════════════════════════════════════════
@@ -1201,6 +1327,32 @@ export default function ClientOnboarding() {
               <Upload className="w-4 h-4" />
               <span className="hidden sm:inline">Import Payment Emails</span>
             </button>
+
+            {/* Export Logs (admin only) */}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => { setShowExportModal(true); fetchExportRows({}); }}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-gray-200 bg-white hover:bg-orange-50 hover:border-orange-300 text-sm font-medium text-gray-700 hover:text-orange-700 shadow-sm transition-colors"
+                title="Export milestone email logs (admin)"
+              >
+                <Download className="w-4 h-4" />
+                <span className="hidden sm:inline">Export Logs</span>
+              </button>
+            )}
+
+            {/* Send to Previous Clients (admin only) */}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setShowSendPrevModal(true)}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-orange-300 bg-orange-50 hover:bg-orange-100 text-sm font-semibold text-orange-700 shadow-sm transition-colors"
+                title="Send catch-up milestone emails to all active + unpaused clients (admin)"
+              >
+                <Send className="w-4 h-4" />
+                <span className="hidden sm:inline">Send to Previous</span>
+              </button>
+            )}
 
             {/* Notification Bell */}
             <div className="relative">
@@ -1852,6 +2004,269 @@ client2@example.com,payer2@example.com</pre>
                   {paymentImporting ? <><Loader2 className="w-4 h-4 animate-spin" /> Importing…</> : <><Mail className="w-4 h-4" /> Import {paymentImportRows.length || ''}</>}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Send to Previous Clients Modal (admin) */}
+      {showSendPrevModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) closeSendPrevModal(); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-orange-100 flex items-center justify-center"><Send className="w-5 h-5 text-orange-600" /></div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Send Catch-up Milestone Emails</h2>
+                  <p className="text-xs text-gray-500">For active + unpaused clients with a Payment Email set</p>
+                </div>
+              </div>
+              <button type="button" onClick={closeSendPrevModal} disabled={sendPrevRunning} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50" aria-label="Close">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {!sendPrevResult && (
+                <>
+                  <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-xs text-orange-900 leading-relaxed">
+                    <div className="font-semibold mb-2 text-sm">What this does</div>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li>Filters clients by <strong>status: active</strong> and <strong>not paused</strong>, with <strong>paymentEmail</strong> set.</li>
+                      <li>Counts each client's jobs (excluding <code className="bg-white px-1 rounded">removed</code>).</li>
+                      <li>Sends <strong>only the highest milestone</strong> they've reached but haven't received yet (e.g. count 1000 on Executive → sends "700 applications", not "350").</li>
+                      <li>Marks lower already-reached milestones as sent (so future cron ticks won't re-fire them).</li>
+                      <li>Records each action in the ticket's <strong>move history</strong> with status (sent / caught_up_via_send_previous).</li>
+                    </ul>
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Safe to run multiple times — clients who already received their current milestone will be skipped.
+                  </div>
+                </>
+              )}
+
+              {sendPrevResult && (
+                <>
+                  <div className="grid grid-cols-4 gap-3">
+                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-gray-700">{sendPrevResult.processed || 0}</div>
+                      <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-0.5">Processed</div>
+                    </div>
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-green-700">{sendPrevResult.sent || 0}</div>
+                      <div className="text-[10px] uppercase tracking-wider text-green-600 mt-0.5">Sent</div>
+                    </div>
+                    <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-orange-700">{sendPrevResult.skipped || 0}</div>
+                      <div className="text-[10px] uppercase tracking-wider text-orange-600 mt-0.5">Skipped</div>
+                    </div>
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-red-700">{sendPrevResult.failed || 0}</div>
+                      <div className="text-[10px] uppercase tracking-wider text-red-600 mt-0.5">Failed</div>
+                    </div>
+                  </div>
+
+                  {Array.isArray(sendPrevResult.details) && sendPrevResult.details.length > 0 && (
+                    <div className="border border-gray-200 rounded-xl overflow-hidden">
+                      <div className="bg-gray-50 px-4 py-2 text-xs font-bold text-gray-600 uppercase tracking-wider">Details ({sendPrevResult.details.length})</div>
+                      <div className="max-h-72 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead className="bg-gray-50 sticky top-0 border-b border-gray-200">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-700">Client</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-700">Plan</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-700">Count</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-700">Sent</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-700">Caught up</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-700">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sendPrevResult.details.map((d, i) => (
+                              <tr key={i} className="border-b border-gray-100 last:border-0">
+                                <td className="px-3 py-1.5"><div className="font-medium text-gray-900">{d.clientName || '—'}</div><div className="font-mono text-[10px] text-gray-500">{d.clientEmail}</div></td>
+                                <td className="px-3 py-1.5 uppercase text-gray-700">{d.planType}</td>
+                                <td className="px-3 py-1.5 text-gray-700">{d.currentCount}</td>
+                                <td className="px-3 py-1.5"><span className="inline-block px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full text-[10px] font-semibold">{d.sentMilestone}</span></td>
+                                <td className="px-3 py-1.5 text-[10px] text-gray-500">{(d.caughtUp || []).join(', ') || '—'}</td>
+                                <td className="px-3 py-1.5">
+                                  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${d.status === 'sent' ? 'bg-green-100 text-green-700' : d.status === 'skipped' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>{d.status}</span>
+                                  {d.error && <div className="text-[10px] text-red-600 mt-0.5">{d.error}</div>}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-2">
+              <button type="button" onClick={closeSendPrevModal} disabled={sendPrevRunning} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 rounded-lg disabled:opacity-50">{sendPrevResult ? 'Close' : 'Cancel'}</button>
+              {!sendPrevResult && (
+                <button type="button" onClick={runSendPrevious} disabled={sendPrevRunning} className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50">
+                  {sendPrevRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> Running…</> : <><Send className="w-4 h-4" /> Run Now</>}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Export Logs Modal (admin) */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) closeExportModal(); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-orange-100 flex items-center justify-center"><Download className="w-5 h-5 text-orange-600" /></div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Export Email Logs</h2>
+                  <p className="text-xs text-gray-500">Milestone emails sent · subject, template, recipient, sender, timestamp</p>
+                </div>
+              </div>
+              <button type="button" onClick={closeExportModal} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors" aria-label="Close">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-5">
+              {/* Mode + Example + Format */}
+              <div className="flex flex-wrap gap-3 items-center">
+                <div className="flex bg-gray-100 p-1 rounded-xl">
+                  <button type="button" onClick={() => { setExportMode('all'); setExportSelected([]); }} className={`px-4 py-1.5 text-sm font-medium rounded-lg ${exportMode === 'all' ? 'bg-white shadow text-orange-700' : 'text-gray-600 hover:text-gray-900'}`}>All clients</button>
+                  <button type="button" onClick={() => setExportMode('selected')} className={`px-4 py-1.5 text-sm font-medium rounded-lg ${exportMode === 'selected' ? 'bg-white shadow text-orange-700' : 'text-gray-600 hover:text-gray-900'}`}>Selected ({exportSelected.length})</button>
+                </div>
+
+                <select value={exportFormat} onChange={(e) => setExportFormat(e.target.value)} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500">
+                  <option value="csv">CSV</option>
+                  <option value="json">JSON</option>
+                </select>
+
+                <button type="button" onClick={() => fetchExportRows({})} disabled={exportLoading || (exportMode === 'selected' && exportSelected.length === 0)} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+                  {exportLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />} Load
+                </button>
+
+                <button type="button" onClick={() => fetchExportRows({ example: true })} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border border-orange-200 bg-orange-50 text-orange-700 rounded-lg hover:bg-orange-100">
+                  Show Viswanth Donda
+                </button>
+              </div>
+
+              {/* Selected mode: client picker */}
+              {exportMode === 'selected' && (
+                <div className="border border-gray-200 rounded-xl">
+                  <div className="px-3 py-2 border-b border-gray-100">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Search clients by name or email..."
+                        value={exportSearch}
+                        onChange={(e) => setExportSearch(e.target.value)}
+                        className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-md focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                      />
+                    </div>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto">
+                    {(clientsList || []).filter((c) => {
+                      if (!exportSearch) return true;
+                      const q = exportSearch.toLowerCase();
+                      return (c.email || '').toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q);
+                    }).slice(0, 200).map((c) => (
+                      <label key={c.email} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm border-b border-gray-50 last:border-0">
+                        <input type="checkbox" checked={exportSelected.includes(c.email)} onChange={() => toggleExportClient(c.email)} className="accent-orange-600" />
+                        <span className="font-medium text-gray-900 flex-1 truncate">{c.name || '—'}</span>
+                        <span className="text-gray-500 font-mono text-xs">{c.email}</span>
+                      </label>
+                    ))}
+                    {(!clientsList || clientsList.length === 0) && <div className="p-3 text-xs text-gray-500 text-center">No clients loaded</div>}
+                  </div>
+                </div>
+              )}
+
+              {/* Summary banner (for example) */}
+              {exportSummary && (
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 text-xs text-orange-900">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <span><strong>{exportSummary.clientName}</strong> · <span className="font-mono">{exportSummary.clientEmail}</span></span>
+                    <span>Plan: <strong className="uppercase">{exportSummary.planType}</strong> ({exportSummary.planCap})</span>
+                    <span>Applications: <strong>{exportSummary.currentCount}</strong></span>
+                    <span>Sent: <strong>{exportSummary.sent}</strong> · Pending: <strong>{exportSummary.remaining}</strong></span>
+                  </div>
+                  {exportPending.length > 0 && (
+                    <div className="mt-2 text-[11px] text-orange-700">Upcoming: {exportPending.map((p) => `${p.templateLabel} (≥${p.threshold})`).join(' · ')}</div>
+                  )}
+                </div>
+              )}
+
+              {/* Error */}
+              {exportError && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-xs text-red-700">{exportError}</div>
+              )}
+
+              {/* Preview table */}
+              <div className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="bg-gray-50 px-4 py-2 flex items-center justify-between border-b border-gray-200">
+                  <div className="text-xs font-bold text-gray-600 uppercase tracking-wider">Preview ({exportRows.length})</div>
+                  {exportLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-400" />}
+                </div>
+                <div className="max-h-72 overflow-y-auto">
+                  {exportRows.length === 0 ? (
+                    <div className="p-8 text-center text-sm text-gray-500">No emails to export. Adjust filters or click "Load".</div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-semibold text-gray-700">Client</th>
+                          <th className="px-3 py-2 text-left font-semibold text-gray-700">Template</th>
+                          <th className="px-3 py-2 text-left font-semibold text-gray-700">Subject</th>
+                          <th className="px-3 py-2 text-left font-semibold text-gray-700">From → To</th>
+                          <th className="px-3 py-2 text-left font-semibold text-gray-700">Sent</th>
+                          <th className="px-3 py-2 text-left font-semibold text-gray-700">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {exportRows.slice(0, 100).map((r, i) => (
+                          <tr key={i} className="border-b border-gray-100 last:border-0 hover:bg-orange-50/30">
+                            <td className="px-3 py-1.5">
+                              <div className="font-medium text-gray-900">{r.clientName || '—'}</div>
+                              <div className="font-mono text-[10px] text-gray-500">{r.clientEmail}</div>
+                            </td>
+                            <td className="px-3 py-1.5">
+                              <span className="inline-block px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full text-[10px] font-semibold uppercase tracking-wider">{r.templateLabel || r.template}</span>
+                            </td>
+                            <td className="px-3 py-1.5 text-gray-700 max-w-xs truncate" title={r.subject}>{r.subject}</td>
+                            <td className="px-3 py-1.5 font-mono text-[10px] text-gray-600">
+                              <div>{r.senderEmail}</div>
+                              <div className="text-gray-400">→ {r.receiverEmail || '—'}</div>
+                            </td>
+                            <td className="px-3 py-1.5 text-gray-600 whitespace-nowrap">{r.sentAt ? new Date(r.sentAt).toLocaleString() : '—'}</td>
+                            <td className="px-3 py-1.5">
+                              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${r.status === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{r.status}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  {exportRows.length > 100 && <div className="px-4 py-2 text-[11px] text-gray-500 bg-gray-50 border-t border-gray-200">…and {exportRows.length - 100} more (full set in download)</div>}
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-between">
+              <div className="text-xs text-gray-500">
+                {exportRows.length > 0 ? `${exportRows.length} row${exportRows.length === 1 ? '' : 's'} · ${exportFormat.toUpperCase()}` : '—'}
+              </div>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={closeExportModal} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 rounded-lg">Close</button>
+                <button type="button" onClick={downloadExport} disabled={!exportRows.length} className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                  <Download className="w-4 h-4" /> Download {exportFormat.toUpperCase()}
+                </button>
+              </div>
             </div>
           </div>
         </div>
