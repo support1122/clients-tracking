@@ -4,10 +4,11 @@ const ClientEmailLogSchema = new mongoose.Schema(
   {
     clientEmail: { type: String, required: true, lowercase: true, index: true },
     paymentEmail: { type: String, required: true, lowercase: true },
+    // Free-form milestone identifier. Old values: resume_ready/apps_started/pct30/50/75/100.
+    // New values: started, count_250, count_350, count_700, completed.
     type: {
       type: String,
-      required: true,
-      enum: ["resume_ready", "apps_started", "pct30", "pct50", "pct75", "pct100"]
+      required: true
     },
     subject: { type: String, required: true },
     status: { type: String, required: true, enum: ["success", "failed"] },

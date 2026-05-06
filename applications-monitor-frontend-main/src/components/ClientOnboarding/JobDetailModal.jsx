@@ -86,6 +86,10 @@ const JobDetailModal = React.memo(({
   const [paymentEmailDraft, setPaymentEmailDraft] = useState('');
   const [editingPaymentEmail, setEditingPaymentEmail] = useState(false);
   const [savingPaymentEmail, setSavingPaymentEmail] = useState(false);
+  const [milestoneSchedule, setMilestoneSchedule] = useState([]);
+  const [milestonePlanCap, setMilestonePlanCap] = useState(0);
+  const [milestonePlanType, setMilestonePlanType] = useState('');
+  const [sendingPendingMilestone, setSendingPendingMilestone] = useState(false);
   const [savingClientName, setSavingClientName] = useState(false);
   const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
   const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
@@ -189,6 +193,9 @@ const JobDetailModal = React.memo(({
       const pe = (data?.paymentEmail || '').trim();
       setPaymentEmailValue(pe);
       setPaymentEmailDraft(pe);
+      setMilestoneSchedule(Array.isArray(data?.milestoneSchedule) ? data.milestoneSchedule : []);
+      setMilestonePlanCap(Number(data?.planCap) || 0);
+      setMilestonePlanType(String(data?.planType || ''));
     } catch {
       setEmailLogsError('Failed to load email logs');
       setEmailLogs([]);
@@ -232,9 +239,40 @@ const JobDetailModal = React.memo(({
     }
   }, [selectedJob?.clientEmail, paymentEmailDraft, fetchEmailLogs]);
 
+  const sendPendingMilestone = useCallback(async () => {
+    const clientEmail = selectedJob?.clientEmail;
+    if (!clientEmail) return;
+    setSendingPendingMilestone(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}/send-pending-milestones`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS() }
+      });
+      if (!res.ok) {
+        if (res.status === 401) handleAuthFailure();
+        const err = await res.json().catch(() => ({}));
+        toastUtils.error(err?.error || 'Send failed');
+        return;
+      }
+      const data = await res.json();
+      if (data?.sent) {
+        toastUtils.success(`Sent: ${data.milestone} · count ${data.currentCount}/${data.planCap}${data.caughtUp?.length ? ` · caught up ${data.caughtUp.length}` : ''}`);
+      } else if (data?.skipped) {
+        toastUtils.info ? toastUtils.info(`Skipped: ${data.reason || 'no_pending_milestones'}`) : toastUtils.success(`Skipped: ${data.reason || 'no_pending_milestones'}`);
+      } else {
+        toastUtils.error(data?.error || 'Did not send');
+      }
+      fetchEmailLogs(clientEmail);
+    } catch {
+      toastUtils.error('Send failed');
+    } finally {
+      setSendingPendingMilestone(false);
+    }
+  }, [selectedJob?.clientEmail, fetchEmailLogs]);
+
   useEffect(() => {
     if (selectedJob?.clientEmail) fetchEmailLogs(selectedJob.clientEmail);
-    else { setEmailLogs([]); setPaymentEmailValue(''); setPaymentEmailDraft(''); }
+    else { setEmailLogs([]); setPaymentEmailValue(''); setPaymentEmailDraft(''); setMilestoneSchedule([]); setMilestonePlanCap(0); setMilestonePlanType(''); }
   }, [selectedJob?.clientEmail, fetchEmailLogs]);
 
   // Fetch operator managed users
@@ -995,6 +1033,67 @@ const JobDetailModal = React.memo(({
                 </div>
               )}
 
+              {/* Milestone Timeline — visible all stages */}
+              {milestoneSchedule.length > 0 && (
+                <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
+                  <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                      <History className="w-3 h-3" /> Milestone Timeline
+                      {milestonePlanType && <span className="ml-2 text-[10px] text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full uppercase tracking-wider">{milestonePlanType}{milestonePlanCap ? ` · ${milestonePlanCap}` : ''}</span>}
+                    </h3>
+                    {isAdmin && milestoneSchedule.some((m) => !m.sent) && (
+                      <button
+                        type="button"
+                        onClick={sendPendingMilestone}
+                        disabled={sendingPendingMilestone}
+                        title="Send the highest pending milestone email this client qualifies for now"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 disabled:opacity-50"
+                      >
+                        {sendingPendingMilestone ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
+                        Fire pending email
+                      </button>
+                    )}
+                  </div>
+                  <ol className="relative border-l-2 border-orange-200 ml-2 space-y-4">
+                    {milestoneSchedule.map((m) => {
+                      const labelByType = {
+                        started: 'Applications Started + Resume Created',
+                        count_milestone: `${m.threshold} applications submitted`,
+                        completed: 'Applications Completed'
+                      };
+                      const label = m.type === 'count_milestone' ? labelByType.count_milestone : labelByType[m.type];
+                      const sent = m.sent;
+                      const dotColor = sent ? 'bg-green-500 ring-green-100' : 'bg-gray-300 ring-gray-100';
+                      return (
+                        <li key={m.key} className="ml-4 pl-2">
+                          <span className={`absolute -left-[7px] flex items-center justify-center w-3 h-3 rounded-full ring-4 ${dotColor}`} />
+                          <div className="bg-white border border-gray-200 rounded-lg p-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="text-xs font-bold text-gray-900">{label}</div>
+                                <div className="text-[11px] text-gray-500 mt-0.5">
+                                  {m.type === 'started' ? `Triggers at ${m.threshold}+ jobs in dashboard (after resume + AppIP)` :
+                                    m.type === 'completed' ? `Triggers when count reaches ${m.threshold}` :
+                                    `Triggers when count reaches ${m.threshold}`}
+                                </div>
+                              </div>
+                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full whitespace-nowrap ${sent ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                                {sent ? 'Sent' : 'Pending'}
+                              </span>
+                            </div>
+                            {sent && m.at && (
+                              <div className="text-[10px] text-gray-500 mt-1.5">
+                                {new Date(m.at).toLocaleString()}{m.count ? ` · count ${m.count}` : ''}
+                              </div>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
+              )}
+
               {/* Email Activity (milestone notifications + move history) */}
               {(selectedJob.status === 'applications_in_progress' || selectedJob.status === 'completed') && (
                 <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
@@ -1013,6 +1112,12 @@ const JobDetailModal = React.memo(({
                     <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                       {emailLogs.map((l) => {
                         const typeLabel = ({
+                          started: 'Applications started + resume',
+                          count_250: '250 applications',
+                          count_350: '350 applications',
+                          count_700: '700 applications',
+                          completed: 'Applications completed',
+                          // legacy
                           resume_ready: 'Resume ready',
                           apps_started: 'Applications started',
                           pct30: '30% milestone',
@@ -1043,6 +1148,12 @@ const JobDetailModal = React.memo(({
                           const who = m.movedByName || m.movedBy || 'unknown';
                           const when = m.movedAt ? new Date(m.movedAt).toLocaleString() : '';
                           const milestoneLabel = ({
+                            started: 'Applications started + resume',
+                            count_250: '250 applications',
+                            count_350: '350 applications',
+                            count_700: '700 applications',
+                            completed: 'Applications completed',
+                            // legacy
                             resume_ready: 'Resume ready',
                             apps_started: 'Applications started',
                             pct30: '30% milestone',

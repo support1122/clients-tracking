@@ -230,35 +230,12 @@ export const ClientSchema = new mongoose.Schema({
     trim: true,
     default: ""
   },
+  // Dynamic per-plan milestone tracking. Keys come from PLAN_MILESTONES
+  // ('started', 'count_250', 'count_350', 'count_700', 'completed').
+  // Each value: { sent: Boolean, at: Date, count: Number }.
   milestonesNotified: {
-    resumeReady: {
-      sent: { type: Boolean, default: false },
-      at: { type: Date, default: null }
-    },
-    applicationsStarted: {
-      sent: { type: Boolean, default: false },
-      at: { type: Date, default: null }
-    },
-    pct30: {
-      sent: { type: Boolean, default: false },
-      at: { type: Date, default: null },
-      count: { type: Number, default: 0 }
-    },
-    pct50: {
-      sent: { type: Boolean, default: false },
-      at: { type: Date, default: null },
-      count: { type: Number, default: 0 }
-    },
-    pct75: {
-      sent: { type: Boolean, default: false },
-      at: { type: Date, default: null },
-      count: { type: Number, default: 0 }
-    },
-    pct100: {
-      sent: { type: Boolean, default: false },
-      at: { type: Date, default: null },
-      count: { type: Number, default: 0 }
-    }
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({})
   },
   createdAt: {
     type: String,
