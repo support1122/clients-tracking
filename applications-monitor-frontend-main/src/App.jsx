@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import Monitor from './components/Monitor';
+import ConnectGmailButton from './components/ConnectGmailButton.jsx';
 import { Link, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
 
 function App() {
@@ -171,6 +172,7 @@ function App() {
                     {location.pathname === "/admin-dashboard" ? "Monitor Clients" : "Admin Dashboard"}
                   </button>
                 </Link>
+                <ConnectGmailButton />
                 <button
                   onClick={handleLogout}
                   className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm"
@@ -263,6 +265,7 @@ function App() {
                   </button>
                 </Link>
               )}
+              <ConnectGmailButton />
               <button
                 onClick={handleLogout}
                 className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm"

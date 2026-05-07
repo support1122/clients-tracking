@@ -22,7 +22,6 @@
   "type": "module",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.911.0",
-    "@sendgrid/mail": "^8.1.6",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
     "bullmq": "^5.25.8",
@@ -32,6 +31,7 @@
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "form-data": "^4.0.0",
+    "googleapis": "^144.0.0",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.18.0",

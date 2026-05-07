@@ -1,14 +1,5 @@
-import sgMail from "@sendgrid/mail";
-import { ClientEmailLogModel } from "../ClientEmailLogModel.js";
+import { sendGmailEmail } from "./gmailSender.js";
 import { getPlanLabel } from "./planCaps.js";
-
-const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY_1 || process.env.SENDGRID_API_KEY;
-const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@flashfirehq.com";
-const FROM_NAME = "FlashFire Team";
-
-if (SENDGRID_API_KEY) {
-  sgMail.setApiKey(SENDGRID_API_KEY);
-}
 
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "support@flashfirehq.com";
 const WEBSITE_URL   = process.env.WEBSITE_URL   || "https://www.flashfirejobs.com";
@@ -160,39 +151,21 @@ export async function sendMilestoneEmail({ client, type, snapshot = {}, mileston
 
   const { subject, html } = buildEmail(type, ctx);
 
-  const logBase = {
-    clientEmail: client.email,
-    paymentEmail: toEmail,
-    type: milestoneKey || type,
-    subject,
-    snapshot: {
-      planType: client.planType || "",
-      planCap: ctx.planCap,
-      currentCount: ctx.currentCount,
-      percent: ctx.planCap ? Math.round((ctx.currentCount / ctx.planCap) * 100) : 0
-    }
+  const logSnapshot = {
+    planType: client.planType || "",
+    planCap: ctx.planCap,
+    currentCount: ctx.currentCount,
+    percent: ctx.planCap ? Math.round((ctx.currentCount / ctx.planCap) * 100) : 0
   };
 
-  if (!SENDGRID_API_KEY) {
-    console.log(`[Milestone] ${type} -> ${toEmail} (SendGrid not configured — logging only)`);
-    await ClientEmailLogModel.create({ ...logBase, status: "failed", errorMessage: "sendgrid_not_configured" });
-    return { skipped: true, reason: "sendgrid_not_configured" };
-  }
-
-  try {
-    await sgMail.send({
-      to: toEmail,
-      from: { email: FROM_EMAIL, name: FROM_NAME },
-      subject,
-      html
-    });
-    await ClientEmailLogModel.create({ ...logBase, status: "success" });
-    console.log(`[Milestone] sent ${type}/${milestoneKey} to ${toEmail} for client ${client.email}`);
-    return { success: true };
-  } catch (err) {
-    const msg = err?.response?.body?.errors?.[0]?.message || err?.message || "send_failed";
-    console.error(`[Milestone] ${type} failed for ${client.email}:`, msg);
-    await ClientEmailLogModel.create({ ...logBase, status: "failed", errorMessage: msg });
-    return { success: false, error: msg };
-  }
+  return sendGmailEmail({
+    to: toEmail,
+    subject,
+    html,
+    category: "milestone",
+    type: milestoneKey || type,
+    clientEmail: client.email,
+    snapshot: logSnapshot,
+    meta: { milestoneType: type, milestoneKey }
+  });
 }

@@ -42,6 +42,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import ConnectGmailButton from './ConnectGmailButton.jsx';
 
 export default function Layout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -81,6 +82,11 @@ export default function Layout({ children }) {
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-4">
       <div className="min-h-[calc(100vh-2rem)] rounded-xl border border-slate-200 bg-white shadow-lg overflow-hidden flex flex-col">
         <div className="w-full border-b border-slate-200 bg-gradient-to-r from-blue-50 via-indigo-50 to-blue-50">
+          {!isRestrictedRole && (
+            <div className="px-3 pt-3 flex justify-end">
+              <ConnectGmailButton />
+            </div>
+          )}
           <div className="p-3 flex flex-wrap gap-2.5 justify-center">
             {isRestrictedRole ? (
               <>

@@ -1,22 +1,11 @@
-import sgMail from '@sendgrid/mail';
-
-const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY_1 || process.env.SENDGRID_API_KEY;
-const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@flashfirehq.com';
-const FROM_NAME = process.env.SENDGRID_FROM_NAME || 'FlashFire Dashboard';
-
-if (SENDGRID_API_KEY) {
-  sgMail.setApiKey(SENDGRID_API_KEY);
-}
+import { sendGmailEmail } from "./gmailSender.js";
 
 export async function sendOtpEmail(toEmail, otp, name) {
-  if (!SENDGRID_API_KEY) {
-    console.log(`[OTP Email] ${toEmail} -> OTP (SendGrid not configured)`);
-    return;
-  }
+  if (!toEmail) return { skipped: true, reason: "no_recipient" };
   console.log(`[OTP Email] Sending OTP to ${toEmail}`);
 
-  const displayName = name || (toEmail && toEmail.split('@')[0]) || 'User';
-
+  const displayName = name || toEmail.split("@")[0] || "User";
+  const subject = "Your FlashFire Portal login code";
   const html = `
 <!DOCTYPE html>
 <html>
@@ -39,25 +28,25 @@ export async function sendOtpEmail(toEmail, otp, name) {
       <p style="margin:0;color:#6b7280;font-size:14px;">If you didn't request this code, ignore this email.</p>
     </div>
     <div style="text-align:center;padding:16px 0;">
-      <span style="color:#9ca3af;font-size:12px;">© 2026 FlashFire</span>
+      <span style="color:#9ca3af;font-size:12px;">© ${new Date().getFullYear()} FlashFire</span>
     </div>
   </div>
 </body>
-</html>
-`;
+</html>`;
+  const text = `Hi ${displayName},\n\nYour FlashFire login OTP: ${otp}\nIt expires in 5 minutes.\n\nIf you didn't request this code, ignore this email.`;
 
-  const msg = {
+  const result = await sendGmailEmail({
     to: toEmail,
-    from: { email: FROM_EMAIL, name: FROM_NAME },
-    subject: 'Your FlashFire Portal login code',
-    html
-  };
-
-  try {
-    await sgMail.send(msg);
-    console.log(`[OTP Email] Sent successfully to ${toEmail}`);
-  } catch (err) {
-    console.error(`[OTP Email] Failed to send to ${toEmail}:`, err?.response?.body || err.message);
-    throw err;
+    subject,
+    html,
+    text,
+    category: "otp",
+    type: "otp_login",
+    clientEmail: toEmail,
+    meta: { displayName }
+  });
+  if (!result.success && !result.skipped) {
+    throw new Error(result.error || "otp_send_failed");
   }
+  return result;
 }
