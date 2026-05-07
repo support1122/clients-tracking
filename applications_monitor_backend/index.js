@@ -86,6 +86,12 @@ import FormData from 'form-data';
 import cron from 'node-cron';
 import { ClientEmailLogModel } from './ClientEmailLogModel.js';
 import { sendMilestoneEmail } from './utils/clientMilestoneEmails.js';
+import {
+  startGoogleAuth,
+  googleAuthCallback,
+  gmailStatus,
+  gmailDisconnect
+} from './controllers/GmailOauthController.js';
 import { getPlanCap, getPlanMilestones, MIN_JOBS_FOR_EMAIL } from './utils/planCaps.js';
 
 const FLASHFIRE_API_BASE_URL = process.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
@@ -2477,6 +2483,12 @@ app.post('/api/auth/session-key', verifyToken, verifyAdmin, generateSessionKey);
 app.get('/api/auth/session-keys/:userEmail', verifyToken, verifyAdmin, getUserSessionKeys);
 app.post('/api/auth/cleanup-session-keys', verifyToken, verifyAdmin, cleanupSessionKeysEndpoint);
 
+// Gmail OAuth (system sender — replaces SendGrid for OTP / milestone / tag emails)
+app.get('/auth/google', startGoogleAuth);
+app.get('/auth/google/callback', googleAuthCallback);
+app.get('/api/gmail/status', verifyToken, gmailStatus);
+app.post('/api/gmail/disconnect', verifyToken, verifyAdmin, gmailDisconnect);
+
 // Job routes
 app.post('/', getAllJobs);
 app.post('/api/jobs', createJob);
@@ -4312,9 +4324,7 @@ app.post('/api/clients/email-export', verifyToken, verifyAdmin, async (req, res)
   }
 });
 
-// Admin: dispatch catch-up milestone emails to all active+unpaused clients
-// based on their current application count.
-// Admin: dispatch catch-up milestone email for a single client.
+// Admin: dispatch catch-up milestone email for a single client (any active client, paused included).
 app.post('/api/clients/:email/send-pending-milestones', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const emailLower = String(req.params.email || '').toLowerCase().trim();
@@ -4322,7 +4332,6 @@ app.post('/api/clients/:email/send-pending-milestones', verifyToken, verifyAdmin
     const client = await ClientModel.findOne({ email: emailLower }).lean();
     if (!client) return res.status(404).json({ error: 'client not found' });
     if (client.status !== 'active') return res.status(400).json({ error: 'client is not active', code: 'inactive' });
-    if (client.isPaused) return res.status(400).json({ error: 'client is paused', code: 'paused' });
     if (!client.paymentEmail) return res.status(400).json({ error: 'paymentEmail not set', code: 'no_payment_email' });
 
     const planCap = getPlanCap(client.planType);
@@ -7748,14 +7757,13 @@ async function recordMilestoneInMoveHistory(clientEmail, milestoneKey, sendResul
   }
 }
 
-// Admin catch-up: for active+unpaused+has-paymentEmail clients, send ONE
-// milestone email reflecting the highest reached threshold currently unsent.
+// Admin catch-up: for ALL active clients (paused included) with paymentEmail set,
+// send ONE milestone email reflecting the highest reached threshold currently unsent.
 // Lower already-reached milestones get marked sent without firing emails so
 // future cron ticks won't re-spam.
 async function runSendPreviousMilestones() {
   const clients = await ClientModel.find({
     status: 'active',
-    isPaused: { $ne: true },
     paymentEmail: { $exists: true, $ne: '' }
   }).lean();
 
@@ -7832,9 +7840,9 @@ async function runSendPreviousMilestones() {
 async function runClientMilestoneCron() {
   console.log('[Client Milestones] Cron tick start');
   try {
+    // Send to ALL active clients (paused included) — was previously gated by isPaused.
     const clients = await ClientModel.find({
       status: 'active',
-      isPaused: { $ne: true },
       paymentEmail: { $exists: true, $ne: '' }
     }).lean();
 
