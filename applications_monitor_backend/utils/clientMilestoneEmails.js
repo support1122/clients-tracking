@@ -15,8 +15,7 @@ function shell({ kicker, title, bodyHtml }) {
 
     <!-- Brand bar -->
     <div style="text-align:center;padding:8px 0 16px;">
-      <span style="display:inline-block;font-size:22px;font-weight:800;letter-spacing:0.5px;color:#ea580c;">FLASH<span style="color:#1f2937;">FIRE</span></span>
-      <div style="font-size:11px;color:#6b7280;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;margin-top:2px;">Land your next role, faster</div>
+      <span style="display:inline-block;font-size:22px;font-weight:800;letter-spacing:0.5px;color:#ea580c;">FLASHFIRE</span>
     </div>
 
     <!-- Header card -->
@@ -87,45 +86,44 @@ function buildEmail(type, ctx) {
 
   if (type === 'started') {
     return {
-      subject: "Your FlashFire applications have started — resume is ready",
+      subject: "Your resume is ready and applications are going out",
       html: shell({
         kicker: "FLASHFIRE PORTAL",
-        title: "We're live — resume done, applications underway",
+        title: "Resume done. Applications going out.",
         bodyHtml: `
           <p style="margin:0 0 16px;color:#374151;font-size:16px;">Hi ${name},</p>
-          <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Two big steps complete in one go: your tailored FlashFire <strong>resume is ready</strong>, and we've <strong>started submitting applications</strong> on your behalf.</p>
-          <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Your <strong>${planLabel}</strong> plan covers <strong>${planCap}</strong> targeted roles. We'll send you a clear checkpoint when key milestones land — and a final note once everything is delivered.</p>
-          <p style="margin:0;color:#6b7280;font-size:13px;">Sharpen your interview prep — momentum builds fast from here. Reply with any focus shifts or target companies.</p>`
+          <p style="margin:0 0 16px;color:#374151;font-size:15px;line-height:1.6;">Good news. Your new resume is ready, and we've started sending applications today. Your <strong>${planLabel}</strong> plan covers <strong>${planCap}</strong> roles, and we'll keep you posted as we go.</p>
+          <p style="margin:0;color:#6b7280;font-size:13px;">If a few specific companies or titles are top of mind, just reply and we'll prioritize them.</p>`
       })
     };
   }
 
   if (type === 'count_milestone') {
     return {
-      subject: `Update: ${threshold} applications submitted on your ${planLabel} plan`,
+      subject: `${threshold} applications in. Quick update.`,
       html: shell({
         kicker: "FLASHFIRE PORTAL",
         title: `${threshold} applications submitted`,
         bodyHtml: `
           <p style="margin:0 0 12px;color:#374151;font-size:16px;">Hi ${name},</p>
-          <p style="margin:0 0 8px;color:#374151;font-size:15px;line-height:1.6;">Quick checkpoint — we've completed <strong>${threshold} applications</strong> for you under the <strong>${planLabel}</strong> plan. Recruiter responses typically pick up around this point.</p>
+          <p style="margin:0 0 8px;color:#374151;font-size:15px;line-height:1.6;">Wanted to give you a heads up. We've crossed <strong>${threshold} applications</strong> on your <strong>${planLabel}</strong> plan. Replies usually start showing up around this stage, so keep an eye on your inbox and LinkedIn.</p>
           ${progressBlock({ planLabel, currentCount, planCap })}
-          <p style="margin:0;color:#6b7280;font-size:13px;">Stay responsive on email and LinkedIn — your team keeps pushing the rest. Reply if you want to retarget.</p>`
+          <p style="margin:0;color:#6b7280;font-size:13px;">Want us to shift focus to different roles or locations? Just reply.</p>`
       })
     };
   }
 
   if (type === 'completed') {
     return {
-      subject: `Applications complete — your ${planLabel} plan is fully delivered`,
+      subject: `All ${planCap} applications done. ${planLabel} plan wrapped.`,
       html: shell({
         kicker: "FLASHFIRE PORTAL",
-        title: "Plan complete — all applications delivered",
+        title: "All applications are out the door",
         bodyHtml: `
           <p style="margin:0 0 12px;color:#374151;font-size:16px;">Hi ${name},</p>
-          <p style="margin:0 0 8px;color:#374151;font-size:15px;line-height:1.6;">All <strong>${planCap} applications</strong> under your <strong>${planLabel}</strong> plan are now submitted. Your team continues tracking responses, scheduling interviews, and supporting follow-up.</p>
+          <p style="margin:0 0 8px;color:#374151;font-size:15px;line-height:1.6;">That's a wrap on all <strong>${planCap} applications</strong> under your <strong>${planLabel}</strong> plan. We're now focused on tracking replies, lining up interviews, and helping with follow-ups.</p>
           ${progressBlock({ planLabel, currentCount: planCap, planCap })}
-          <p style="margin:0;color:#6b7280;font-size:13px;">Final stretch — let's land the offer. Reply with any updates, scheduling needs, or new priorities.</p>`
+          <p style="margin:0;color:#6b7280;font-size:13px;">Got an interview coming up or need prep help? Reply here, we've got you.</p>`
       })
     };
   }
