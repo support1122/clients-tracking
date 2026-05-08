@@ -92,6 +92,18 @@ import {
   gmailStatus,
   gmailDisconnect
 } from './controllers/GmailOauthController.js';
+
+// Milestone counting whitelist: only Saved / Applied / Interviewing / Offer / Rejected.
+// Excludes Removed / Deleted variants (case-insensitive). Stored statuses vary
+// ("Applied", "applied", "Offer Extended", "rejected by client" etc.), so anchor
+// to the start of the string and rely on the prefix.
+const MILESTONE_COUNT_STATUS_RE = /^(saved|applied|interview|offer|reject)/i;
+function milestoneCountFilter(userEmail) {
+  return {
+    userID: userEmail,
+    currentStatus: { $regex: MILESTONE_COUNT_STATUS_RE }
+  };
+}
 import { getPlanCap, getPlanMilestones, MIN_JOBS_FOR_EMAIL } from './utils/planCaps.js';
 
 const FLASHFIRE_API_BASE_URL = process.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
@@ -4338,10 +4350,7 @@ app.post('/api/clients/:email/send-pending-milestones', verifyToken, verifyAdmin
     const milestones = getPlanMilestones(client.planType);
     if (!milestones.length) return res.status(400).json({ error: 'plan has no milestones', code: 'no_plan' });
 
-    const currentCount = await JobModel.countDocuments({
-      userID: emailLower,
-      currentStatus: { $ne: 'removed' }
-    });
+    const currentCount = await JobModel.countDocuments(milestoneCountFilter(emailLower));
     const notified = client.milestonesNotified || {};
 
     const reached = milestones.filter((m) => {
@@ -7779,10 +7788,7 @@ async function runSendPreviousMilestones() {
     const milestones = getPlanMilestones(client.planType);
     if (!milestones.length) { skipped++; continue; }
 
-    const currentCount = await JobModel.countDocuments({
-      userID: client.email,
-      currentStatus: { $ne: 'removed' }
-    });
+    const currentCount = await JobModel.countDocuments(milestoneCountFilter(client.email));
     const notified = client.milestonesNotified || {};
 
     const reached = milestones.filter((m) => {
@@ -7855,10 +7861,7 @@ async function runClientMilestoneCron() {
       const milestones = getPlanMilestones(client.planType);
       if (!milestones.length) continue;
 
-      const currentCount = await JobModel.countDocuments({
-        userID: client.email,
-        currentStatus: { $ne: 'removed' }
-      });
+      const currentCount = await JobModel.countDocuments(milestoneCountFilter(client.email));
       const notified = client.milestonesNotified || {};
 
       for (const m of milestones) {
