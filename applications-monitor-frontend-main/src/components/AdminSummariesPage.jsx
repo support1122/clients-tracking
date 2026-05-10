@@ -214,6 +214,11 @@ export default function AdminSummariesPage() {
                         doesn't carry its own override. */}
                     <GlobalOpenaiKeyCard />
 
+                    {/* DAILY AI PRICING — gpt-4o-mini per-token rates +
+                        live USD→INR exchange rate. Lets ops eyeball the
+                        cost-per-build at a glance. */}
+                    <PricingCard />
+
                     {/* STAT TILES */}
                     <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mt-5">
                         <StatTile label="Clients" value={totals.clients} />
@@ -851,6 +856,112 @@ function StatTile({ label, value, sub, accent = 'slate' }) {
             <div className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">{label}</div>
             <div className={`text-2xl font-bold mt-1 ${accentMap[accent]}`}>{value}</div>
             {sub && <div className="text-xs text-slate-500 mt-0.5">{sub}</div>}
+        </div>
+    );
+}
+
+// -------------------------------------------------------------------------
+// PricingCard: today's gpt-4o-mini per-token cost + USD→INR rate. Backend
+// caches FX 1h. Sample-build cost (≈ 2k input + 0.5k output) shown in both
+// USD + INR so ops can eyeball spend without doing math.
+// -------------------------------------------------------------------------
+function PricingCard() {
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState(null);
+    const [loading, setLoading] = useState(false);
+
+    const load = async () => {
+        setLoading(true); setErr(null);
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/admin/pricing-info?_=${Date.now()}`, { cache: 'no-store' });
+            const body = await r.json().catch(() => null);
+            if (r.ok && body?.success) setData(body);
+            else setErr(body?.message || `HTTP ${r.status}`);
+        } catch (e) { setErr(e.message); }
+        finally { setLoading(false); }
+    };
+    useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+    const m = data?.openai;
+    const fx = data?.fx;
+    const sample = data?.sample;
+    const fxFresh = fx?.fetchedAt ? new Date(fx.fetchedAt) : null;
+
+    return (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-gradient-to-r from-indigo-50 to-emerald-50 p-4">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="flex-1 min-w-[260px]">
+                    <h3 className="font-bold flex items-center gap-2 text-sm text-slate-900">
+                        💰 Daily AI cost
+                        {loading && <span className="text-xs text-slate-500 font-normal">refreshing…</span>}
+                    </h3>
+                    <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                        Live OpenAI <code>{m?.model || 'gpt-4o-mini'}</code> per-token rates × USD→INR FX (cached 1h). Use for quick spend estimates.
+                    </p>
+                    {err && <div className="text-xs text-red-700 mt-1">{err}</div>}
+                </div>
+                <button
+                    onClick={load}
+                    disabled={loading}
+                    className="px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50"
+                >
+                    ↻ Refresh
+                </button>
+            </div>
+
+            {data && (
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mt-3">
+                    <PriceTile
+                        label="Input / 1M"
+                        valueUSD={m.inputPerMTok}
+                        valueINR={m.inputPerMTok * (fx?.rate || 0)}
+                        accent="indigo"
+                    />
+                    <PriceTile
+                        label="Output / 1M"
+                        valueUSD={m.outputPerMTok}
+                        valueINR={m.outputPerMTok * (fx?.rate || 0)}
+                        accent="indigo"
+                    />
+                    <div className="rounded-lg border border-emerald-200 bg-white px-3 py-2">
+                        <div className="text-[10px] uppercase tracking-wide text-emerald-700 font-semibold">USD → INR</div>
+                        <div className="text-lg font-bold text-emerald-900 tabular-nums">
+                            ₹{Number(fx?.rate || 0).toFixed(2)}
+                        </div>
+                        <div className="text-[9px] text-slate-500 mt-0.5">
+                            {fx?.stale ? <span className="text-amber-700">stale · using last cached</span>
+                                : fxFresh ? `${fxFresh.toLocaleString()}` : '—'}
+                        </div>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 col-span-2">
+                        <div className="text-[10px] uppercase tracking-wide text-slate-700 font-semibold">
+                            Sample build · {sample?.tokens?.input}+{sample?.tokens?.output} tokens
+                        </div>
+                        <div className="text-lg font-bold text-slate-900 tabular-nums">
+                            ${Number(sample?.costUSD || 0).toFixed(5)}
+                            <span className="text-slate-400 font-normal mx-1.5">≈</span>
+                            ₹{Number(sample?.costINR || 0).toFixed(3)}
+                        </div>
+                        <div className="text-[9px] text-slate-500 mt-0.5">
+                            per AI-summary build · rates as of {m?.asOf}
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+function PriceTile({ label, valueUSD, valueINR, accent = 'slate' }) {
+    const map = {
+        indigo: 'border-indigo-200 text-indigo-900',
+        slate:  'border-slate-200 text-slate-900',
+    };
+    return (
+        <div className={`rounded-lg border bg-white px-3 py-2 ${map[accent]}`}>
+            <div className="text-[10px] uppercase tracking-wide opacity-70 font-semibold">{label}</div>
+            <div className="text-lg font-bold tabular-nums leading-tight">${Number(valueUSD || 0).toFixed(3)}</div>
+            <div className="text-[10px] opacity-60 tabular-nums">≈ ₹{Number(valueINR || 0).toFixed(2)}</div>
         </div>
     );
 }
