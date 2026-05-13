@@ -4353,12 +4353,7 @@ app.post('/api/clients/:email/send-pending-milestones', verifyToken, verifyAdmin
     const currentCount = await JobModel.countDocuments(milestoneCountFilter(emailLower));
     const notified = client.milestonesNotified || {};
 
-    const reached = milestones.filter((m) => {
-      if (currentCount < m.threshold) return false;
-      if (client.onboardingPhase) return false;
-      if (m.type === 'started' && !client.resumeSent) return false;
-      return true;
-    });
+    const reached = milestones.filter((m) => currentCount >= m.threshold);
     const reachedUnsent = reached.filter((m) => !notified[m.key]?.sent);
     if (!reachedUnsent.length) {
       return res.json({ sent: false, skipped: true, reason: 'no_pending_milestones', currentCount, planCap });
@@ -7791,12 +7786,7 @@ async function runSendPreviousMilestones() {
     const currentCount = await JobModel.countDocuments(milestoneCountFilter(client.email));
     const notified = client.milestonesNotified || {};
 
-    const reached = milestones.filter((m) => {
-      if (currentCount < m.threshold) return false;
-      if (client.onboardingPhase) return false;
-      if (m.type === 'started' && !client.resumeSent) return false;
-      return true;
-    });
+    const reached = milestones.filter((m) => currentCount >= m.threshold);
 
     const reachedUnsent = reached.filter((m) => !notified[m.key]?.sent);
     if (!reachedUnsent.length) { skipped++; continue; }
@@ -7867,14 +7857,8 @@ async function runClientMilestoneCron() {
       for (const m of milestones) {
         if (notified[m.key]?.sent) continue;
         if (currentCount < m.threshold) continue;
-        // 'started' also requires resume done + out of onboarding
-        if (m.type === 'started') {
-          if (!client.resumeSent) continue;
-          if (client.onboardingPhase) continue;
-        } else {
-          // count_milestone / completed only after client out of onboarding
-          if (client.onboardingPhase) continue;
-        }
+        // Fire on dashboard job count + client active status only.
+        // No gating on resumeSent / onboardingPhase / ticket status.
 
         const result = await sendMilestoneEmail({
           client,
