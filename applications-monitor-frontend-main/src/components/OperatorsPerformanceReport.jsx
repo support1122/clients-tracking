@@ -5,6 +5,11 @@ import { AnimatedCounter } from './AnimatedCounter';
 
 const API_BASE = import.meta.env.VITE_BASE || "https://applications-monitor-api.flashfirejobs.com";
 
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('authToken');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const INCENTIVE_TIERS = [
   { min: 3500, max: Infinity, payout: 'Stipend + ₹5,000', color: 'from-purple-500 to-purple-600', bgColor: 'from-purple-50 to-purple-100', textColor: 'text-purple-700', borderColor: 'border-purple-200' },
   { min: 3000, max: 3499, payout: 'Stipend + ₹4,000', color: 'from-indigo-500 to-indigo-600', bgColor: 'from-indigo-50 to-indigo-100', textColor: 'text-indigo-700', borderColor: 'border-indigo-200' },
@@ -29,6 +34,7 @@ export default function OperatorsPerformanceReport() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [operations, setOperations] = useState([]);
+  const [reportOperations, setReportOperations] = useState(null);
   const [operationsPerformance, setOperationsPerformance] = useState({});
   const [loading, setLoading] = useState(false);
   const [totalApplied, setTotalApplied] = useState(0);
@@ -48,7 +54,9 @@ export default function OperatorsPerformanceReport() {
 
   const fetchOperations = async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/operations`);
+      const response = await fetch(`${API_BASE}/api/operations`, {
+        headers: getAuthHeaders()
+      });
       if (response.ok) {
         const data = await response.json();
         setOperations(data.operations || []);
@@ -66,21 +74,26 @@ export default function OperatorsPerformanceReport() {
         endDate
       });
       
-      const response = await fetch(`${API_BASE}/api/operations/performance-report?${params.toString()}`);
+      const response = await fetch(`${API_BASE}/api/operations/performance-report?${params.toString()}`, {
+        headers: getAuthHeaders()
+      });
       if (response.ok) {
         const data = await response.json();
+        setReportOperations(Array.isArray(data.operators) ? data.operators : null);
         setOperationsPerformance(data.performanceMap || {});
         setTotalApplied(data.totalApplied || 0);
         setNotDownloadedMap(data.notDownloadedMap || {});
         setNotDownloadedByStatusMap(data.notDownloadedByStatusMap || {});
       } else {
         console.error('Error fetching performance report');
+        setReportOperations(null);
         setOperationsPerformance({});
         setTotalApplied(0);
         setNotDownloadedByStatusMap({});
       }
     } catch (error) {
       console.error('Error fetching performance report:', error);
+      setReportOperations(null);
       setOperationsPerformance({});
       setTotalApplied(0);
       setNotDownloadedByStatusMap({});
@@ -182,16 +195,21 @@ export default function OperatorsPerformanceReport() {
     };
   };
 
+  const visibleOperations = reportOperations || operations;
+
   const sortedOperators = useMemo(() => {
-    return operations
-      .map(op => ({
-        ...op,
-        applications: operationsPerformance[op.email] || 0,
-        notDownloaded: notDownloadedMap[op.email] || 0,
-        notDownloadedByStatus: notDownloadedByStatusMap[op.email?.toLowerCase()] || { applied: 0, rejected: 0, interviewing: 0, offer: 0 }
-      }))
+    return visibleOperations
+      .map(op => {
+        const emailKey = op.email?.toLowerCase();
+        return {
+          ...op,
+          applications: operationsPerformance[emailKey] || 0,
+          notDownloaded: notDownloadedMap[emailKey] || 0,
+          notDownloadedByStatus: notDownloadedByStatusMap[emailKey] || { applied: 0, rejected: 0, interviewing: 0, offer: 0 }
+        };
+      })
       .sort((a, b) => b.applications - a.applications);
-  }, [operations, operationsPerformance, notDownloadedMap, notDownloadedByStatusMap]);
+  }, [visibleOperations, operationsPerformance, notDownloadedMap, notDownloadedByStatusMap]);
 
   // Tier distribution for operators who are at or above the lowest published slab
   const getTierDistribution = useMemo(() => {
@@ -462,21 +480,21 @@ export default function OperatorsPerformanceReport() {
             {sortedOperators.length > 0 && (
               <>
                 <TeamPerformanceSummary 
-                  operations={operations} 
+                  operations={visibleOperations} 
                   operationsPerformance={operationsPerformance}
                   notDownloadedMap={notDownloadedMap}
                   loading={loading}
                 />
                 
                 <TopPerformersBarChart 
-                  operations={operations} 
+                  operations={visibleOperations} 
                   operationsPerformance={operationsPerformance}
                   notDownloadedMap={notDownloadedMap}
                   loading={loading}
                 />
                 
                 <MonthlyLeaderboard
-                  operations={operations}
+                  operations={visibleOperations}
                   operationsPerformance={operationsPerformance}
                   notDownloadedMap={notDownloadedMap}
                 />
@@ -630,4 +648,3 @@ export default function OperatorsPerformanceReport() {
     </div>
   );
 }
-
