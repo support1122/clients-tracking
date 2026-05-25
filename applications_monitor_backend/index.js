@@ -4417,6 +4417,20 @@ app.post('/api/clients/email-export/send-previous', verifyToken, verifyAdmin, as
   }
 });
 
+// Admin: trigger full milestone sweep on demand (same code path as the
+// hourly cron). Returns per-client / per-milestone decision details so
+// operators can diagnose why automation did or did not fire.
+app.post('/api/admin/run-milestone-cron', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const verbose = req.query.verbose === '1' || req.body?.verbose === true;
+    const result = await runClientMilestoneCron({ trigger: 'admin-trigger', verbose });
+    res.json(result);
+  } catch (e) {
+    console.error('[run-milestone-cron] error:', e?.message);
+    res.status(500).json({ error: 'sweep failed' });
+  }
+});
+
 app.post('/api/clients/payment-emails/bulk', verifyToken, async (req, res) => {
   try {
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
@@ -7849,65 +7863,105 @@ async function runSendPreviousMilestones() {
   return { processed, sent, skipped, failed, details };
 }
 
-async function runClientMilestoneCron() {
-  console.log('[Client Milestones] Cron tick start');
+/**
+ * Hourly sweep. Sends to ALL active clients with paymentEmail set, regardless
+ * of pause / onboarding / ticket status. Per-client try/catch so one bad row
+ * does not abort the whole sweep. Returns { processed, sent, failed, skipped,
+ * details } so the on-demand admin endpoint can surface results.
+ */
+async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}) {
+  const startedAt = Date.now();
+  console.log(`[Client Milestones] sweep start (trigger=${trigger})`);
+  const summary = { processed: 0, sent: 0, failed: 0, skipped: 0, errors: 0, details: [] };
   try {
-    // Send to ALL active clients (paused included) — was previously gated by isPaused.
     const clients = await ClientModel.find({
       status: 'active',
       paymentEmail: { $exists: true, $ne: '' }
     }).lean();
-
-    let processed = 0;
-    let sent = 0;
+    console.log(`[Client Milestones] candidate clients: ${clients.length}`);
 
     for (const client of clients) {
-      processed++;
-      const planCap = getPlanCap(client.planType);
-      const milestones = getPlanMilestones(client.planType);
-      if (!milestones.length) continue;
+      summary.processed++;
+      try {
+        const planCap = getPlanCap(client.planType);
+        const milestones = getPlanMilestones(client.planType);
+        if (!milestones.length) {
+          summary.skipped++;
+          if (verbose) summary.details.push({ clientEmail: client.email, reason: 'no_plan_milestones' });
+          continue;
+        }
 
-      const currentCount = await JobModel.countDocuments(milestoneCountFilter(client.email));
-      const notified = client.milestonesNotified || {};
+        const currentCount = await JobModel.countDocuments(milestoneCountFilter(client.email));
+        const notified = client.milestonesNotified || {};
 
-      for (const m of milestones) {
-        if (notified[m.key]?.sent) continue;
-        if (currentCount < m.threshold) continue;
-        // Fire on dashboard job count + client active status only.
-        // No gating on resumeSent / onboardingPhase / ticket status.
-
-        const result = await sendMilestoneEmail({
-          client,
-          type: m.type,
-          milestoneKey: m.key,
-          snapshot: { planCap, currentCount, threshold: m.threshold }
-        });
-
-        await ClientModel.updateOne(
-          { email: client.email },
-          {
-            $set: {
-              [`milestonesNotified.${m.key}.sent`]: true,
-              [`milestonesNotified.${m.key}.at`]: new Date(),
-              [`milestonesNotified.${m.key}.count`]: currentCount
-            }
+        for (const m of milestones) {
+          if (notified[m.key]?.sent) {
+            if (verbose) summary.details.push({ clientEmail: client.email, milestone: m.key, reason: 'already_sent' });
+            continue;
           }
-        );
-        await recordMilestoneInMoveHistory(client.email, m.key, result, client.paymentEmail, { currentCount, planCap, threshold: m.threshold });
-        if (result?.success) sent++;
+          if (currentCount < m.threshold) {
+            if (verbose) summary.details.push({ clientEmail: client.email, milestone: m.key, reason: 'below_threshold', currentCount, threshold: m.threshold });
+            continue;
+          }
+          // Fire on dashboard job count + active client only.
+          // No gating on resumeSent / onboardingPhase / ticket status.
+
+          const result = await sendMilestoneEmail({
+            client,
+            type: m.type,
+            milestoneKey: m.key,
+            snapshot: { planCap, currentCount, threshold: m.threshold }
+          });
+
+          await ClientModel.updateOne(
+            { email: client.email },
+            {
+              $set: {
+                [`milestonesNotified.${m.key}.sent`]: true,
+                [`milestonesNotified.${m.key}.at`]: new Date(),
+                [`milestonesNotified.${m.key}.count`]: currentCount
+              }
+            }
+          );
+          await recordMilestoneInMoveHistory(client.email, m.key, result, client.paymentEmail, { currentCount, planCap, threshold: m.threshold });
+
+          if (result?.success) {
+            summary.sent++;
+            console.log(`[Client Milestones] sent ${m.key} → ${client.paymentEmail} (count=${currentCount}/${planCap})`);
+            summary.details.push({ clientEmail: client.email, milestone: m.key, status: 'sent', currentCount, planCap });
+          } else if (result?.skipped) {
+            summary.skipped++;
+            summary.details.push({ clientEmail: client.email, milestone: m.key, status: 'skipped', reason: result?.reason || 'unknown' });
+          } else {
+            summary.failed++;
+            summary.details.push({ clientEmail: client.email, milestone: m.key, status: 'failed', error: result?.error || 'unknown' });
+          }
+        }
+      } catch (perClientErr) {
+        summary.errors++;
+        console.error(`[Client Milestones] client=${client.email} error:`, perClientErr?.message || perClientErr);
+        summary.details.push({ clientEmail: client.email, status: 'error', error: perClientErr?.message || String(perClientErr) });
       }
     }
-
-    console.log(`[Client Milestones] Done. processed=${processed} sent=${sent}`);
   } catch (error) {
-    console.error('[Client Milestones] Error:', error);
+    summary.errors++;
+    console.error('[Client Milestones] sweep error:', error);
   }
+  const tookMs = Date.now() - startedAt;
+  console.log(`[Client Milestones] sweep done in ${tookMs}ms processed=${summary.processed} sent=${summary.sent} failed=${summary.failed} skipped=${summary.skipped} errors=${summary.errors}`);
+  return { ...summary, tookMs };
 }
 
 // Start HTTP server only after MongoDB is connected (prevents startup tasks from hitting buffer timeout)
 dbReady
   .then(async () => {
-    await cleanupSessionKeys();
+    // cleanupSessionKeys must not abort the chain — if it throws, cron
+    // registration below would silently skip. Isolate failure.
+    try {
+      await cleanupSessionKeys();
+    } catch (e) {
+      console.error('❌ [Startup] cleanupSessionKeys failed (continuing):', e?.message || e);
+    }
 
     app.listen(process.env.PORT, () => {
       console.log(`✅ Server is live at port: ${process.env.PORT}`);
@@ -7939,13 +7993,25 @@ if (DISCORD_ZERO_SAVED_WEBHOOK) {
       cron.schedule('30 7 * * *', runDailyIncentiveSnapshot);
       console.log('📬 [Incentive Cron] Scheduled for 1:00 PM IST daily');
 
-      // Client milestone email cron: hourly (top of every hour) IST
-      cron.schedule('0 * * * *', runClientMilestoneCron, { timezone: 'Asia/Kolkata' });
-      console.log('📬 [Client Milestones] Cron scheduled hourly (0 * * * *) IST');
+      // Client milestone email cron: hourly (top of every hour) IST.
+      // node-cron v4 — `scheduled: true` is default, but set explicit for clarity.
+      const milestoneTask = cron.schedule(
+        '0 * * * *',
+        () => { runClientMilestoneCron({ trigger: 'cron' }).catch((e) => console.error('[Client Milestones] tick crashed:', e)); },
+        { timezone: 'Asia/Kolkata', scheduled: true }
+      );
+      console.log('📬 [Client Milestones] Cron scheduled hourly (0 * * * *) IST', { running: !!milestoneTask });
+      // Boot-time catch-up sweep — closes the gap when service redeploys
+      // mid-hour. Delayed 15s so DB warms + initial routes register first.
+      setTimeout(() => {
+        runClientMilestoneCron({ trigger: 'boot' }).catch((e) => console.error('[Client Milestones] boot run failed:', e));
+      }, 15_000);
     });
   })
-  .catch(() => {
-    // ConnectDB already logged and process.exit(1) on failure
+  .catch((err) => {
+    // ConnectDB already logged and process.exit(1) on failure — log again
+    // so silent swallowing of cron registration is obvious in deploy logs.
+    console.error('❌ [Startup] dbReady chain failed:', err?.message || err);
   });
 
 // Graceful shutdown
