@@ -1347,10 +1347,10 @@ export default function ClientOnboarding() {
                 type="button"
                 onClick={() => setShowSendPrevModal(true)}
                 className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-orange-300 bg-orange-50 hover:bg-orange-100 text-sm font-semibold text-orange-700 shadow-sm transition-colors"
-                title="Send catch-up milestone emails to all active + unpaused clients (admin)"
+                title="Send stuck milestone emails — checks all active clients with paymentEmail set, sends any milestones that were reached but not yet emailed (admin)"
               >
                 <Send className="w-4 h-4" />
-                <span className="hidden sm:inline">Send to Previous</span>
+                <span className="hidden sm:inline">Send Stuck Payment Emails</span>
               </button>
             )}
 
