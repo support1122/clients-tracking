@@ -767,7 +767,7 @@ export default function ClientJobAnalysis() {
                 const isProfessional = plan.includes('professional');
                 const isExecutive = plan.includes('executive');
 
-                const planLimit = isPrime ? 160 : isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1000 : Infinity;
+                const planLimit = isPrime ? 160 : isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1200 : Infinity;
                 const addonLimit = Number(r.addonLimit || 0);
                 const referralBonus = Number(r.referralApplicationsAdded || 0);
                 const totalLimit = planLimit + addonLimit + referralBonus;
