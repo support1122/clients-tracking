@@ -2034,7 +2034,7 @@ client2@example.com,payer2@example.com</pre>
                     <ul className="list-disc pl-5 space-y-1">
                       <li>Filters clients by <strong>status: active</strong> and <strong>not paused</strong>, with <strong>paymentEmail</strong> set.</li>
                       <li>Counts each client's jobs (excluding <code className="bg-white px-1 rounded">removed</code>).</li>
-                      <li>Sends <strong>only the highest milestone</strong> they've reached but haven't received yet (e.g. count 1000 on Executive → sends "700 applications", not "350").</li>
+                      <li>Sends <strong>only the highest milestone</strong> they've reached but haven't received yet (e.g. count 1200 on Executive → sends "700 applications", not "350").</li>
                       <li>Marks lower already-reached milestones as sent (so future cron ticks won't re-fire them).</li>
                       <li>Records each action in the ticket's <strong>move history</strong> with status (sent / caught_up_via_send_previous).</li>
                     </ul>
