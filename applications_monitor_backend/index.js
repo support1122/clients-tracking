@@ -4356,7 +4356,13 @@ app.post('/api/clients/:email/send-pending-milestones', verifyToken, verifyAdmin
     const notified = client.milestonesNotified || {};
 
     const reached = milestones.filter((m) => currentCount >= m.threshold);
-    const reachedUnsent = reached.filter((m) => !notified[m.key]?.sent);
+    // Re-fire `completed` if effective cap grew since last send.
+    const reachedUnsent = reached.filter((m) => {
+      const prev = notified[m.key];
+      if (!prev?.sent) return true;
+      if (m.type === 'completed' && typeof prev.cap === 'number' && prev.cap < m.threshold) return true;
+      return false;
+    });
     if (!reachedUnsent.length) {
       return res.json({ sent: false, skipped: true, reason: 'no_pending_milestones', currentCount, planCap });
     }
@@ -4374,6 +4380,7 @@ app.post('/api/clients/:email/send-pending-milestones', verifyToken, verifyAdmin
       setOps[`milestonesNotified.${m.key}.sent`] = true;
       setOps[`milestonesNotified.${m.key}.at`] = new Date();
       setOps[`milestonesNotified.${m.key}.count`] = currentCount;
+      if (m.type === 'completed') setOps[`milestonesNotified.${m.key}.cap`] = m.threshold;
     }
     await ClientModel.updateOne({ email: emailLower }, { $set: setOps });
 
@@ -7816,7 +7823,13 @@ async function runSendPreviousMilestones() {
 
     const reached = milestones.filter((m) => currentCount >= m.threshold);
 
-    const reachedUnsent = reached.filter((m) => !notified[m.key]?.sent);
+    // Treat completed as "needs send" if cap grew since last send.
+    const reachedUnsent = reached.filter((m) => {
+      const prev = notified[m.key];
+      if (!prev?.sent) return true;
+      if (m.type === 'completed' && typeof prev.cap === 'number' && prev.cap < m.threshold) return true;
+      return false;
+    });
     if (!reachedUnsent.length) { skipped++; continue; }
 
     const highest = reachedUnsent.reduce((a, b) => (a.threshold > b.threshold ? a : b));
@@ -7833,6 +7846,7 @@ async function runSendPreviousMilestones() {
       setOps[`milestonesNotified.${m.key}.sent`] = true;
       setOps[`milestonesNotified.${m.key}.at`] = new Date();
       setOps[`milestonesNotified.${m.key}.count`] = currentCount;
+      if (m.type === 'completed') setOps[`milestonesNotified.${m.key}.cap`] = m.threshold;
     }
     await ClientModel.updateOne({ email: client.email }, { $set: setOps });
 
@@ -7862,12 +7876,28 @@ async function runSendPreviousMilestones() {
 }
 
 /**
+ * In-process overlap lock — if previous sweep is still running when the next
+ * cron tick fires, skip the tick. Single-instance assumption (one process).
+ * For multi-instance deploys, replace with a Mongo TTL lock.
+ */
+let _milestoneSweepRunning = false;
+
+/**
  * Hourly sweep. Sends to ALL active clients with paymentEmail set, regardless
  * of pause / onboarding / ticket status. Per-client try/catch so one bad row
  * does not abort the whole sweep. Returns { processed, sent, failed, skipped,
  * details } so the on-demand admin endpoint can surface results.
+ *
+ * Re-fires `completed` milestone when effective cap grows (addon / referral
+ * added after a previous completion). Backfills legacy records without a
+ * stored cap silently so first deploy does not double-send.
  */
 async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}) {
+  if (_milestoneSweepRunning) {
+    console.warn(`[Client Milestones] sweep skipped (trigger=${trigger}) — previous run still active`);
+    return { processed: 0, sent: 0, failed: 0, skipped: 0, errors: 0, details: [], skippedReason: 'sweep_already_running' };
+  }
+  _milestoneSweepRunning = true;
   const startedAt = Date.now();
   console.log(`[Client Milestones] sweep start (trigger=${trigger})`);
   const summary = { processed: 0, sent: 0, failed: 0, skipped: 0, errors: 0, details: [] };
@@ -7905,9 +7935,36 @@ async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}
         const notified = client.milestonesNotified || {};
 
         for (const m of milestones) {
-          if (notified[m.key]?.sent) {
-            if (verbose) summary.details.push({ clientEmail: client.email, milestone: m.key, reason: 'already_sent' });
-            continue;
+          const prev = notified[m.key];
+          if (prev?.sent) {
+            // For `completed`, re-fire when effective cap grew since last
+            // send (addon / referral added). Legacy records without `cap`
+            // get backfilled silently — no spam.
+            if (m.type === 'completed') {
+              if (typeof prev.cap !== 'number') {
+                // Backfill legacy record using current threshold so we don't
+                // re-send for a value that may have been the cap at send time.
+                await ClientModel.updateOne(
+                  { email: client.email },
+                  { $set: { [`milestonesNotified.${m.key}.cap`]: m.threshold } }
+                );
+                if (verbose) summary.details.push({ clientEmail: client.email, milestone: m.key, reason: 'backfilled_cap', backfillCap: m.threshold });
+                continue;
+              }
+              if (prev.cap >= m.threshold) {
+                if (verbose) summary.details.push({ clientEmail: client.email, milestone: m.key, reason: 'already_sent_for_current_cap', cap: prev.cap });
+                continue;
+              }
+              if (currentCount < m.threshold) {
+                if (verbose) summary.details.push({ clientEmail: client.email, milestone: m.key, reason: 'cap_grew_but_below_new_threshold', currentCount, threshold: m.threshold, previousCap: prev.cap });
+                continue;
+              }
+              console.log(`[Client Milestones] re-firing completed for ${client.email} — cap grew ${prev.cap} → ${m.threshold}`);
+              // Fall through to send below.
+            } else {
+              if (verbose) summary.details.push({ clientEmail: client.email, milestone: m.key, reason: 'already_sent' });
+              continue;
+            }
           }
           if (currentCount < m.threshold) {
             if (verbose) summary.details.push({ clientEmail: client.email, milestone: m.key, reason: 'below_threshold', currentCount, threshold: m.threshold });
@@ -7923,15 +7980,18 @@ async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}
             snapshot: { planCap, currentCount, threshold: m.threshold }
           });
 
+          const setOps = {
+            [`milestonesNotified.${m.key}.sent`]: true,
+            [`milestonesNotified.${m.key}.at`]: new Date(),
+            [`milestonesNotified.${m.key}.count`]: currentCount
+          };
+          // Snapshot effective cap on the completed record so the next addon
+          // top-up triggers a re-fire (and only one re-fire per cap level).
+          if (m.type === 'completed') setOps[`milestonesNotified.${m.key}.cap`] = m.threshold;
+
           await ClientModel.updateOne(
             { email: client.email },
-            {
-              $set: {
-                [`milestonesNotified.${m.key}.sent`]: true,
-                [`milestonesNotified.${m.key}.at`]: new Date(),
-                [`milestonesNotified.${m.key}.count`]: currentCount
-              }
-            }
+            { $set: setOps }
           );
           await recordMilestoneInMoveHistory(client.email, m.key, result, client.paymentEmail, { currentCount, planCap, threshold: m.threshold });
 
@@ -7956,6 +8016,8 @@ async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}
   } catch (error) {
     summary.errors++;
     console.error('[Client Milestones] sweep error:', error);
+  } finally {
+    _milestoneSweepRunning = false;
   }
   const tookMs = Date.now() - startedAt;
   console.log(`[Client Milestones] sweep done in ${tookMs}ms processed=${summary.processed} sent=${summary.sent} failed=${summary.failed} skipped=${summary.skipped} errors=${summary.errors}`);
