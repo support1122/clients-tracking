@@ -104,7 +104,7 @@ function milestoneCountFilter(userEmail) {
     currentStatus: { $regex: MILESTONE_COUNT_STATUS_RE }
   };
 }
-import { getPlanCap, getPlanMilestones, MIN_JOBS_FOR_EMAIL } from './utils/planCaps.js';
+import { getPlanCap, getPlanMilestones, MIN_JOBS_FOR_EMAIL, getEffectiveCap, computeClientMilestones, referralApplicationsFor } from './utils/planCaps.js';
 
 const FLASHFIRE_API_BASE_URL = process.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
 
@@ -4356,8 +4356,10 @@ app.post('/api/clients/:email/send-pending-milestones', verifyToken, verifyAdmin
     if (client.status !== 'active') return res.status(400).json({ error: 'client is not active', code: 'inactive' });
     if (!client.paymentEmail) return res.status(400).json({ error: 'paymentEmail not set', code: 'no_payment_email' });
 
-    const planCap = getPlanCap(client.planType);
-    const milestones = getPlanMilestones(client.planType);
+    const referralUser = await NewUserModel.findOne({ email: emailLower }, 'referrals').lean();
+    const referralAdded = referralApplicationsFor(referralUser?.referrals);
+    const planCap = getEffectiveCap(client, referralAdded);
+    const milestones = computeClientMilestones(client, referralAdded);
     if (!milestones.length) return res.status(400).json({ error: 'plan has no milestones', code: 'no_plan' });
 
     const currentCount = await JobModel.countDocuments(milestoneCountFilter(emailLower));
@@ -7801,6 +7803,17 @@ async function runSendPreviousMilestones() {
     paymentEmail: { $exists: true, $ne: '' }
   }).lean();
 
+  // Bulk-fetch referrals so we don't N+1 below.
+  const emails = clients.map((c) => (c.email || '').toLowerCase()).filter(Boolean);
+  const referralUsers = await NewUserModel.find(
+    { email: { $in: emails } },
+    'email referrals'
+  ).lean();
+  const referralAddedByEmail = new Map();
+  for (const u of referralUsers) {
+    referralAddedByEmail.set((u.email || '').toLowerCase(), referralApplicationsFor(u.referrals));
+  }
+
   let processed = 0;
   let sent = 0;
   let skipped = 0;
@@ -7809,8 +7822,9 @@ async function runSendPreviousMilestones() {
 
   for (const client of clients) {
     processed++;
-    const planCap = getPlanCap(client.planType);
-    const milestones = getPlanMilestones(client.planType);
+    const referralAdded = referralAddedByEmail.get((client.email || '').toLowerCase()) || 0;
+    const planCap = getEffectiveCap(client, referralAdded);
+    const milestones = computeClientMilestones(client, referralAdded);
     if (!milestones.length) { skipped++; continue; }
 
     const currentCount = await JobModel.countDocuments(milestoneCountFilter(client.email));
@@ -7880,11 +7894,23 @@ async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}
     }).lean();
     console.log(`[Client Milestones] candidate clients: ${clients.length}`);
 
+    // Bulk-fetch referrals once so per-client loop doesn't N+1 the DB.
+    const emails = clients.map((c) => (c.email || '').toLowerCase()).filter(Boolean);
+    const referralUsers = await NewUserModel.find(
+      { email: { $in: emails } },
+      'email referrals'
+    ).lean();
+    const referralAddedByEmail = new Map();
+    for (const u of referralUsers) {
+      referralAddedByEmail.set((u.email || '').toLowerCase(), referralApplicationsFor(u.referrals));
+    }
+
     for (const client of clients) {
       summary.processed++;
       try {
-        const planCap = getPlanCap(client.planType);
-        const milestones = getPlanMilestones(client.planType);
+        const referralAdded = referralAddedByEmail.get((client.email || '').toLowerCase()) || 0;
+        const planCap = getEffectiveCap(client, referralAdded);
+        const milestones = computeClientMilestones(client, referralAdded);
         if (!milestones.length) {
           summary.skipped++;
           if (verbose) summary.details.push({ clientEmail: client.email, reason: 'no_plan_milestones' });
@@ -7993,14 +8019,14 @@ if (DISCORD_ZERO_SAVED_WEBHOOK) {
       cron.schedule('30 7 * * *', runDailyIncentiveSnapshot);
       console.log('📬 [Incentive Cron] Scheduled for 1:00 PM IST daily');
 
-      // Client milestone email cron: hourly (top of every hour) IST.
+      // Client milestone email cron: every 30 minutes IST (at :00 and :30).
       // node-cron v4 — `scheduled: true` is default, but set explicit for clarity.
       const milestoneTask = cron.schedule(
-        '0 * * * *',
+        '*/30 * * * *',
         () => { runClientMilestoneCron({ trigger: 'cron' }).catch((e) => console.error('[Client Milestones] tick crashed:', e)); },
         { timezone: 'Asia/Kolkata', scheduled: true }
       );
-      console.log('📬 [Client Milestones] Cron scheduled hourly (0 * * * *) IST', { running: !!milestoneTask });
+      console.log('📬 [Client Milestones] Cron scheduled every 30 min (*/30 * * * *) IST', { running: !!milestoneTask });
       // Boot-time catch-up sweep — closes the gap when service redeploys
       // mid-hour. Delayed 15s so DB warms + initial routes register first.
       setTimeout(() => {
