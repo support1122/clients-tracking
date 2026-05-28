@@ -10,9 +10,58 @@
 // VITE_DASHBOARD_BASE is the dashboard backend URL (e.g. http://localhost:8086
 // or https://dashboard-api.flashfirejobs.com). Falls back to localhost:8086 if unset.
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 const DASHBOARD_BASE = (import.meta.env.VITE_DASHBOARD_BASE || 'http://localhost:8086').replace(/\/+$/, '');
+
+// parseSummarySections: split markdown into { header, lines } where each
+// line is { kind:'bullet'|'prose'|'blank', text }. Used together with the
+// backend's provenance map so each bullet can be colour-tinted by source.
+function parseSummarySections(text) {
+    if (typeof text !== 'string' || !text.trim()) return [];
+    const raws = text.split(/\r?\n/);
+    const out = [];
+    let current = null;
+    for (const raw of raws) {
+        const m = raw.match(/^\s*#\s+(.+)$/);
+        if (m) {
+            if (current) out.push(current);
+            current = { header: m[1].trim(), lines: [] };
+            continue;
+        }
+        if (!current) {
+            if (!raw.trim()) continue;
+            current = { header: '__preamble', lines: [] };
+        }
+        const bulletMatch = raw.match(/^\s*[-*]\s+(.+)$/);
+        if (bulletMatch) current.lines.push({ kind: 'bullet', text: bulletMatch[1].trim() });
+        else if (raw.trim()) current.lines.push({ kind: 'prose', text: raw });
+        else current.lines.push({ kind: 'blank', text: '' });
+    }
+    if (current) out.push(current);
+    return out.filter((s) => s.header !== '__preamble' || s.lines.length);
+}
+
+// provenanceStyle: per-source colour tokens for the per-bullet legend chip.
+const PROV_STYLE = {
+    R:  { label: 'Resume',   chip: 'bg-emerald-100 text-emerald-800 border-emerald-300', dot: 'bg-emerald-500', side: 'border-l-emerald-400' },
+    P:  { label: 'Profile',  chip: 'bg-amber-100 text-amber-800 border-amber-300',       dot: 'bg-amber-500',   side: 'border-l-amber-400' },
+    RP: { label: 'Both',     chip: 'bg-sky-100 text-sky-800 border-sky-300',             dot: 'bg-sky-500',     side: 'border-l-sky-400' },
+    I:  { label: 'Inferred', chip: 'bg-slate-100 text-slate-700 border-slate-300',       dot: 'bg-slate-400',   side: 'border-l-slate-300' },
+    U:  { label: 'Operator', chip: 'bg-indigo-100 text-indigo-800 border-indigo-300',    dot: 'bg-indigo-500',  side: 'border-l-indigo-400' },
+};
+
+// summarySourceLabel: render the human-friendly origin tag from
+// aiSummaryMeta.source. The backend writes strings like
+// "profile+resume+gemini [auto:resume-upload]" or "profile-only+openai [manual]".
+function summarySourceLabel(rawSource) {
+    if (!rawSource) return { icon: '❓', label: 'unknown source', color: 'slate' };
+    const s = String(rawSource);
+    if (s.includes('profile+resume')) return { icon: '📄', label: 'Built from Resume + Profile', color: 'emerald' };
+    if (s.includes('profile-only')) return { icon: '👤', label: 'Built from Profile only (no resume)', color: 'amber' };
+    if (s.startsWith('admin-clients-tracking') || s.includes('manual-edit')) return { icon: '✎', label: 'Manually edited', color: 'blue' };
+    return { icon: '🔧', label: s.slice(0, 40), color: 'slate' };
+}
 
 export default function ClientAiSummary({ clientEmail }) {
     const [loading, setLoading] = useState(false);
@@ -50,13 +99,20 @@ export default function ClientAiSummary({ clientEmail }) {
         }
     }
 
-    async function saveOverlay(savedText) {
+    async function saveOverlay(savedText, lockedSections = undefined) {
         setOverlayBusy(true);
         try {
+            const locksToSend = Array.isArray(lockedSections)
+                ? lockedSections
+                : (overlay?.lockedSections || []);
             const res = await fetch(`${DASHBOARD_BASE}/save-summary-overlay`, {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ email: clientEmail.toLowerCase(), savedText }),
+                body: JSON.stringify({
+                    email: clientEmail.toLowerCase(),
+                    savedText,
+                    lockedSections: locksToSend,
+                }),
             });
             const body = await res.json().catch(() => null);
             if (!res.ok || !body?.success) {
@@ -258,6 +314,29 @@ export default function ClientAiSummary({ clientEmail }) {
     const summary = profile?.aiSummary || '';
     const meta = profile?.aiSummaryMeta || {};
     const builtAt = meta.builtAt ? new Date(meta.builtAt).toLocaleString() : null;
+    const sourceTag = useMemo(() => summarySourceLabel(meta.source), [meta.source]);
+    const sections = useMemo(() => parseSummarySections(summary), [summary]);
+    const lockedSet = useMemo(
+        () => new Set(overlay?.lockedSections || []),
+        [overlay?.lockedSections],
+    );
+
+    function toggleLock(header) {
+        if (!summary) return;
+        const next = new Set(lockedSet);
+        if (next.has(header)) next.delete(header);
+        else next.add(header);
+        const arr = Array.from(next);
+        saveOverlay(summary, arr);
+    }
+
+    const sourceColorMap = {
+        emerald: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+        amber: 'bg-amber-100 text-amber-800 border-amber-300',
+        blue: 'bg-blue-100 text-blue-800 border-blue-300',
+        slate: 'bg-slate-100 text-slate-700 border-slate-300',
+    };
+    const sourcePill = sourceColorMap[sourceTag.color] || sourceColorMap.slate;
 
     return (
         <div className="space-y-6">
@@ -372,69 +451,175 @@ export default function ClientAiSummary({ clientEmail }) {
             {loading && !profile && <div className="text-slate-500">Loading…</div>}
 
             {!editing ? (
-                <>
-                    <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-                        {summary ? (
-                            <pre className="whitespace-pre-wrap text-sm text-slate-800 font-sans leading-relaxed">{summary}</pre>
-                        ) : (
-                            <div className="text-slate-500 italic">No summary yet. Click <strong>Build summary</strong> to generate one from the candidate's profile + resume.</div>
-                        )}
-                    </div>
-                    <div className="flex gap-3 flex-wrap">
-                        <button
-                            onClick={buildSummary}
-                            disabled={building}
-                            className="inline-flex items-center px-4 py-2 rounded-lg bg-purple-600 text-white font-medium hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        >
-                            {building ? 'Building (~15s)…' : (summary ? '↻ Rebuild from profile + resume' : '✨ Build summary')}
-                        </button>
-                        {summary && (
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                    <div className="flex items-start justify-between gap-3 px-5 py-3 border-b border-slate-200 bg-slate-50">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border ${sourcePill}`}>
+                                <span className="text-sm leading-none">{sourceTag.icon}</span>
+                                {sourceTag.label}
+                            </span>
+                            {meta.model && (
+                                <span className="text-[11px] text-slate-500 font-mono">
+                                    {meta.model}
+                                </span>
+                            )}
+                            {lockedSet.size > 0 && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-100 text-indigo-800 border border-indigo-300">
+                                    🔒 {lockedSet.size} section{lockedSet.size === 1 ? '' : 's'} locked
+                                </span>
+                            )}
+                        </div>
+                        <div className="flex gap-2">
+                            {summary && (
+                                <button
+                                    onClick={() => { setDraft(summary); setEditing(true); }}
+                                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-colors shadow-sm"
+                                    title="Edit & refine"
+                                >
+                                    ✎ Edit & refine
+                                </button>
+                            )}
                             <button
-                                onClick={() => { setDraft(summary); setEditing(true); }}
-                                className="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
+                                onClick={buildSummary}
+                                disabled={building}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-purple-600 text-white text-xs font-semibold hover:bg-purple-700 disabled:opacity-50 transition-colors shadow-sm"
+                                title="Rebuild from profile + resume"
                             >
-                                ✎ Edit
+                                {building ? 'Building…' : '↻ Rebuild'}
                             </button>
-                        )}
-                        <button
-                            onClick={loadProfile}
-                            disabled={loading}
-                            className="inline-flex items-center px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-medium hover:bg-slate-300 transition-colors"
-                        >
-                            ↻ Reload
-                        </button>
+                            <button
+                                onClick={loadProfile}
+                                disabled={loading}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-300 transition-colors"
+                                title="Reload"
+                            >
+                                ↻
+                            </button>
+                        </div>
                     </div>
-                </>
+                    {!summary ? (
+                        <div className="px-5 py-8 text-slate-500 italic">
+                            No summary yet. Click <strong>↻ Rebuild</strong> to generate one from the candidate's profile + resume.
+                        </div>
+                    ) : (
+                        <>
+                            {meta.provenance && (
+                                <div className="px-5 py-2 flex flex-wrap items-center gap-2 text-[11px] border-b border-slate-100 bg-slate-50/60">
+                                    <span className="font-semibold text-slate-600 uppercase tracking-wide">Source legend:</span>
+                                    {['R','P','RP','I'].map((code) => (
+                                        <span key={code} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border ${PROV_STYLE[code].chip}`}>
+                                            <span className={`inline-block w-1.5 h-1.5 rounded-full ${PROV_STYLE[code].dot}`} />
+                                            {PROV_STYLE[code].label}
+                                        </span>
+                                    ))}
+                                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border ${PROV_STYLE.U.chip}`}>
+                                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${PROV_STYLE.U.dot}`} />
+                                        {PROV_STYLE.U.label}
+                                    </span>
+                                </div>
+                            )}
+                            <div className="divide-y divide-slate-100">
+                                {sections.map((sec) => {
+                                    const isLocked = lockedSet.has(sec.header);
+                                    const provBullets = meta.provenance?.[sec.header]?.bullets || [];
+                                    const provProse = meta.provenance?.[sec.header]?.prose || [];
+                                    let bulletIdx = 0;
+                                    let proseIdx = 0;
+                                    return (
+                                        <div
+                                            key={sec.header}
+                                            className={isLocked
+                                                ? 'px-5 py-3 bg-indigo-50/60 border-l-4 border-indigo-500'
+                                                : 'px-5 py-3 bg-white'}
+                                        >
+                                            <div className="flex items-center justify-between gap-3 mb-2">
+                                                <h4 className={`text-sm font-bold ${isLocked ? 'text-indigo-900' : 'text-slate-800'}`}>
+                                                    {isLocked && <span className="mr-1.5">🔒</span>}
+                                                    {sec.header}
+                                                </h4>
+                                                <button
+                                                    onClick={() => toggleLock(sec.header)}
+                                                    disabled={overlayBusy}
+                                                    className={isLocked
+                                                        ? 'text-[10px] uppercase tracking-wide font-semibold px-2 py-0.5 rounded bg-indigo-200 text-indigo-900 hover:bg-indigo-300 disabled:opacity-50 transition-colors'
+                                                        : 'text-[10px] uppercase tracking-wide font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600 hover:bg-amber-200 hover:text-amber-900 disabled:opacity-50 transition-colors'}
+                                                    title={isLocked ? 'Unlock — AI will regenerate this section on rebuild' : 'Lock this section — AI will keep it verbatim on every rebuild'}
+                                                >
+                                                    {isLocked ? '🔒 locked' : '🔓 lock section'}
+                                                </button>
+                                            </div>
+                                            <div className="space-y-1">
+                                                {sec.lines.map((line, i) => {
+                                                    if (line.kind === 'blank') return <div key={i} className="h-1" />;
+                                                    let code;
+                                                    if (isLocked) code = 'U';
+                                                    else if (line.kind === 'bullet') {
+                                                        code = provBullets[bulletIdx] || (provBullets.length ? 'I' : 'U');
+                                                        bulletIdx += 1;
+                                                    } else {
+                                                        code = provProse[proseIdx] || (provProse.length ? 'I' : 'U');
+                                                        proseIdx += 1;
+                                                    }
+                                                    const style = PROV_STYLE[code] || PROV_STYLE.I;
+                                                    return (
+                                                        <div
+                                                            key={i}
+                                                            className={`flex items-start gap-2 pl-2 border-l-2 ${style.side}`}
+                                                            title={`Source: ${style.label}`}
+                                                        >
+                                                            <span className={`mt-1.5 inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${style.dot}`} />
+                                                            <span className="text-sm leading-relaxed text-slate-800 whitespace-pre-wrap flex-1">
+                                                                {line.kind === 'bullet' ? `- ${line.text}` : line.text}
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    )}
+                </div>
             ) : (
-                <>
-                    <textarea
-                        value={draft}
-                        onChange={(e) => setDraft(e.target.value)}
-                        rows={20}
-                        className="w-full p-4 border border-blue-300 rounded-xl bg-blue-50/30 text-sm font-mono text-slate-800 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-500"
-                        placeholder="Edit candidate summary…"
-                    />
-                    <div className="flex justify-between items-center">
-                        <span className="text-xs text-slate-500">
-                            {draft.trim().split(/\s+/).filter(Boolean).length} words
-                        </span>
-                        <div className="flex gap-3">
+                <div className="bg-white border border-blue-300 rounded-xl shadow-sm overflow-hidden">
+                    <div className="flex items-center justify-between px-5 py-3 border-b border-blue-200 bg-blue-50">
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-blue-900">✎ Editing summary</span>
+                            <span className="text-xs text-blue-700">
+                                {draft.trim().split(/\s+/).filter(Boolean).length} words
+                            </span>
+                            {lockedSet.size > 0 && (
+                                <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-300">
+                                    🔒 {lockedSet.size} section{lockedSet.size === 1 ? '' : 's'} will be preserved verbatim
+                                </span>
+                            )}
+                        </div>
+                        <div className="flex gap-2">
                             <button
                                 onClick={cancelEdit}
-                                className="px-4 py-2 rounded-lg bg-slate-200 text-slate-700 font-medium hover:bg-slate-300 transition-colors"
+                                className="px-3 py-1.5 rounded-lg bg-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-300 transition-colors"
                             >
                                 Cancel
                             </button>
                             <button
                                 onClick={saveEdit}
                                 disabled={saving}
-                                className="px-4 py-2 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                                className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors shadow-sm"
                             >
-                                {saving ? 'Saving…' : 'Save changes'}
+                                {saving ? 'Saving…' : '✓ Save changes'}
                             </button>
                         </div>
                     </div>
-                </>
+                    <textarea
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        rows={22}
+                        className="w-full p-4 text-sm font-mono text-slate-800 leading-relaxed focus:outline-none border-0 bg-blue-50/30"
+                        placeholder="Edit candidate summary…"
+                    />
+                </div>
             )}
         </div>
     );
