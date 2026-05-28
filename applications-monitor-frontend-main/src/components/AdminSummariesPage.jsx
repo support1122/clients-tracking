@@ -40,7 +40,8 @@ export default function AdminSummariesPage() {
     const [refreshKey, setRefreshKey] = useState(0);
     // Bulk-build state for "Build all" button.
     const [bulkRunning, setBulkRunning] = useState(false);
-    const [bulkProgress, setBulkProgress] = useState(null); // {done,total,current,errors:[]}
+    const [bulkProgress, setBulkProgress] = useState(null); // {done,total,current,errors:[],mode}
+    const [bulkPopup, setBulkPopup] = useState(false);
     const bulkAbortRef = useRef(false);
 
     // Read deep-link param so the page can be linked to with a preselected client.
@@ -95,26 +96,37 @@ export default function AdminSummariesPage() {
 
     const totals = overview?.totals || { clients: 0, withSummary: 0, withoutSummary: 0, stale: 0, withCap: 0, opsTotal: 0 };
     const coverage = totals.clients > 0 ? Math.round((totals.withSummary / totals.clients) * 100) : 0;
-    const bulkTargets = useMemo(
-        () => rows.filter((r) => !r.hasSummary || r.summaryStale),
-        [rows],
-    );
+    // Pre-segmented bulk-build target lists. Each row appears in at most
+    // one "primary" bucket so the popup counts are mutually exclusive.
+    const bulkBuckets = useMemo(() => {
+        const allClients = rows;
+        const missing = rows.filter((r) => !r.hasSummary);
+        const stale = rows.filter((r) => r.hasSummary && r.summaryStale);
+        const missingOrStale = rows.filter((r) => !r.hasSummary || r.summaryStale);
+        return { allClients, missing, stale, missingOrStale };
+    }, [rows]);
 
-    // Build summaries for every client missing one OR flagged stale,
-    // sequentially so we never hammer OpenAI. Refreshes overview after
-    // each call so the UI reflects progress live.
-    async function bulkBuildAll() {
+    // Build summaries for the selected bucket sequentially so we never
+    // hammer OpenAI. Refreshes overview after each call so the UI
+    // reflects progress live. mode ∈ 'all' | 'missing' | 'stale' | 'missingOrStale'.
+    async function bulkBuild(mode) {
         if (bulkRunning) return;
-        const targets = bulkTargets;
+        const map = {
+            all: bulkBuckets.allClients,
+            missing: bulkBuckets.missing,
+            stale: bulkBuckets.stale,
+            missingOrStale: bulkBuckets.missingOrStale,
+        };
+        const targets = map[mode] || [];
         if (targets.length === 0) return;
         setBulkRunning(true);
         bulkAbortRef.current = false;
         const errors = [];
-        setBulkProgress({ done: 0, total: targets.length, current: targets[0].email, errors });
+        setBulkProgress({ done: 0, total: targets.length, current: targets[0].email, errors, mode });
         for (let i = 0; i < targets.length; i += 1) {
             if (bulkAbortRef.current) break;
             const t = targets[i];
-            setBulkProgress({ done: i, total: targets.length, current: t.email, errors: [...errors] });
+            setBulkProgress({ done: i, total: targets.length, current: t.email, errors: [...errors], mode });
             try {
                 const r = await fetch(`${DASHBOARD_BASE}/build-ai-summary`, {
                     method: 'POST',
@@ -129,7 +141,7 @@ export default function AdminSummariesPage() {
                 errors.push({ email: t.email, error: 'NETWORK', message: e.message });
             }
         }
-        setBulkProgress({ done: targets.length, total: targets.length, current: '', errors });
+        setBulkProgress({ done: targets.length, total: targets.length, current: '', errors, mode });
         setBulkRunning(false);
         await loadOverview();
     }
@@ -162,12 +174,12 @@ export default function AdminSummariesPage() {
                                 </button>
                             ) : (
                                 <button
-                                    onClick={bulkBuildAll}
-                                    disabled={bulkTargets.length === 0}
+                                    onClick={() => setBulkPopup(true)}
+                                    disabled={bulkBuckets.allClients.length === 0}
                                     className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                                    title="Build summaries for every client missing one or flagged stale (profile changed)."
+                                    title="Open bulk build menu"
                                 >
-                                    ⚡ Build all ({bulkTargets.length})
+                                    ⚡ Build summaries…
                                 </button>
                             )}
                             <button
@@ -180,12 +192,107 @@ export default function AdminSummariesPage() {
                         </div>
                     </div>
 
+                    {/* BULK BUILD CHOICE POPUP */}
+                    {bulkPopup && !bulkRunning && (
+                        <div
+                            className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+                            onClick={() => setBulkPopup(false)}
+                        >
+                            <div
+                                className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden"
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <div className="px-6 py-4 border-b border-slate-200 bg-slate-50">
+                                    <h3 className="text-lg font-bold text-slate-900">⚡ Bulk build summaries</h3>
+                                    <p className="text-xs text-slate-600 mt-1">
+                                        Each client is built sequentially via gpt-4o-mini (~15s per client, ~$0.001 per build). You can stop the run at any time.
+                                    </p>
+                                </div>
+                                <div className="p-4 space-y-2">
+                                    <button
+                                        onClick={() => { setBulkPopup(false); bulkBuild('missing'); }}
+                                        disabled={bulkBuckets.missing.length === 0}
+                                        className="w-full text-left px-4 py-3 rounded-xl border-2 border-amber-300 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div>
+                                                <div className="font-bold text-amber-900">⚠ Build only non-built clients</div>
+                                                <div className="text-xs text-amber-800 mt-0.5">
+                                                    Clients who have never had a summary generated. Fastest option — skips everyone who already has a brief on file.
+                                                </div>
+                                            </div>
+                                            <span className="px-3 py-1 rounded-full text-sm font-bold bg-amber-200 text-amber-900 whitespace-nowrap">
+                                                {bulkBuckets.missing.length} client{bulkBuckets.missing.length === 1 ? '' : 's'}
+                                            </span>
+                                        </div>
+                                    </button>
+
+                                    <button
+                                        onClick={() => { setBulkPopup(false); bulkBuild('missingOrStale'); }}
+                                        disabled={bulkBuckets.missingOrStale.length === 0}
+                                        className="w-full text-left px-4 py-3 rounded-xl border-2 border-orange-300 bg-orange-50 hover:bg-orange-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div>
+                                                <div className="font-bold text-orange-900">↻ Build non-built + stale</div>
+                                                <div className="text-xs text-orange-800 mt-0.5">
+                                                    Includes clients flagged as stale (profile / resume changed since last build). Recommended day-to-day.
+                                                </div>
+                                            </div>
+                                            <span className="px-3 py-1 rounded-full text-sm font-bold bg-orange-200 text-orange-900 whitespace-nowrap">
+                                                {bulkBuckets.missingOrStale.length} client{bulkBuckets.missingOrStale.length === 1 ? '' : 's'}
+                                            </span>
+                                        </div>
+                                    </button>
+
+                                    <button
+                                        onClick={() => {
+                                            if (!window.confirm(`Rebuild ALL ${bulkBuckets.allClients.length} client summaries from scratch? This will spend ~$${(bulkBuckets.allClients.length * 0.001).toFixed(2)} and take ~${Math.ceil(bulkBuckets.allClients.length * 15 / 60)} minute(s).`)) return;
+                                            setBulkPopup(false);
+                                            bulkBuild('all');
+                                        }}
+                                        disabled={bulkBuckets.allClients.length === 0}
+                                        className="w-full text-left px-4 py-3 rounded-xl border-2 border-red-300 bg-red-50 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div>
+                                                <div className="font-bold text-red-900">🔥 Build for ALL clients</div>
+                                                <div className="text-xs text-red-800 mt-0.5">
+                                                    Rebuilds every client's summary from scratch — even ones already built and not stale. Use after a prompt change or model upgrade. Confirmation required.
+                                                </div>
+                                            </div>
+                                            <span className="px-3 py-1 rounded-full text-sm font-bold bg-red-200 text-red-900 whitespace-nowrap">
+                                                {bulkBuckets.allClients.length} client{bulkBuckets.allClients.length === 1 ? '' : 's'}
+                                            </span>
+                                        </div>
+                                    </button>
+                                </div>
+                                <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 flex justify-end">
+                                    <button
+                                        onClick={() => setBulkPopup(false)}
+                                        className="px-4 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-medium"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* BULK PROGRESS STRIP */}
                     {bulkProgress && (
                         <div className="mt-4 px-4 py-3 rounded-xl bg-slate-900 text-white">
                             <div className="flex items-center justify-between gap-3 text-sm">
                                 <span className="font-semibold">
                                     {bulkRunning ? 'Building…' : 'Bulk build complete'}
+                                    {bulkProgress.mode && (
+                                        <span className="ml-2 text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-700 text-slate-200">
+                                            {bulkProgress.mode === 'all' ? 'ALL' :
+                                             bulkProgress.mode === 'missing' ? 'NON-BUILT' :
+                                             bulkProgress.mode === 'stale' ? 'STALE' :
+                                             'NON-BUILT + STALE'}
+                                        </span>
+                                    )}
                                 </span>
                                 <span className="text-slate-300 font-mono">
                                     {bulkProgress.done} / {bulkProgress.total}
