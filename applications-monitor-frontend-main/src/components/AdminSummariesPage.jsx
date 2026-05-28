@@ -755,7 +755,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
             {/* AI summary */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                 <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-start justify-between gap-3">
-                    <div>
+                    <div className="flex-1 min-w-0">
                         <h3 className="font-bold text-slate-900">Candidate Summary</h3>
                         <div className="text-xs mt-1">
                             {summary ? (
@@ -774,6 +774,48 @@ function ClientDetailPane({ row, onProfileChanged }) {
                                 <span className="text-amber-700">Not built yet — click Build to generate.</span>
                             )}
                         </div>
+                        {summary && (
+                            <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                                {meta.model && (
+                                    <span
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide bg-slate-900 text-white"
+                                        title="Model used to generate this summary"
+                                    >
+                                        🤖 {meta.model}
+                                    </span>
+                                )}
+                                {Number.isFinite(Number(meta.temperature)) && (
+                                    <span
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-slate-100 text-slate-700 border border-slate-300"
+                                        title="Sampling temperature (lower = more deterministic)"
+                                    >
+                                        temp {Number(meta.temperature).toFixed(2)}
+                                    </span>
+                                )}
+                                <span className="text-[10px] text-slate-500 uppercase tracking-wide ml-1">Built from:</span>
+                                {meta.builtInputs?.notes ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-100 text-violet-800 border border-violet-300" title="Operator notes were included as highest-priority context">
+                                        💬 Notes
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-400 border border-slate-200" title="No operator notes on file at build time">
+                                        💬 Notes <span className="opacity-60">·skip</span>
+                                    </span>
+                                )}
+                                {meta.builtInputs?.resume ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300" title="Parsed resume was fetched and included">
+                                        📄 Resume
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-300" title="No resume linked — build used profile only">
+                                        📄 Resume <span className="opacity-60">·none</span>
+                                    </span>
+                                )}
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-100 text-sky-800 border border-sky-300" title="Onboarding profile is always included">
+                                    👤 Profile
+                                </span>
+                            </div>
+                        )}
                     </div>
                     {!editing && (
                         <div className="flex gap-2 flex-shrink-0">

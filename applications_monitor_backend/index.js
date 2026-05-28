@@ -93,11 +93,11 @@ import {
   gmailDisconnect
 } from './controllers/GmailOauthController.js';
 
-// Milestone counting whitelist: only Saved / Applied / Interviewing / Offer / Rejected.
-// Excludes Removed / Deleted variants (case-insensitive). Stored statuses vary
-// ("Applied", "applied", "Offer Extended", "rejected by client" etc.), so anchor
-// to the start of the string and rely on the prefix.
-const MILESTONE_COUNT_STATUS_RE = /^(saved|applied|interview|offer|reject)/i;
+// Milestone counting whitelist: only Applied / Interviewing / Offer / Rejected.
+// Excludes Saved (not yet applied), Removed / Deleted / Session variants.
+// Stored statuses vary ("Applied", "applied", "Offer Extended", "rejected by client" etc.),
+// so anchor to the start of the string and rely on the prefix.
+const MILESTONE_COUNT_STATUS_RE = /^(applied|interview|offer|reject)/i;
 function milestoneCountFilter(userEmail) {
   return {
     userID: userEmail,
