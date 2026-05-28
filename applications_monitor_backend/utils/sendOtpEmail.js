@@ -1,12 +1,9 @@
-import { sendGmailEmail } from "./gmailSender.js";
+import { ClientEmailLogModel } from "../ClientEmailLogModel.js";
 
-export async function sendOtpEmail(toEmail, otp, name) {
-  if (!toEmail) return { skipped: true, reason: "no_recipient" };
-  console.log(`[OTP Email] Sending OTP to ${toEmail}`);
+const SENDGRID_ENDPOINT = "https://api.sendgrid.com/v3/mail/send";
 
-  const displayName = name || toEmail.split("@")[0] || "User";
-  const subject = "Your FlashFire Portal login code";
-  const html = `
+function buildOtpHtml(displayName, otp) {
+  return `
 <!DOCTYPE html>
 <html>
 <head>
@@ -33,20 +30,73 @@ export async function sendOtpEmail(toEmail, otp, name) {
   </div>
 </body>
 </html>`;
+}
+
+export async function sendOtpEmail(toEmail, otp, name) {
+  if (!toEmail) return { skipped: true, reason: "no_recipient" };
+  console.log(`[OTP Email] Sending OTP to ${toEmail}`);
+
+  const apiKey = process.env.SENDGRID_API_KEY;
+  const fromEmail = process.env.SENDGRID_FROM_EMAIL || "noreply@flashfirehq.com";
+  const fromName = process.env.SENDGRID_FROM_NAME || "FlashFire Dashboard";
+
+  if (!apiKey) {
+    console.error("[OTP Email] SENDGRID_API_KEY missing in env");
+    throw new Error("sendgrid_api_key_missing");
+  }
+
+  const displayName = name || toEmail.split("@")[0] || "User";
+  const subject = "Your FlashFire Portal login code";
+  const html = buildOtpHtml(displayName, otp);
   const text = `Hi ${displayName},\n\nYour FlashFire login OTP: ${otp}\nIt expires in 5 minutes.\n\nIf you didn't request this code, ignore this email.`;
 
-  const result = await sendGmailEmail({
-    to: toEmail,
-    subject,
-    html,
-    text,
+  const recipient = toEmail.trim();
+  const logBase = {
+    clientEmail: recipient.toLowerCase(),
+    toEmail: recipient.toLowerCase(),
+    paymentEmail: "",
     category: "otp",
     type: "otp_login",
-    clientEmail: toEmail,
+    subject,
+    provider: "sendgrid",
+    fromEmail,
     meta: { displayName }
-  });
-  if (!result.success && !result.skipped) {
-    throw new Error(result.error || "otp_send_failed");
+  };
+
+  try {
+    const resp = await fetch(SENDGRID_ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: recipient }] }],
+        from: { email: fromEmail, name: fromName },
+        subject,
+        content: [
+          { type: "text/plain", value: text },
+          { type: "text/html", value: html }
+        ]
+      })
+    });
+
+    if (!resp.ok) {
+      const bodyText = await resp.text().catch(() => "");
+      const msg = `sendgrid_${resp.status}: ${bodyText.slice(0, 300)}`;
+      console.error(`[OTP Email] SendGrid failed to ${recipient}: ${msg}`);
+      await ClientEmailLogModel.create({ ...logBase, status: "failed", errorMessage: msg });
+      throw new Error(msg);
+    }
+
+    await ClientEmailLogModel.create({ ...logBase, status: "success" });
+    console.log(`[OTP Email] sent via SendGrid to ${recipient} from ${fromEmail}`);
+    return { success: true };
+  } catch (err) {
+    const msg = err?.message || "send_failed";
+    if (!/^sendgrid_/.test(msg)) {
+      await ClientEmailLogModel.create({ ...logBase, status: "failed", errorMessage: msg }).catch(() => {});
+    }
+    throw err;
   }
-  return result;
 }
