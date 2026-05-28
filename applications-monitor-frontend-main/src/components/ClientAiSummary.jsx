@@ -27,14 +27,73 @@ export default function ClientAiSummary({ clientEmail }) {
     const [savingTarget, setSavingTarget] = useState(false);
     const [history, setHistory] = useState(null);
     const [historyLoading, setHistoryLoading] = useState(false);
+    const [overlay, setOverlay] = useState(null);
+    const [overlayBusy, setOverlayBusy] = useState(false);
 
     useEffect(() => {
         if (clientEmail) {
             loadProfile();
             loadHistory();
+            loadOverlay();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [clientEmail]);
+
+    async function loadOverlay() {
+        try {
+            const res = await fetch(`${DASHBOARD_BASE}/summary-overlay?email=${encodeURIComponent(clientEmail.toLowerCase())}`);
+            const body = await res.json().catch(() => null);
+            if (res.ok && body?.success) setOverlay(body.overlay);
+            else setOverlay(null);
+        } catch {
+            setOverlay(null);
+        }
+    }
+
+    async function saveOverlay(savedText) {
+        setOverlayBusy(true);
+        try {
+            const res = await fetch(`${DASHBOARD_BASE}/save-summary-overlay`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ email: clientEmail.toLowerCase(), savedText }),
+            });
+            const body = await res.json().catch(() => null);
+            if (!res.ok || !body?.success) {
+                showError(`Save format failed: ${body?.message || `HTTP ${res.status}`}`);
+                return;
+            }
+            showMessage(body.message || 'Format saved.', 'ok');
+            setOverlay(body.overlay);
+        } catch (e) {
+            showError(`Network error: ${e.message}`);
+        } finally {
+            setOverlayBusy(false);
+        }
+    }
+
+    async function clearOverlay() {
+        if (!window.confirm('Disable the saved format? Future rebuilds will use pure AI output. (Snapshot is retained — you can re-enable by saving the format again.)')) return;
+        setOverlayBusy(true);
+        try {
+            const res = await fetch(`${DASHBOARD_BASE}/clear-summary-overlay`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ email: clientEmail.toLowerCase() }),
+            });
+            const body = await res.json().catch(() => null);
+            if (!res.ok || !body?.success) {
+                showError(`Clear overlay failed: ${body?.message || `HTTP ${res.status}`}`);
+                return;
+            }
+            showMessage(body.message || 'Overlay disabled.', 'ok');
+            await loadOverlay();
+        } catch (e) {
+            showError(`Network error: ${e.message}`);
+        } finally {
+            setOverlayBusy(false);
+        }
+    }
 
     async function loadHistory(days = 30) {
         setHistoryLoading(true);
@@ -141,6 +200,15 @@ export default function ClientAiSummary({ clientEmail }) {
             showMessage(`Saved (${wordCount} words).`, 'ok');
             setEditing(false);
             await loadProfile();
+            // Prompt operator to lock in the edit as a sticky overlay so the
+            // added lines survive future BuildAiSummary rebuilds.
+            const promptMsg = overlay?.enabled
+                ? 'Update the saved format with these changes? Any new lines you added will persist on future rebuilds.'
+                : 'Save this format? Any lines you added will be preserved on every future rebuild (profile / resume / cron triggers).';
+            if (window.confirm(promptMsg)) {
+                await saveOverlay(text);
+                await loadOverlay();
+            }
         } catch (e) {
             showError(`Network error: ${e.message}`);
         } finally {
@@ -216,6 +284,41 @@ export default function ClientAiSummary({ clientEmail }) {
                 )}
                 {meta.model && (
                     <span className="text-xs text-slate-500">model: {meta.model}</span>
+                )}
+                {overlay?.enabled && (
+                    <span
+                        className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800 border border-indigo-300"
+                        title={overlay.savedAt ? `Format saved ${new Date(overlay.savedAt).toLocaleString()}` : 'Format overlay active'}
+                    >
+                        🔒 format locked
+                        {overlay.stats?.total ? (
+                            <span className="text-[10px] bg-indigo-200 text-indigo-900 px-1.5 py-0.5 rounded">
+                                +{overlay.stats.total} sticky line{overlay.stats.total === 1 ? '' : 's'}
+                            </span>
+                        ) : null}
+                        <button
+                            onClick={clearOverlay}
+                            disabled={overlayBusy}
+                            className="text-indigo-700 hover:text-red-600 underline text-[10px] ml-1 disabled:opacity-50"
+                        >
+                            clear
+                        </button>
+                    </span>
+                )}
+                {!overlay?.enabled && overlay?.savedAt && (
+                    <span
+                        className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-300"
+                        title={`Snapshot saved ${new Date(overlay.savedAt).toLocaleString()} — currently disabled`}
+                    >
+                        🗒 format snapshot (disabled)
+                        <button
+                            onClick={() => saveOverlay(overlay.savedText || summary)}
+                            disabled={overlayBusy}
+                            className="text-slate-700 hover:text-emerald-700 underline text-[10px] ml-1 disabled:opacity-50"
+                        >
+                            re-enable
+                        </button>
+                    </span>
                 )}
             </div>
 
