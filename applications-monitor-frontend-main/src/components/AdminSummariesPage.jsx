@@ -398,6 +398,9 @@ function ClientDetailPane({ row, onProfileChanged }) {
     const [saving, setSaving] = useState(false);
     const [targetDraft, setTargetDraft] = useState('');
     const [savingTarget, setSavingTarget] = useState(false);
+    const [notes, setNotes] = useState(null);
+    const [notesDraft, setNotesDraft] = useState('');
+    const [savingNotes, setSavingNotes] = useState(false);
     function showMessage(text, kind = 'ok') {
         setMessage({ text, kind });
         setError(null);
@@ -442,9 +445,53 @@ function ClientDetailPane({ row, onProfileChanged }) {
         }
     }
 
+    async function loadNotes() {
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/ai-notes?email=${encodeURIComponent(row.email)}`);
+            const body = await r.json().catch(() => null);
+            if (r.ok && body?.success) {
+                setNotes(body.notes);
+                setNotesDraft(body.notes?.text || '');
+            } else {
+                setNotes(null);
+                setNotesDraft('');
+            }
+        } catch {
+            setNotes(null);
+            setNotesDraft('');
+        }
+    }
+
+    async function saveNotes() {
+        setSavingNotes(true);
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/save-ai-notes`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    email: row.email,
+                    text: notesDraft,
+                    updatedBy: 'admin-summaries-page',
+                }),
+            });
+            const body = await r.json().catch(() => null);
+            if (!r.ok || !body?.success) {
+                showError(`Save notes failed: ${body?.message || `HTTP ${r.status}`}`);
+                return;
+            }
+            showMessage(body.message || 'Notes saved.');
+            setNotes(body.notes);
+        } catch (e) {
+            showError(`Network error: ${e.message}`);
+        } finally {
+            setSavingNotes(false);
+        }
+    }
+
     useEffect(() => {
         loadProfile();
         loadHistory();
+        loadNotes();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [row.email]);
 
@@ -639,6 +686,69 @@ function ClientDetailPane({ row, onProfileChanged }) {
                     >
                         {savingTarget ? 'Saving…' : 'Update cap'}
                     </button>
+                </div>
+            </div>
+
+            {/* Notes to AI — operator guidance injected into every BuildAiSummary call */}
+            <div className="bg-gradient-to-br from-violet-50 to-fuchsia-50 rounded-2xl shadow-sm border-2 border-violet-300 overflow-hidden">
+                <div className="px-5 py-3 border-b border-violet-200 bg-violet-100/60 flex items-start justify-between gap-3">
+                    <div>
+                        <h3 className="font-bold text-violet-900 flex items-center gap-2">
+                            💬 Notes to AI
+                            {notes?.text ? (
+                                <span className="text-[10px] uppercase tracking-wide font-bold px-2 py-0.5 rounded-full bg-violet-200 text-violet-900">
+                                    {notes.charCount} chars · active
+                                </span>
+                            ) : (
+                                <span className="text-[10px] uppercase tracking-wide font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">
+                                    empty
+                                </span>
+                            )}
+                        </h3>
+                        <p className="text-xs text-violet-800 mt-1 leading-relaxed">
+                            Free-text operator guidance. Sent as <strong>highest-priority context</strong> on every <strong>Build / Rebuild</strong> below.
+                            Use for client-specific intent the structured profile can't capture (e.g. "wants ML research only, not infra", "exclude staffing agencies", "remote-only despite preferredLocations").
+                        </p>
+                        {notes?.updatedAt && (
+                            <p className="text-[11px] text-violet-700 mt-1 font-mono">
+                                Last saved {new Date(notes.updatedAt).toLocaleString()}{notes.updatedBy ? ` by ${notes.updatedBy}` : ''}
+                            </p>
+                        )}
+                    </div>
+                </div>
+                <div className="p-4">
+                    <textarea
+                        value={notesDraft}
+                        onChange={(e) => setNotesDraft(e.target.value.slice(0, 4000))}
+                        rows={5}
+                        placeholder={'Examples:\n• Only ML research / applied-research roles. Skip pure data-engineering jobs.\n• Exclude any staffing agency or recruiter-fronted listings.\n• Will relocate to NYC or SF; treat other US cities as remote-only.\n• Salary floor is firm at $180k base.'}
+                        className="w-full p-3 border border-violet-300 rounded-lg bg-white text-sm font-mono text-slate-800 leading-relaxed focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-violet-500"
+                    />
+                    <div className="flex justify-between items-center mt-3">
+                        <span className="text-xs text-violet-700">
+                            {notesDraft.length} / 4000 chars
+                            {notesDraft !== (notes?.text || '') && (
+                                <span className="ml-2 text-amber-700 font-semibold">• unsaved changes</span>
+                            )}
+                        </span>
+                        <div className="flex gap-2">
+                            {(notes?.text || '') && notesDraft !== (notes?.text || '') && (
+                                <button
+                                    onClick={() => setNotesDraft(notes?.text || '')}
+                                    className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-300"
+                                >
+                                    Revert
+                                </button>
+                            )}
+                            <button
+                                onClick={saveNotes}
+                                disabled={savingNotes || notesDraft === (notes?.text || '')}
+                                className="px-4 py-1.5 bg-violet-600 text-white rounded-lg text-sm font-semibold hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                            >
+                                {savingNotes ? 'Saving…' : '💾 Save notes'}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
