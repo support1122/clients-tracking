@@ -5,21 +5,36 @@ import { AnimatedCounter } from './AnimatedCounter';
 
 const API_BASE = import.meta.env.VITE_BASE || "https://applications-monitor-api.flashfirejobs.com";
 
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('authToken');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const INCENTIVE_TIERS = [
-  { min: 3000, max: Infinity, payout: 'Stipend + ₹5,000', color: 'from-purple-500 to-purple-600', bgColor: 'from-purple-50 to-purple-100', textColor: 'text-purple-700', borderColor: 'border-purple-200' },
-  { min: 2501, max: 3000, payout: 'Stipend + ₹4,000', color: 'from-indigo-500 to-indigo-600', bgColor: 'from-indigo-50 to-indigo-100', textColor: 'text-indigo-700', borderColor: 'border-indigo-200' },
-  { min: 2201, max: 2500, payout: 'Stipend + ₹3,000', color: 'from-blue-500 to-blue-600', bgColor: 'from-blue-50 to-blue-100', textColor: 'text-blue-700', borderColor: 'border-blue-200' },
-  { min: 1801, max: 2200, payout: 'Stipend + ₹2,500', color: 'from-cyan-500 to-cyan-600', bgColor: 'from-cyan-50 to-cyan-100', textColor: 'text-cyan-700', borderColor: 'border-cyan-200' },
-  { min: 1501, max: 1800, payout: 'Stipend + ₹1,500', color: 'from-teal-500 to-teal-600', bgColor: 'from-teal-50 to-teal-100', textColor: 'text-teal-700', borderColor: 'border-teal-200' },
-  { min: 1300, max: 1500, payout: 'Stipend + ₹500', color: 'from-green-500 to-green-600', bgColor: 'from-green-50 to-green-100', textColor: 'text-green-700', borderColor: 'border-green-200' },
-  { min: 1000, max: 1299, payout: 'Stipend only', color: 'from-slate-400 to-slate-500', bgColor: 'from-slate-50 to-slate-100', textColor: 'text-slate-700', borderColor: 'border-slate-200' },
+  { min: 3500, max: Infinity, payout: 'Stipend + ₹5,000', color: 'from-purple-500 to-purple-600', bgColor: 'from-purple-50 to-purple-100', textColor: 'text-purple-700', borderColor: 'border-purple-200' },
+  { min: 3000, max: 3499, payout: 'Stipend + ₹4,000', color: 'from-indigo-500 to-indigo-600', bgColor: 'from-indigo-50 to-indigo-100', textColor: 'text-indigo-700', borderColor: 'border-indigo-200' },
+  { min: 2700, max: 2999, payout: 'Stipend + ₹3,000', color: 'from-blue-500 to-blue-600', bgColor: 'from-blue-50 to-blue-100', textColor: 'text-blue-700', borderColor: 'border-blue-200' },
+  { min: 2300, max: 2699, payout: 'Stipend + ₹2,500', color: 'from-cyan-500 to-cyan-600', bgColor: 'from-cyan-50 to-cyan-100', textColor: 'text-cyan-700', borderColor: 'border-cyan-200' },
+  { min: 2000, max: 2299, payout: 'Stipend + ₹1,500', color: 'from-teal-500 to-teal-600', bgColor: 'from-teal-50 to-teal-100', textColor: 'text-teal-700', borderColor: 'border-teal-200' },
+  { min: 1800, max: 1999, payout: 'Stipend + ₹500', color: 'from-green-500 to-green-600', bgColor: 'from-green-50 to-green-100', textColor: 'text-green-700', borderColor: 'border-green-200' },
+  { min: 1500, max: 1799, payout: 'Stipend only', color: 'from-slate-400 to-slate-500', bgColor: 'from-slate-50 to-slate-100', textColor: 'text-slate-700', borderColor: 'border-slate-200' },
 ];
+
+const LOWEST_INCENTIVE_TIER_MIN = INCENTIVE_TIERS[INCENTIVE_TIERS.length - 1].min;
+
+function formatIncentiveTierRange(tier) {
+  if (tier.max === Infinity) {
+    return `${tier.min.toLocaleString()}+`;
+  }
+  return `${tier.min.toLocaleString()}–${tier.max.toLocaleString()}`;
+}
 
 export default function OperatorsPerformanceReport() {
   const navigate = useNavigate();
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [operations, setOperations] = useState([]);
+  const [reportOperations, setReportOperations] = useState(null);
   const [operationsPerformance, setOperationsPerformance] = useState({});
   const [loading, setLoading] = useState(false);
   const [totalApplied, setTotalApplied] = useState(0);
@@ -39,7 +54,9 @@ export default function OperatorsPerformanceReport() {
 
   const fetchOperations = async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/operations`);
+      const response = await fetch(`${API_BASE}/api/operations`, {
+        headers: getAuthHeaders()
+      });
       if (response.ok) {
         const data = await response.json();
         setOperations(data.operations || []);
@@ -57,21 +74,26 @@ export default function OperatorsPerformanceReport() {
         endDate
       });
       
-      const response = await fetch(`${API_BASE}/api/operations/performance-report?${params.toString()}`);
+      const response = await fetch(`${API_BASE}/api/operations/performance-report?${params.toString()}`, {
+        headers: getAuthHeaders()
+      });
       if (response.ok) {
         const data = await response.json();
+        setReportOperations(Array.isArray(data.operators) ? data.operators : null);
         setOperationsPerformance(data.performanceMap || {});
         setTotalApplied(data.totalApplied || 0);
         setNotDownloadedMap(data.notDownloadedMap || {});
         setNotDownloadedByStatusMap(data.notDownloadedByStatusMap || {});
       } else {
         console.error('Error fetching performance report');
+        setReportOperations(null);
         setOperationsPerformance({});
         setTotalApplied(0);
         setNotDownloadedByStatusMap({});
       }
     } catch (error) {
       console.error('Error fetching performance report:', error);
+      setReportOperations(null);
       setOperationsPerformance({});
       setTotalApplied(0);
       setNotDownloadedByStatusMap({});
@@ -115,20 +137,26 @@ export default function OperatorsPerformanceReport() {
     return monthlyProjected;
   };
 
-  // Get tier information for a given monthly application count
   const getTierInfo = (monthlyApplications) => {
-    if (monthlyApplications < 1000) {
-      return { tier: 'Under 1,000', payout: 'Stipend only', tierIndex: -1, min: 0, max: 999 };
+    if (monthlyApplications < LOWEST_INCENTIVE_TIER_MIN) {
+      return {
+        tier: `Under ${LOWEST_INCENTIVE_TIER_MIN.toLocaleString()}`,
+        payout: 'Stipend only',
+        tierIndex: -1,
+        min: 0,
+        max: LOWEST_INCENTIVE_TIER_MIN - 1,
+      };
     }
-    
+
     for (let i = 0; i < INCENTIVE_TIERS.length; i++) {
       const tier = INCENTIVE_TIERS[i];
       if (monthlyApplications >= tier.min && monthlyApplications <= tier.max) {
-        return { ...tier, tierIndex: i, tier: `${tier.min === 3000 ? '3000+' : `${tier.min}-${tier.max}`}` };
+        return { ...tier, tierIndex: i, tier: formatIncentiveTierRange(tier) };
       }
     }
-    
-    return { tier: '3000+', payout: 'Stipend + ₹5,000', tierIndex: 0, min: 3000, max: Infinity };
+
+    const top = INCENTIVE_TIERS[0];
+    return { ...top, tierIndex: 0, tier: formatIncentiveTierRange(top) };
   };
 
   // Get next tier and progress
@@ -136,7 +164,6 @@ export default function OperatorsPerformanceReport() {
     const currentTier = getTierInfo(monthlyApplications);
     
     if (currentTier.tierIndex === -1) {
-      // Below threshold, next tier is 1000-1299
       const nextTier = INCENTIVE_TIERS[INCENTIVE_TIERS.length - 1];
       const progress = (monthlyApplications / nextTier.min) * 100;
       return {
@@ -168,18 +195,23 @@ export default function OperatorsPerformanceReport() {
     };
   };
 
-  const sortedOperators = useMemo(() => {
-    return operations
-      .map(op => ({
-        ...op,
-        applications: operationsPerformance[op.email] || 0,
-        notDownloaded: notDownloadedMap[op.email] || 0,
-        notDownloadedByStatus: notDownloadedByStatusMap[op.email?.toLowerCase()] || { applied: 0, rejected: 0, interviewing: 0, offer: 0 }
-      }))
-      .sort((a, b) => b.applications - a.applications);
-  }, [operations, operationsPerformance, notDownloadedMap, notDownloadedByStatusMap]);
+  const visibleOperations = reportOperations || operations;
 
-  // Get tier distribution (only show operators who qualify for tiers - 1,000+)
+  const sortedOperators = useMemo(() => {
+    return visibleOperations
+      .map(op => {
+        const emailKey = op.email?.toLowerCase();
+        return {
+          ...op,
+          applications: operationsPerformance[emailKey] || 0,
+          notDownloaded: notDownloadedMap[emailKey] || 0,
+          notDownloadedByStatus: notDownloadedByStatusMap[emailKey] || { applied: 0, rejected: 0, interviewing: 0, offer: 0 }
+        };
+      })
+      .sort((a, b) => b.applications - a.applications);
+  }, [visibleOperations, operationsPerformance, notDownloadedMap, notDownloadedByStatusMap]);
+
+  // Tier distribution for operators who are at or above the lowest published slab
   const getTierDistribution = useMemo(() => {
     if (!startDate || !endDate) return {};
     
@@ -189,7 +221,7 @@ export default function OperatorsPerformanceReport() {
       // Use actual applications for tier calculation
       const tierInfo = getTierInfo(operator.applications);
       
-      // Only include operators who have reached at least 1,000 applications
+      // Only include operators who have reached at least LOWEST_INCENTIVE_TIER_MIN applications
       if (tierInfo.tierIndex !== -1) {
         const tierKey = tierInfo.tier;
         
@@ -274,7 +306,7 @@ export default function OperatorsPerformanceReport() {
                       {INCENTIVE_TIERS.map((tier, index) => (
                         <tr key={index} className="hover:bg-slate-50">
                           <td className="px-4 py-3 text-sm font-medium text-slate-900">
-                            {tier.min === 3000 ? '3,000+' : `${tier.min.toLocaleString()}–${tier.max.toLocaleString()}`}
+                            {formatIncentiveTierRange(tier)}
                           </td>
                           <td className="px-4 py-3 text-sm text-slate-700">{tier.payout}</td>
                         </tr>
@@ -448,21 +480,21 @@ export default function OperatorsPerformanceReport() {
             {sortedOperators.length > 0 && (
               <>
                 <TeamPerformanceSummary 
-                  operations={operations} 
+                  operations={visibleOperations} 
                   operationsPerformance={operationsPerformance}
                   notDownloadedMap={notDownloadedMap}
                   loading={loading}
                 />
                 
                 <TopPerformersBarChart 
-                  operations={operations} 
+                  operations={visibleOperations} 
                   operationsPerformance={operationsPerformance}
                   notDownloadedMap={notDownloadedMap}
                   loading={loading}
                 />
                 
                 <MonthlyLeaderboard
-                  operations={operations}
+                  operations={visibleOperations}
                   operationsPerformance={operationsPerformance}
                   notDownloadedMap={notDownloadedMap}
                 />
@@ -553,7 +585,7 @@ export default function OperatorsPerformanceReport() {
                                 {nextTierProgress.nextTier ? (
                                   <div className="space-y-1">
                                     <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
-                                      <span>Next: {nextTierProgress.nextTier.min === 3000 ? '3000+' : `${nextTierProgress.nextTier.min}-${nextTierProgress.nextTier.max}`}</span>
+                                      <span>Next: {formatIncentiveTierRange(nextTierProgress.nextTier)}</span>
                                       <span className="font-semibold">{Math.round(nextTierProgress.progress)}%</span>
                                     </div>
                                     <div className="w-full bg-slate-200 rounded-full h-2">
@@ -616,4 +648,3 @@ export default function OperatorsPerformanceReport() {
     </div>
   );
 }
-

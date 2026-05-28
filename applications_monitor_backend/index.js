@@ -460,6 +460,16 @@ const verifyOperationsManage = (req, res, next) => {
   return res.status(403).json({ error: 'Access denied. Only admin, CSM, or team lead can manage operations.' });
 };
 
+const normalizeEmail = (email) => (email || '').toLowerCase().trim();
+
+const getTeamLeadEmailSet = async () => {
+  const teamLeads = await UserModel.find({
+    role: 'team_lead'
+  }).select('email').lean();
+
+  return new Set(teamLeads.map(user => normalizeEmail(user.email)).filter(Boolean));
+};
+
 const ConnectDB = () => {
   if (!process.env.MONGODB_URI || String(process.env.MONGODB_URI).trim() === '') {
     console.error('❌ MONGODB_URI is not set. Add it to .env (e.g. mongodb+srv://... or mongodb://localhost:27017/dbname)');
@@ -5204,8 +5214,14 @@ const getOperationsPerformanceReport = async (req, res) => {
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    const allOperations = await OperationsModel.find().select('email name').lean();
-    const operatorEmails = allOperations.map(op => op.email.toLowerCase());
+    let allOperations = await OperationsModel.find().select('email name').lean();
+
+    if (['operations_intern', 'team_lead'].includes(req.user?.role)) {
+      const teamLeadEmails = await getTeamLeadEmailSet();
+      allOperations = allOperations.filter(op => !teamLeadEmails.has(normalizeEmail(op.email)));
+    }
+
+    const operatorEmails = allOperations.map(op => normalizeEmail(op.email));
 
     if (operatorEmails.length === 0) {
       return res.status(200).json({
@@ -5346,7 +5362,7 @@ const getOperationsPerformanceReport = async (req, res) => {
     });
 
     const performanceData = allOperations.map(op => {
-      const emailLower = op.email.toLowerCase();
+      const emailLower = normalizeEmail(op.email);
       return {
         email: op.email,
         name: op.name || op.email.split('@')[0],
@@ -5374,7 +5390,7 @@ const getOperationsPerformanceReport = async (req, res) => {
   }
 };
 
-app.get('/api/operations/performance-report', getOperationsPerformanceReport);
+app.get('/api/operations/performance-report', optionalVerifyToken, getOperationsPerformanceReport);
 
 /**
  * Shared stages: parse IST job timestamp and filter to inclusive [startDate,endDate] in IST.
