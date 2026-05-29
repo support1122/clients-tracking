@@ -2047,6 +2047,19 @@ client2@example.com,payer2@example.com</pre>
 
               {sendPrevResult && (
                 <>
+                  {typeof sendPrevResult.activeTotal === 'number' && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 flex flex-wrap items-center gap-x-4 gap-y-1">
+                      <span><strong className="font-bold">{sendPrevResult.activeTotal}</strong> active clients total</span>
+                      <span className="text-blue-400">→</span>
+                      <span><strong className="font-bold">{sendPrevResult.processed || 0}</strong> processed (have payment email)</span>
+                      {(sendPrevResult.activeMissingPaymentEmail || 0) > 0 && (
+                        <>
+                          <span className="text-blue-400">·</span>
+                          <span className="text-amber-700"><strong className="font-bold">{sendPrevResult.activeMissingPaymentEmail}</strong> skipped (no payment email — never enter sweep)</span>
+                        </>
+                      )}
+                    </div>
+                  )}
                   <div className="grid grid-cols-4 gap-3">
                     <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
                       <div className="text-2xl font-bold text-gray-700">{sendPrevResult.processed || 0}</div>

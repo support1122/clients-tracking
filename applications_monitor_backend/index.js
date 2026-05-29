@@ -808,6 +808,7 @@ export const createOrUpdateClient = async (req, res) => {
       amountPaidDate,
       modeOfPayment,
       status,
+      paymentEmail,
     } = req.body;
 
     const emailLower = email.toLowerCase();
@@ -912,6 +913,7 @@ export const createOrUpdateClient = async (req, res) => {
         amountPaid: amountPaid || 0,
         amountPaidDate: amountPaidDate || " ",
         modeOfPayment: modeOfPayment || "paypal",
+        paymentEmail: typeof paymentEmail === 'string' ? paymentEmail.trim().toLowerCase() : "",
         status: status !== undefined && status !== null && status !== '' ? status : "active",
         isPaused: true,
         onboardingPhase: true,
@@ -991,9 +993,14 @@ export const createOrUpdateClient = async (req, res) => {
 
     if (currentPath?.includes("/clients/new")) {
       await NewUserModel.updateOne({ email: emailLower }, { $set: userData });
+      const clientSet = { dashboardTeamLeadName: dashboardManager };
+      // Persist paymentEmail from registration form for existing-user re-register.
+      if (typeof paymentEmail === 'string' && paymentEmail.trim()) {
+        clientSet.paymentEmail = paymentEmail.trim().toLowerCase();
+      }
       await ClientModel.updateOne(
         { email: emailLower },
-        { $set: { dashboardTeamLeadName: dashboardManager } },
+        { $set: clientSet },
         { runValidators: false }
       );
       return res.status(200).json({
@@ -7869,10 +7876,24 @@ async function recordMilestoneInMoveHistory(clientEmail, milestoneKey, sendResul
 // Lower already-reached milestones get marked sent without firing emails so
 // future cron ticks won't re-spam.
 async function runSendPreviousMilestones() {
-  const clients = await ClientModel.find({
-    status: 'active',
-    paymentEmail: { $exists: true, $ne: '' }
-  }).lean();
+  // Count active clients first so we can report how many were dropped at
+  // the filter stage (active but no paymentEmail). Saves operator confusion
+  // when processed << active total.
+  const [activeTotal, activeMissingPaymentEmail, clients] = await Promise.all([
+    ClientModel.countDocuments({ status: 'active' }),
+    ClientModel.countDocuments({
+      status: 'active',
+      $or: [
+        { paymentEmail: { $exists: false } },
+        { paymentEmail: '' },
+        { paymentEmail: null }
+      ]
+    }),
+    ClientModel.find({
+      status: 'active',
+      paymentEmail: { $exists: true, $nin: ['', null] }
+    }).lean()
+  ]);
 
   // Bulk-fetch referrals so we don't N+1 below.
   const emails = clients.map((c) => (c.email || '').toLowerCase()).filter(Boolean);
@@ -7991,7 +8012,16 @@ async function runSendPreviousMilestones() {
     });
   }
 
-  return { processed, sent, skipped, failed, details, skipReasons };
+  return {
+    processed,
+    sent,
+    skipped,
+    failed,
+    details,
+    skipReasons,
+    activeTotal,
+    activeMissingPaymentEmail
+  };
 }
 
 /**
