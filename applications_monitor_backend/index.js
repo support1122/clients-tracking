@@ -7890,6 +7890,15 @@ async function runSendPreviousMilestones() {
   let skipped = 0;
   let failed = 0;
   const details = [];
+  // Aggregate breakdown for the UI summary card — guaranteed populated even
+  // when individual `details` rows are skipped by an older deploy.
+  const skipReasons = {
+    no_plan_milestones: 0,
+    below_all_thresholds: 0,
+    all_reached_already_sent: 0,
+    no_payment_email: 0,
+    other: 0
+  };
 
   for (const client of clients) {
     processed++;
@@ -7898,6 +7907,7 @@ async function runSendPreviousMilestones() {
     const milestones = computeClientMilestones(client, referralAdded);
     if (!milestones.length) {
       skipped++;
+      skipReasons.no_plan_milestones++;
       details.push({
         clientEmail: client.email,
         clientName: client.name || '',
@@ -7923,6 +7933,7 @@ async function runSendPreviousMilestones() {
     if (!reachedUnsent.length) {
       skipped++;
       const reason = reached.length === 0 ? 'below_all_thresholds' : 'all_reached_already_sent';
+      skipReasons[reason]++;
       const lowestThreshold = milestones[0]?.threshold ?? null;
       details.push({
         clientEmail: client.email,
@@ -7964,6 +7975,7 @@ async function runSendPreviousMilestones() {
     }
 
     if (sendResult?.success) sent++;
+    else if (sendResult?.skipped) { skipped++; skipReasons.other++; }
     else failed++;
 
     details.push({
@@ -7979,7 +7991,7 @@ async function runSendPreviousMilestones() {
     });
   }
 
-  return { processed, sent, skipped, failed, details };
+  return { processed, sent, skipped, failed, details, skipReasons };
 }
 
 /**

@@ -2066,6 +2066,44 @@ client2@example.com,payer2@example.com</pre>
                     </div>
                   </div>
 
+                  {(sendPrevResult.skipped || 0) > 0 && (() => {
+                    const r = sendPrevResult.skipReasons || {};
+                    const reasonLabels = {
+                      below_all_thresholds: { label: 'Below lowest threshold', hint: 'Client has fewer dashboard jobs than the smallest milestone (10).' },
+                      all_reached_already_sent: { label: 'Already sent (caught up)', hint: 'Every milestone the client has reached was emailed in a previous run.' },
+                      no_plan_milestones: { label: 'No plan / no milestones', hint: 'planType is missing or not in PLAN_MILESTONES.' },
+                      no_payment_email: { label: 'No payment email', hint: 'paymentEmail field is empty (should be filtered out earlier).' },
+                      other: { label: 'Skipped by sender', hint: 'sendMilestoneEmail returned skipped=true (e.g. Gmail OAuth not connected).' }
+                    };
+                    const entries = Object.entries(reasonLabels).map(([k, meta]) => ({ key: k, count: Number(r[k] || 0), ...meta })).filter((e) => e.count > 0);
+                    if (entries.length === 0) {
+                      // Backend hasn't been redeployed with skipReasons aggregate yet.
+                      return (
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900">
+                          <div className="font-bold mb-1">Why skipped?</div>
+                          <div className="text-amber-800">Per-reason breakdown not returned by backend. Common causes: client has &lt; 10 jobs in dashboard (below lowest threshold), or all reached milestones were already emailed in a prior run.</div>
+                          <div className="mt-2 text-[10px] text-amber-700">If you redeployed the backend recently, re-run — it now reports each reason explicitly.</div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 space-y-2">
+                        <div className="text-xs font-bold text-orange-900 uppercase tracking-wider">Why skipped ({sendPrevResult.skipped})</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {entries.map((e) => (
+                            <div key={e.key} className="bg-white border border-orange-200 rounded-lg p-2.5 flex items-start gap-3">
+                              <div className="text-xl font-bold text-orange-700 min-w-[2ch] text-right">{e.count}</div>
+                              <div>
+                                <div className="text-xs font-semibold text-gray-900">{e.label}</div>
+                                <div className="text-[10px] text-gray-500 leading-snug">{e.hint}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {Array.isArray(sendPrevResult.details) && sendPrevResult.details.length > 0 && (
                     <div className="border border-gray-200 rounded-xl overflow-hidden">
                       <div className="bg-gray-50 px-4 py-2 text-xs font-bold text-gray-600 uppercase tracking-wider">Details ({sendPrevResult.details.length})</div>
