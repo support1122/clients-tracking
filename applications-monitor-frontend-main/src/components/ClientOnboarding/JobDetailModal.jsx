@@ -242,6 +242,12 @@ const JobDetailModal = React.memo(({
   const sendPendingMilestone = useCallback(async () => {
     const clientEmail = selectedJob?.clientEmail;
     if (!clientEmail) return;
+    // Client-side pre-flight: payment email required. Saves round-trip and
+    // gives a clearer message than the raw backend response.
+    if (!paymentEmailValue || !paymentEmailValue.trim()) {
+      toastUtils.error('Payment Email is not set for this client. Add one in the INFO panel first — milestone emails are sent to that address.');
+      return;
+    }
     setSendingPendingMilestone(true);
     try {
       const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}/send-pending-milestones`, {
@@ -251,7 +257,12 @@ const JobDetailModal = React.memo(({
       if (!res.ok) {
         if (res.status === 401) handleAuthFailure();
         const err = await res.json().catch(() => ({}));
-        toastUtils.error(err?.error || 'Send failed');
+        const friendly = {
+          no_payment_email: 'Payment Email is not set for this client. Add one in the INFO panel first.',
+          inactive: 'Client is not active — milestone emails are only sent to active clients.',
+          no_plan: 'This client has no milestone plan configured.',
+        }[err?.code] || err?.error || 'Send failed';
+        toastUtils.error(friendly);
         return;
       }
       const data = await res.json();
@@ -268,7 +279,7 @@ const JobDetailModal = React.memo(({
     } finally {
       setSendingPendingMilestone(false);
     }
-  }, [selectedJob?.clientEmail, fetchEmailLogs]);
+  }, [selectedJob?.clientEmail, paymentEmailValue, fetchEmailLogs]);
 
   useEffect(() => {
     if (selectedJob?.clientEmail) fetchEmailLogs(selectedJob.clientEmail);
@@ -1041,18 +1052,21 @@ const JobDetailModal = React.memo(({
                       <History className="w-3 h-3" /> Milestone Timeline
                       {milestonePlanType && <span className="ml-2 text-[10px] text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full uppercase tracking-wider">{milestonePlanType}{milestonePlanCap ? ` · ${milestonePlanCap}` : ''}</span>}
                     </h3>
-                    {isAdmin && milestoneSchedule.some((m) => !m.sent) && (
-                      <button
-                        type="button"
-                        onClick={sendPendingMilestone}
-                        disabled={sendingPendingMilestone}
-                        title="Send the highest pending milestone email this client qualifies for now"
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 disabled:opacity-50"
-                      >
-                        {sendingPendingMilestone ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
-                        Fire pending email
-                      </button>
-                    )}
+                    {isAdmin && milestoneSchedule.some((m) => !m.sent) && (() => {
+                      const noPaymentEmail = !paymentEmailValue || !paymentEmailValue.trim();
+                      return (
+                        <button
+                          type="button"
+                          onClick={sendPendingMilestone}
+                          disabled={sendingPendingMilestone || noPaymentEmail}
+                          title={noPaymentEmail ? 'Payment Email is not set — add one in the INFO panel first' : 'Send the highest pending milestone email this client qualifies for now'}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border disabled:opacity-50 disabled:cursor-not-allowed ${noPaymentEmail ? 'border-gray-300 bg-gray-50 text-gray-400' : 'border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100'}`}
+                        >
+                          {sendingPendingMilestone ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
+                          {noPaymentEmail ? 'Payment Email missing' : 'Fire pending email'}
+                        </button>
+                      );
+                    })()}
                   </div>
                   <ol className="relative border-l-2 border-orange-200 ml-2 space-y-4">
                     {milestoneSchedule.map((m) => {

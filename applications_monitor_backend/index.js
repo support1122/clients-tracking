@@ -2,6 +2,7 @@ import express from 'express';
 import compression from 'compression';
 import mongoose from 'mongoose';
 import { JobModel } from './JobModel.js';
+import { checkPlanCap as checkPlanCapGuard, enforcePlanCapPostInsert as enforcePlanCapGuard } from './utils/planCapGuard.js';
 import { ClientModel } from './ClientModel.js';
 import { ProfileModel, profileSchema } from './ProfileModel.js';
 import { UserModel } from './UserModel.js';
@@ -1835,8 +1836,71 @@ const createJob = async (req, res) => {
       updatedAt: new Date().toLocaleString('en-US', 'Asia/Kolkata')
     };
 
+    // HARD lifetime plan-cap gate. Same rule as the dashboard backend:
+    // effective cap = base plan (or planLimit override) + addons + referrals.
+    // Once a client hits it, NO new job is created — strict, fail-closed on
+    // DB error so a flaky read can't open the floodgates.
+    const clientEmail = jobData.userID || jobData.email;
+    if (clientEmail) {
+      let planCheck;
+      try {
+        planCheck = await checkPlanCapGuard(clientEmail);
+      } catch (e) {
+        console.error('planCapGuard.checkPlanCap failed:', e.message);
+        return res.status(503).json({
+          success: false,
+          error: 'PLAN_CAP_CHECK_FAILED',
+          message: 'Could not verify plan limit (DB unavailable). Job creation refused — try again shortly.',
+        });
+      }
+      if (!planCheck.allowed) {
+        console.log(JSON.stringify({
+          event: 'plan.cap.hit',
+          source: 'applications-monitor',
+          client: clientEmail,
+          planType: planCheck.planType,
+          cap: planCheck.cap,
+          count: planCheck.count,
+        }));
+        return res.status(403).json({
+          success: false,
+          error: planCheck.reason || 'PLAN_LIMIT_REACHED',
+          message: planCheck.message,
+          cap: planCheck.cap,
+          baseCap: planCheck.baseCap,
+          addonBonus: planCheck.addonBonus,
+          referralBonus: planCheck.referralBonus,
+          current: planCheck.count,
+          remaining: 0,
+          planType: planCheck.planType,
+        });
+      }
+    }
+
     const job = new JobModel(jobData);
     await job.save();
+
+    // Post-insert race guard: re-count and roll back if a concurrent create
+    // pushed us over the cap.
+    if (clientEmail) {
+      try {
+        const enforce = await enforcePlanCapGuard(clientEmail, job._id);
+        if (!enforce.kept) {
+          return res.status(403).json({
+            success: false,
+            error: 'PLAN_LIMIT_REACHED',
+            message: `Plan limit reached during race (${enforce.count}/${enforce.cap}). Job creation refused — this job was rolled back.`,
+            cap: enforce.cap,
+            current: enforce.count,
+            remaining: 0,
+            rolledBack: enforce.deleted,
+          });
+        }
+      } catch (e) {
+        console.error('planCapGuard.enforcePlanCapPostInsert failed:', e.message);
+      }
+    }
+
     res.status(201).json({ job });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -7832,7 +7896,17 @@ async function runSendPreviousMilestones() {
     const referralAdded = referralAddedByEmail.get((client.email || '').toLowerCase()) || 0;
     const planCap = getEffectiveCap(client, referralAdded);
     const milestones = computeClientMilestones(client, referralAdded);
-    if (!milestones.length) { skipped++; continue; }
+    if (!milestones.length) {
+      skipped++;
+      details.push({
+        clientEmail: client.email,
+        clientName: client.name || '',
+        planType: client.planType || '',
+        status: 'skipped',
+        reason: 'no_plan_milestones'
+      });
+      continue;
+    }
 
     const currentCount = await JobModel.countDocuments(milestoneCountFilter(client.email));
     const notified = client.milestonesNotified || {};
@@ -7846,7 +7920,24 @@ async function runSendPreviousMilestones() {
       if (m.type === 'completed' && typeof prev.cap === 'number' && prev.cap < m.threshold) return true;
       return false;
     });
-    if (!reachedUnsent.length) { skipped++; continue; }
+    if (!reachedUnsent.length) {
+      skipped++;
+      const reason = reached.length === 0 ? 'below_all_thresholds' : 'all_reached_already_sent';
+      const lowestThreshold = milestones[0]?.threshold ?? null;
+      details.push({
+        clientEmail: client.email,
+        clientName: client.name || '',
+        planType: client.planType || '',
+        status: 'skipped',
+        reason,
+        currentCount,
+        planCap,
+        lowestThreshold,
+        reachedKeys: reached.map((m) => m.key),
+        sentKeys: Object.entries(notified).filter(([, v]) => v?.sent).map(([k]) => k)
+      });
+      continue;
+    }
 
     const highest = reachedUnsent.reduce((a, b) => (a.threshold > b.threshold ? a : b));
 
