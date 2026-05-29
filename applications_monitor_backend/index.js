@@ -4511,6 +4511,94 @@ app.post('/api/admin/run-milestone-cron', verifyToken, verifyAdmin, async (req, 
   }
 });
 
+// Admin: scan clients for missing paymentEmail. Two modes:
+//   mode='audit'   (default) → report only, no writes.
+//   mode='backfill_with_login_email' → set paymentEmail = client.email for
+//                                       every client where it's missing.
+// Always returns counts + a list of affected clients so the modal can show
+// which rows were touched / would be touched.
+app.post('/api/admin/payment-emails/sync', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const mode = req.body?.mode === 'backfill_with_login_email' ? 'backfill_with_login_email' : 'audit';
+    const onlyActive = req.body?.onlyActive !== false; // default true
+    const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    const filter = {
+      $or: [
+        { paymentEmail: { $exists: false } },
+        { paymentEmail: '' },
+        { paymentEmail: null }
+      ]
+    };
+    if (onlyActive) filter.status = 'active';
+
+    const candidates = await ClientModel.find(filter)
+      .select('email name clientNumber planType status')
+      .lean();
+
+    const eligible = candidates.filter((c) => emailRx.test(c.email || ''));
+    const invalid = candidates.length - eligible.length;
+
+    let updated = 0;
+    const updatedRows = [];
+    const skippedRows = [];
+
+    if (mode === 'backfill_with_login_email') {
+      const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
+      for (const c of eligible) {
+        const newPaymentEmail = String(c.email).toLowerCase().trim();
+        try {
+          await ClientModel.updateOne(
+            { email: c.email },
+            { $set: { paymentEmail: newPaymentEmail } }
+          );
+          updated++;
+          updatedRows.push({
+            email: c.email,
+            name: c.name || '',
+            clientNumber: c.clientNumber ?? null,
+            planType: c.planType || '',
+            paymentEmail: newPaymentEmail
+          });
+          try {
+            await addClientActionToJobMoveHistory(c.email, 'payment_email_set', movedBy, {
+              source: 'admin_sync_backfill',
+              paymentEmail: newPaymentEmail
+            });
+          } catch {}
+        } catch (e) {
+          skippedRows.push({ email: c.email, error: e?.message || String(e) });
+        }
+      }
+    } else {
+      // audit
+      for (const c of eligible) {
+        updatedRows.push({
+          email: c.email,
+          name: c.name || '',
+          clientNumber: c.clientNumber ?? null,
+          planType: c.planType || '',
+          wouldSet: String(c.email).toLowerCase().trim()
+        });
+      }
+    }
+
+    return res.json({
+      mode,
+      onlyActive,
+      scannedMissing: candidates.length,
+      eligible: eligible.length,
+      invalidEmails: invalid,
+      updated,
+      affected: updatedRows,
+      skipped: skippedRows
+    });
+  } catch (e) {
+    console.error('[payment-emails/sync] error:', e?.message);
+    res.status(500).json({ error: 'sync failed' });
+  }
+});
+
 app.post('/api/clients/payment-emails/bulk', verifyToken, async (req, res) => {
   try {
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];

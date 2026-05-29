@@ -32,7 +32,8 @@ import {
   Image,
   Upload,
   Download,
-  Mail
+  Mail,
+  RefreshCw
 } from 'lucide-react';
 
 // Extracted sub-components
@@ -79,6 +80,11 @@ export default function ClientOnboarding() {
   const [paymentImportResult, setPaymentImportResult] = useState(null);
   // Send previous milestones (admin)
   const [showSendPrevModal, setShowSendPrevModal] = useState(false);
+  // Sync Payment Emails (admin) — audit missing → optional backfill.
+  const [showPaymentSyncModal, setShowPaymentSyncModal] = useState(false);
+  const [paymentSyncRunning, setPaymentSyncRunning] = useState(false);
+  const [paymentSyncResult, setPaymentSyncResult] = useState(null);
+  const [paymentSyncMode, setPaymentSyncMode] = useState('audit');
   const [sendPrevRunning, setSendPrevRunning] = useState(false);
   const [sendPrevResult, setSendPrevResult] = useState(null);
   // Export logs modal
@@ -1284,6 +1290,42 @@ export default function ClientOnboarding() {
     setSendPrevResult(null);
   }, [sendPrevRunning]);
 
+  const runPaymentSync = useCallback(async (mode) => {
+    setPaymentSyncRunning(true);
+    setPaymentSyncResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/payment-emails/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS() },
+        body: JSON.stringify({ mode, onlyActive: true })
+      });
+      if (!res.ok) {
+        if (res.status === 401) handleAuthFailure();
+        const err = await res.json().catch(() => ({}));
+        toastUtils.error(err?.error || 'Sync failed');
+        return;
+      }
+      const data = await res.json();
+      setPaymentSyncResult(data);
+      if (mode === 'audit') {
+        toastUtils.success(`Audit · ${data.scannedMissing} missing · ${data.eligible} eligible to backfill`);
+      } else {
+        toastUtils.success(`Backfill · updated ${data.updated} clients`);
+      }
+    } catch {
+      toastUtils.error('Sync failed');
+    } finally {
+      setPaymentSyncRunning(false);
+    }
+  }, []);
+
+  const closePaymentSyncModal = useCallback(() => {
+    if (paymentSyncRunning) return;
+    setShowPaymentSyncModal(false);
+    setPaymentSyncResult(null);
+    setPaymentSyncMode('audit');
+  }, [paymentSyncRunning]);
+
   // ══════════════════════════════════════════════════════════════════
   //  JSX
   // ══════════════════════════════════════════════════════════════════
@@ -1327,6 +1369,19 @@ export default function ClientOnboarding() {
               <Upload className="w-4 h-4" />
               <span className="hidden sm:inline">Import Payment Emails</span>
             </button>
+
+            {/* Sync Payment Emails (admin only) */}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => { setShowPaymentSyncModal(true); setPaymentSyncResult(null); }}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-purple-300 bg-purple-50 hover:bg-purple-100 text-sm font-semibold text-purple-700 shadow-sm transition-colors"
+                title="Scan clients with missing Payment Email — option to backfill from login email"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span className="hidden sm:inline">Sync Payment Emails</span>
+              </button>
+            )}
 
             {/* Export Logs (admin only) */}
             {isAdmin && (
@@ -2172,6 +2227,161 @@ client2@example.com,payer2@example.com</pre>
                   {sendPrevRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> Running…</> : <><Send className="w-4 h-4" /> Run Now</>}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sync Payment Emails Modal (admin) */}
+      {showPaymentSyncModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) closePaymentSyncModal(); }}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center"><RefreshCw className="w-5 h-5 text-purple-600" /></div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Sync Payment Emails</h2>
+                  <p className="text-xs text-gray-500">Find active clients whose Payment Email is missing — optionally backfill from their login email</p>
+                </div>
+              </div>
+              <button type="button" onClick={closePaymentSyncModal} disabled={paymentSyncRunning} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50" aria-label="Close">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {!paymentSyncResult && (
+                <>
+                  <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 text-xs text-purple-900 leading-relaxed">
+                    <div className="font-semibold mb-2 text-sm">What this does</div>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li><strong>Audit</strong> (safe): scans active clients with empty <code className="bg-white px-1 rounded">paymentEmail</code> and lists them. No writes.</li>
+                      <li><strong>Backfill from login email</strong>: sets <code className="bg-white px-1 rounded">paymentEmail = client.email</code> for every missing client. Use only when the client paid from the same email they signed up with.</li>
+                      <li>Already-set values are <strong>never overwritten</strong>.</li>
+                    </ul>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => { setPaymentSyncMode('audit'); runPaymentSync('audit'); }}
+                      disabled={paymentSyncRunning}
+                      className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 text-sm font-semibold"
+                    >
+                      {paymentSyncRunning && paymentSyncMode === 'audit' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                      Run Audit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!window.confirm('Backfill paymentEmail = login email for every active client where it is empty. Continue?')) return;
+                        setPaymentSyncMode('backfill_with_login_email');
+                        runPaymentSync('backfill_with_login_email');
+                      }}
+                      disabled={paymentSyncRunning}
+                      className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 text-sm font-semibold shadow"
+                    >
+                      {paymentSyncRunning && paymentSyncMode === 'backfill_with_login_email' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                      Backfill From Login Email
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {paymentSyncResult && (
+                <>
+                  <div className="grid grid-cols-4 gap-3">
+                    <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-gray-700">{paymentSyncResult.scannedMissing || 0}</div>
+                      <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-0.5">Missing total</div>
+                    </div>
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-blue-700">{paymentSyncResult.eligible || 0}</div>
+                      <div className="text-[10px] uppercase tracking-wider text-blue-600 mt-0.5">Eligible</div>
+                    </div>
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-green-700">{paymentSyncResult.updated || 0}</div>
+                      <div className="text-[10px] uppercase tracking-wider text-green-600 mt-0.5">Updated</div>
+                    </div>
+                    <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 text-center">
+                      <div className="text-2xl font-bold text-rose-700">{paymentSyncResult.invalidEmails || 0}</div>
+                      <div className="text-[10px] uppercase tracking-wider text-rose-600 mt-0.5">Invalid email</div>
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-gray-600">
+                    Mode: <strong className="font-bold">{paymentSyncResult.mode === 'backfill_with_login_email' ? 'Backfill (writes applied)' : 'Audit (no writes)'}</strong>
+                  </div>
+
+                  {Array.isArray(paymentSyncResult.affected) && paymentSyncResult.affected.length > 0 && (
+                    <div className="border border-gray-200 rounded-xl overflow-hidden">
+                      <div className="bg-gray-50 px-4 py-2 text-xs font-bold text-gray-600 uppercase tracking-wider flex items-center justify-between">
+                        <span>{paymentSyncResult.mode === 'audit' ? 'Would set' : 'Set'} ({paymentSyncResult.affected.length})</span>
+                      </div>
+                      <div className="max-h-80 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead className="bg-gray-50 sticky top-0 border-b border-gray-200">
+                            <tr>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-700">#</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-700">Client</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-700">Plan</th>
+                              <th className="px-3 py-2 text-left font-semibold text-gray-700">Payment Email</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {paymentSyncResult.affected.map((r, i) => (
+                              <tr key={r.email + i} className="border-b border-gray-100 last:border-0">
+                                <td className="px-3 py-1.5 text-gray-500">{r.clientNumber ?? '—'}</td>
+                                <td className="px-3 py-1.5"><div className="font-medium text-gray-900">{r.name || '—'}</div><div className="font-mono text-[10px] text-gray-500">{r.email}</div></td>
+                                <td className="px-3 py-1.5 uppercase text-gray-700">{r.planType || '—'}</td>
+                                <td className="px-3 py-1.5 font-mono text-purple-700">{r.paymentEmail || r.wouldSet}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {Array.isArray(paymentSyncResult.skipped) && paymentSyncResult.skipped.length > 0 && (
+                    <div className="border border-rose-200 rounded-xl overflow-hidden">
+                      <div className="bg-rose-50 px-4 py-2 text-xs font-bold text-rose-700 uppercase tracking-wider">Errors ({paymentSyncResult.skipped.length})</div>
+                      <div className="max-h-40 overflow-y-auto">
+                        {paymentSyncResult.skipped.map((r, i) => (
+                          <div key={i} className="px-3 py-1.5 text-xs border-b border-rose-100 last:border-0">
+                            <span className="font-mono text-rose-700">{r.email}</span> — <span className="text-rose-600">{r.error}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {paymentSyncResult.mode === 'audit' && paymentSyncResult.eligible > 0 && (
+                    <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between">
+                      <div className="text-xs text-purple-900">
+                        <strong className="font-bold">{paymentSyncResult.eligible}</strong> clients can be backfilled now using their login email.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!window.confirm(`Backfill paymentEmail for ${paymentSyncResult.eligible} clients. Continue?`)) return;
+                          setPaymentSyncMode('backfill_with_login_email');
+                          runPaymentSync('backfill_with_login_email');
+                        }}
+                        disabled={paymentSyncRunning}
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-600 text-white text-xs font-semibold hover:bg-purple-700 disabled:opacity-50"
+                      >
+                        {paymentSyncRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                        Backfill Now
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-2">
+              <button type="button" onClick={closePaymentSyncModal} disabled={paymentSyncRunning} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 rounded-lg disabled:opacity-50">Close</button>
             </div>
           </div>
         </div>
