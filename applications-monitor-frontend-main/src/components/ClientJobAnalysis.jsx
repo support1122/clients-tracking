@@ -771,7 +771,20 @@ export default function ClientJobAnalysis() {
                 const addonLimit = Number(r.addonLimit || 0);
                 const referralBonus = Number(r.referralApplicationsAdded || 0);
                 const totalLimit = planLimit + addonLimit + referralBonus;
-                const exceeded = totalLimit !== Infinity && totalApplications > totalLimit;
+                // `>=` (not strict `>`) so a client AT cap shows the Excluded
+                // state — addJob enforcement stops them at totalLimit and we
+                // want operators to see that they hit the wall.
+                const exceeded = totalLimit !== Infinity && totalApplications >= totalLimit;
+                // Per-plan "approaching cap" warning. Scales with addons +
+                // referrals — warn fires when count is within 50 of the
+                // effective cap. Prime (160) is too small to be useful —
+                // skip warn entirely there.
+                const warnOffset = 50;
+                const warnThreshold =
+                  totalLimit === Infinity || isPrime
+                    ? null
+                    : Math.max(1, totalLimit - warnOffset);
+                const nearCap = !exceeded && warnThreshold != null && totalApplications >= warnThreshold;
 
                 // Normalize status: API/legacy rows may omit status or use different casing — must match select value and colors.
                 const normalizedClientStatus = (() => {
@@ -786,7 +799,10 @@ export default function ClientJobAnalysis() {
 
                 let rowColor;
                 if (exceeded) {
-                  rowColor = 'bg-red-100';
+                  rowColor = 'bg-red-200';
+                } else if (nearCap) {
+                  // Distinct from exceeded (red) — amber = "almost there".
+                  rowColor = 'bg-amber-100';
                 } else if (isActiveWithNoSaved) {
                   rowColor = 'bg-orange-100';
                 } else {
@@ -916,8 +932,13 @@ export default function ClientJobAnalysis() {
                               </span>
                             )}
                             {exceeded && (
-                              <span className="text-[10px] text-red-600 font-semibold">
-                                Total: {totalLimit} (Exceeded)
+                              <span className="text-[10px] text-red-700 font-bold uppercase tracking-wider bg-red-100 border border-red-300 px-1.5 py-0.5 rounded">
+                                Excluded · {totalApplications}/{totalLimit}
+                              </span>
+                            )}
+                            {nearCap && (
+                              <span className="text-[10px] text-amber-800 font-semibold bg-amber-50 border border-amber-300 px-1.5 py-0.5 rounded" title={`Approaching cap (warning at ${warnThreshold} of ${totalLimit})`}>
+                                Near cap · {totalApplications}/{totalLimit}
                               </span>
                             )}
                           </div>

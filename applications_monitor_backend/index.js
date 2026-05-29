@@ -808,6 +808,7 @@ export const createOrUpdateClient = async (req, res) => {
       amountPaidDate,
       modeOfPayment,
       status,
+      paymentEmail,
     } = req.body;
 
     const emailLower = email.toLowerCase();
@@ -912,6 +913,7 @@ export const createOrUpdateClient = async (req, res) => {
         amountPaid: amountPaid || 0,
         amountPaidDate: amountPaidDate || " ",
         modeOfPayment: modeOfPayment || "paypal",
+        paymentEmail: typeof paymentEmail === 'string' ? paymentEmail.trim().toLowerCase() : "",
         status: status !== undefined && status !== null && status !== '' ? status : "active",
         isPaused: true,
         onboardingPhase: true,
@@ -991,9 +993,14 @@ export const createOrUpdateClient = async (req, res) => {
 
     if (currentPath?.includes("/clients/new")) {
       await NewUserModel.updateOne({ email: emailLower }, { $set: userData });
+      const clientSet = { dashboardTeamLeadName: dashboardManager };
+      // Persist paymentEmail from registration form for existing-user re-register.
+      if (typeof paymentEmail === 'string' && paymentEmail.trim()) {
+        clientSet.paymentEmail = paymentEmail.trim().toLowerCase();
+      }
       await ClientModel.updateOne(
         { email: emailLower },
-        { $set: { dashboardTeamLeadName: dashboardManager } },
+        { $set: clientSet },
         { runValidators: false }
       );
       return res.status(200).json({
@@ -4504,6 +4511,94 @@ app.post('/api/admin/run-milestone-cron', verifyToken, verifyAdmin, async (req, 
   }
 });
 
+// Admin: scan clients for missing paymentEmail. Two modes:
+//   mode='audit'   (default) → report only, no writes.
+//   mode='backfill_with_login_email' → set paymentEmail = client.email for
+//                                       every client where it's missing.
+// Always returns counts + a list of affected clients so the modal can show
+// which rows were touched / would be touched.
+app.post('/api/admin/payment-emails/sync', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const mode = req.body?.mode === 'backfill_with_login_email' ? 'backfill_with_login_email' : 'audit';
+    const onlyActive = req.body?.onlyActive !== false; // default true
+    const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    const filter = {
+      $or: [
+        { paymentEmail: { $exists: false } },
+        { paymentEmail: '' },
+        { paymentEmail: null }
+      ]
+    };
+    if (onlyActive) filter.status = 'active';
+
+    const candidates = await ClientModel.find(filter)
+      .select('email name clientNumber planType status')
+      .lean();
+
+    const eligible = candidates.filter((c) => emailRx.test(c.email || ''));
+    const invalid = candidates.length - eligible.length;
+
+    let updated = 0;
+    const updatedRows = [];
+    const skippedRows = [];
+
+    if (mode === 'backfill_with_login_email') {
+      const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
+      for (const c of eligible) {
+        const newPaymentEmail = String(c.email).toLowerCase().trim();
+        try {
+          await ClientModel.updateOne(
+            { email: c.email },
+            { $set: { paymentEmail: newPaymentEmail } }
+          );
+          updated++;
+          updatedRows.push({
+            email: c.email,
+            name: c.name || '',
+            clientNumber: c.clientNumber ?? null,
+            planType: c.planType || '',
+            paymentEmail: newPaymentEmail
+          });
+          try {
+            await addClientActionToJobMoveHistory(c.email, 'payment_email_set', movedBy, {
+              source: 'admin_sync_backfill',
+              paymentEmail: newPaymentEmail
+            });
+          } catch {}
+        } catch (e) {
+          skippedRows.push({ email: c.email, error: e?.message || String(e) });
+        }
+      }
+    } else {
+      // audit
+      for (const c of eligible) {
+        updatedRows.push({
+          email: c.email,
+          name: c.name || '',
+          clientNumber: c.clientNumber ?? null,
+          planType: c.planType || '',
+          wouldSet: String(c.email).toLowerCase().trim()
+        });
+      }
+    }
+
+    return res.json({
+      mode,
+      onlyActive,
+      scannedMissing: candidates.length,
+      eligible: eligible.length,
+      invalidEmails: invalid,
+      updated,
+      affected: updatedRows,
+      skipped: skippedRows
+    });
+  } catch (e) {
+    console.error('[payment-emails/sync] error:', e?.message);
+    res.status(500).json({ error: 'sync failed' });
+  }
+});
+
 app.post('/api/clients/payment-emails/bulk', verifyToken, async (req, res) => {
   try {
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
@@ -7869,10 +7964,24 @@ async function recordMilestoneInMoveHistory(clientEmail, milestoneKey, sendResul
 // Lower already-reached milestones get marked sent without firing emails so
 // future cron ticks won't re-spam.
 async function runSendPreviousMilestones() {
-  const clients = await ClientModel.find({
-    status: 'active',
-    paymentEmail: { $exists: true, $ne: '' }
-  }).lean();
+  // Count active clients first so we can report how many were dropped at
+  // the filter stage (active but no paymentEmail). Saves operator confusion
+  // when processed << active total.
+  const [activeTotal, activeMissingPaymentEmail, clients] = await Promise.all([
+    ClientModel.countDocuments({ status: 'active' }),
+    ClientModel.countDocuments({
+      status: 'active',
+      $or: [
+        { paymentEmail: { $exists: false } },
+        { paymentEmail: '' },
+        { paymentEmail: null }
+      ]
+    }),
+    ClientModel.find({
+      status: 'active',
+      paymentEmail: { $exists: true, $nin: ['', null] }
+    }).lean()
+  ]);
 
   // Bulk-fetch referrals so we don't N+1 below.
   const emails = clients.map((c) => (c.email || '').toLowerCase()).filter(Boolean);
@@ -7890,6 +7999,15 @@ async function runSendPreviousMilestones() {
   let skipped = 0;
   let failed = 0;
   const details = [];
+  // Aggregate breakdown for the UI summary card — guaranteed populated even
+  // when individual `details` rows are skipped by an older deploy.
+  const skipReasons = {
+    no_plan_milestones: 0,
+    below_all_thresholds: 0,
+    all_reached_already_sent: 0,
+    no_payment_email: 0,
+    other: 0
+  };
 
   for (const client of clients) {
     processed++;
@@ -7898,6 +8016,7 @@ async function runSendPreviousMilestones() {
     const milestones = computeClientMilestones(client, referralAdded);
     if (!milestones.length) {
       skipped++;
+      skipReasons.no_plan_milestones++;
       details.push({
         clientEmail: client.email,
         clientName: client.name || '',
@@ -7923,6 +8042,7 @@ async function runSendPreviousMilestones() {
     if (!reachedUnsent.length) {
       skipped++;
       const reason = reached.length === 0 ? 'below_all_thresholds' : 'all_reached_already_sent';
+      skipReasons[reason]++;
       const lowestThreshold = milestones[0]?.threshold ?? null;
       details.push({
         clientEmail: client.email,
@@ -7964,6 +8084,7 @@ async function runSendPreviousMilestones() {
     }
 
     if (sendResult?.success) sent++;
+    else if (sendResult?.skipped) { skipped++; skipReasons.other++; }
     else failed++;
 
     details.push({
@@ -7979,7 +8100,16 @@ async function runSendPreviousMilestones() {
     });
   }
 
-  return { processed, sent, skipped, failed, details };
+  return {
+    processed,
+    sent,
+    skipped,
+    failed,
+    details,
+    skipReasons,
+    activeTotal,
+    activeMissingPaymentEmail
+  };
 }
 
 /**
