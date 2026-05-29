@@ -2082,19 +2082,29 @@ client2@example.com,payer2@example.com</pre>
                             </tr>
                           </thead>
                           <tbody>
-                            {sendPrevResult.details.map((d, i) => (
-                              <tr key={i} className="border-b border-gray-100 last:border-0">
-                                <td className="px-3 py-1.5"><div className="font-medium text-gray-900">{d.clientName || '—'}</div><div className="font-mono text-[10px] text-gray-500">{d.clientEmail}</div></td>
-                                <td className="px-3 py-1.5 uppercase text-gray-700">{d.planType}</td>
-                                <td className="px-3 py-1.5 text-gray-700">{d.currentCount}</td>
-                                <td className="px-3 py-1.5"><span className="inline-block px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full text-[10px] font-semibold">{d.sentMilestone}</span></td>
-                                <td className="px-3 py-1.5 text-[10px] text-gray-500">{(d.caughtUp || []).join(', ') || '—'}</td>
-                                <td className="px-3 py-1.5">
-                                  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${d.status === 'sent' ? 'bg-green-100 text-green-700' : d.status === 'skipped' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>{d.status}</span>
-                                  {d.error && <div className="text-[10px] text-red-600 mt-0.5">{d.error}</div>}
-                                </td>
-                              </tr>
-                            ))}
+                            {sendPrevResult.details.map((d, i) => {
+                              const reasonLabel = {
+                                no_plan_milestones: 'Plan has no milestones',
+                                below_all_thresholds: `Below lowest threshold (${d.lowestThreshold ?? '—'})`,
+                                all_reached_already_sent: `All reached milestones already sent (${(d.sentKeys || []).join(', ') || '—'})`
+                              }[d.reason] || d.reason;
+                              return (
+                                <tr key={i} className="border-b border-gray-100 last:border-0 align-top">
+                                  <td className="px-3 py-1.5"><div className="font-medium text-gray-900">{d.clientName || '—'}</div><div className="font-mono text-[10px] text-gray-500">{d.clientEmail}</div></td>
+                                  <td className="px-3 py-1.5 uppercase text-gray-700">{d.planType || '—'}</td>
+                                  <td className="px-3 py-1.5 text-gray-700">{d.currentCount ?? '—'}{d.planCap ? <span className="text-[10px] text-gray-400">/{d.planCap}</span> : null}</td>
+                                  <td className="px-3 py-1.5">{d.sentMilestone ? <span className="inline-block px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full text-[10px] font-semibold">{d.sentMilestone}</span> : <span className="text-[10px] text-gray-400">—</span>}</td>
+                                  <td className="px-3 py-1.5 text-[10px] text-gray-500">{(d.caughtUp || []).join(', ') || (d.reachedKeys || []).join(', ') || '—'}</td>
+                                  <td className="px-3 py-1.5">
+                                    <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${d.status === 'sent' ? 'bg-green-100 text-green-700' : d.status === 'skipped' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>{d.status}</span>
+                                    {d.status === 'skipped' && reasonLabel && (
+                                      <div className="text-[10px] text-orange-700 mt-0.5 leading-snug">{reasonLabel}</div>
+                                    )}
+                                    {d.error && <div className="text-[10px] text-red-600 mt-0.5">{d.error}</div>}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
