@@ -815,6 +815,14 @@ export const createOrUpdateClient = async (req, res) => {
     const planPrices = { ignite: 199, professional: 349, executive: 599, prime: 119 };
     const dashboardManager = dashboardTeamLeadName;
 
+    // Normalize + validate paymentEmail (milestone recipient). Empty is OK
+    // (optional field). If provided but malformed, reject so a typo doesn't
+    // silently persist and break milestone delivery.
+    const paymentEmailNorm = typeof paymentEmail === 'string' ? paymentEmail.trim().toLowerCase() : '';
+    if (paymentEmailNorm && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paymentEmailNorm)) {
+      return res.status(400).json({ error: 'Invalid Payment Email format', code: 'bad_payment_email' });
+    }
+
     const capitalizedPlan = planType && planType.trim()
       ? (planType.trim().toLowerCase() === "ignite"
         ? "Ignite"
@@ -913,7 +921,7 @@ export const createOrUpdateClient = async (req, res) => {
         amountPaid: amountPaid || 0,
         amountPaidDate: amountPaidDate || " ",
         modeOfPayment: modeOfPayment || "paypal",
-        paymentEmail: typeof paymentEmail === 'string' ? paymentEmail.trim().toLowerCase() : "",
+        paymentEmail: paymentEmailNorm,
         status: status !== undefined && status !== null && status !== '' ? status : "active",
         isPaused: true,
         onboardingPhase: true,
@@ -995,8 +1003,8 @@ export const createOrUpdateClient = async (req, res) => {
       await NewUserModel.updateOne({ email: emailLower }, { $set: userData });
       const clientSet = { dashboardTeamLeadName: dashboardManager };
       // Persist paymentEmail from registration form for existing-user re-register.
-      if (typeof paymentEmail === 'string' && paymentEmail.trim()) {
-        clientSet.paymentEmail = paymentEmail.trim().toLowerCase();
+      if (paymentEmailNorm) {
+        clientSet.paymentEmail = paymentEmailNorm;
       }
       await ClientModel.updateOne(
         { email: emailLower },
@@ -1012,6 +1020,10 @@ export const createOrUpdateClient = async (req, res) => {
     // Only set client fields on ClientModel (exclude currentPath and other non-schema keys if needed)
     const clientUpdate = { ...req.body };
     delete clientUpdate.currentPath;
+    // Normalize paymentEmail if it came through this path (already validated above).
+    if (Object.prototype.hasOwnProperty.call(clientUpdate, 'paymentEmail')) {
+      clientUpdate.paymentEmail = paymentEmailNorm;
+    }
     await mergePausedAtIntoClientUpdate(emailLower, clientUpdate);
     await ClientModel.updateOne(
       { email: emailLower },
@@ -4511,94 +4523,6 @@ app.post('/api/admin/run-milestone-cron', verifyToken, verifyAdmin, async (req, 
   }
 });
 
-// Admin: scan clients for missing paymentEmail. Two modes:
-//   mode='audit'   (default) → report only, no writes.
-//   mode='backfill_with_login_email' → set paymentEmail = client.email for
-//                                       every client where it's missing.
-// Always returns counts + a list of affected clients so the modal can show
-// which rows were touched / would be touched.
-app.post('/api/admin/payment-emails/sync', verifyToken, verifyAdmin, async (req, res) => {
-  try {
-    const mode = req.body?.mode === 'backfill_with_login_email' ? 'backfill_with_login_email' : 'audit';
-    const onlyActive = req.body?.onlyActive !== false; // default true
-    const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    const filter = {
-      $or: [
-        { paymentEmail: { $exists: false } },
-        { paymentEmail: '' },
-        { paymentEmail: null }
-      ]
-    };
-    if (onlyActive) filter.status = 'active';
-
-    const candidates = await ClientModel.find(filter)
-      .select('email name clientNumber planType status')
-      .lean();
-
-    const eligible = candidates.filter((c) => emailRx.test(c.email || ''));
-    const invalid = candidates.length - eligible.length;
-
-    let updated = 0;
-    const updatedRows = [];
-    const skippedRows = [];
-
-    if (mode === 'backfill_with_login_email') {
-      const movedBy = { email: req.user?.email || 'unknown', name: req.user?.name || '' };
-      for (const c of eligible) {
-        const newPaymentEmail = String(c.email).toLowerCase().trim();
-        try {
-          await ClientModel.updateOne(
-            { email: c.email },
-            { $set: { paymentEmail: newPaymentEmail } }
-          );
-          updated++;
-          updatedRows.push({
-            email: c.email,
-            name: c.name || '',
-            clientNumber: c.clientNumber ?? null,
-            planType: c.planType || '',
-            paymentEmail: newPaymentEmail
-          });
-          try {
-            await addClientActionToJobMoveHistory(c.email, 'payment_email_set', movedBy, {
-              source: 'admin_sync_backfill',
-              paymentEmail: newPaymentEmail
-            });
-          } catch {}
-        } catch (e) {
-          skippedRows.push({ email: c.email, error: e?.message || String(e) });
-        }
-      }
-    } else {
-      // audit
-      for (const c of eligible) {
-        updatedRows.push({
-          email: c.email,
-          name: c.name || '',
-          clientNumber: c.clientNumber ?? null,
-          planType: c.planType || '',
-          wouldSet: String(c.email).toLowerCase().trim()
-        });
-      }
-    }
-
-    return res.json({
-      mode,
-      onlyActive,
-      scannedMissing: candidates.length,
-      eligible: eligible.length,
-      invalidEmails: invalid,
-      updated,
-      affected: updatedRows,
-      skipped: skippedRows
-    });
-  } catch (e) {
-    console.error('[payment-emails/sync] error:', e?.message);
-    res.status(500).json({ error: 'sync failed' });
-  }
-});
-
 app.post('/api/clients/payment-emails/bulk', verifyToken, async (req, res) => {
   try {
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
@@ -4712,11 +4636,15 @@ app.get('/api/clients/:email/email-logs', verifyToken, async (req, res) => {
     const [logs, total, client] = await Promise.all([
       ClientEmailLogModel.find({ clientEmail: emailLower }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       ClientEmailLogModel.countDocuments({ clientEmail: emailLower }),
-      ClientModel.findOne({ email: emailLower }).select('paymentEmail planType milestonesNotified').lean()
+      ClientModel.findOne({ email: emailLower }).select('paymentEmail planType milestonesNotified addons').lean()
     ]);
     const planType = client?.planType || '';
-    const planCap = getPlanCap(planType);
-    const milestones = getPlanMilestones(planType).map((m) => ({
+    // Effective cap = base + addons + referral bonus, matching the cron so
+    // the ticket timeline shows the SAME thresholds milestone emails fire at.
+    const referralUser = await NewUserModel.findOne({ email: emailLower }, 'referrals').lean();
+    const referralAdded = referralApplicationsFor(referralUser?.referrals);
+    const planCap = getEffectiveCap(client || {}, referralAdded);
+    const milestones = computeClientMilestones(client || {}, referralAdded).map((m) => ({
       key: m.key,
       type: m.type,
       threshold: m.threshold,
@@ -4730,6 +4658,9 @@ app.get('/api/clients/:email/email-logs', verifyToken, async (req, res) => {
       paymentEmail: client?.paymentEmail || '',
       planType,
       planCap,
+      baseCap: getPlanCap(planType),
+      addonApplications: planCap - getPlanCap(planType) - referralAdded,
+      referralApplications: referralAdded,
       milestoneSchedule: milestones
     });
   } catch (e) {

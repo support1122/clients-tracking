@@ -321,7 +321,7 @@ const RegisterClient = () => {
       }
     } else {
       toastUtils.dismissToast(loadingToast);
-      toastUtils.error(data?.message || "Registration failed. Please try again.");
+      toastUtils.error(data?.error || data?.message || "Registration failed. Please try again.");
     }
   } catch (error) {
     console.error("Registration failed:", error);

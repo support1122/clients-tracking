@@ -89,6 +89,9 @@ const JobDetailModal = React.memo(({
   const [milestoneSchedule, setMilestoneSchedule] = useState([]);
   const [milestonePlanCap, setMilestonePlanCap] = useState(0);
   const [milestonePlanType, setMilestonePlanType] = useState('');
+  const [milestoneBaseCap, setMilestoneBaseCap] = useState(0);
+  const [milestoneAddonApps, setMilestoneAddonApps] = useState(0);
+  const [milestoneReferralApps, setMilestoneReferralApps] = useState(0);
   const [sendingPendingMilestone, setSendingPendingMilestone] = useState(false);
   const [savingClientName, setSavingClientName] = useState(false);
   const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
@@ -196,6 +199,9 @@ const JobDetailModal = React.memo(({
       setMilestoneSchedule(Array.isArray(data?.milestoneSchedule) ? data.milestoneSchedule : []);
       setMilestonePlanCap(Number(data?.planCap) || 0);
       setMilestonePlanType(String(data?.planType || ''));
+      setMilestoneBaseCap(Number(data?.baseCap) || 0);
+      setMilestoneAddonApps(Number(data?.addonApplications) || 0);
+      setMilestoneReferralApps(Number(data?.referralApplications) || 0);
     } catch {
       setEmailLogsError('Failed to load email logs');
       setEmailLogs([]);
@@ -1048,9 +1054,34 @@ const JobDetailModal = React.memo(({
               {milestoneSchedule.length > 0 && (
                 <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
                   <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center gap-2 flex-wrap">
                       <History className="w-3 h-3" /> Milestone Timeline
-                      {milestonePlanType && <span className="ml-2 text-[10px] text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full uppercase tracking-wider">{milestonePlanType}{milestonePlanCap ? ` · ${milestonePlanCap}` : ''}</span>}
+                      {milestonePlanType && (
+                        <span
+                          className="ml-1 text-[10px] text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full uppercase tracking-wider"
+                          title={(milestoneAddonApps > 0 || milestoneReferralApps > 0)
+                            ? `Base ${milestoneBaseCap}${milestoneAddonApps > 0 ? ` + addon ${milestoneAddonApps}` : ''}${milestoneReferralApps > 0 ? ` + referral ${milestoneReferralApps}` : ''} = ${milestonePlanCap}`
+                            : `Plan cap ${milestonePlanCap}`}
+                        >
+                          {milestonePlanType}{milestonePlanCap ? ` · ${milestonePlanCap}` : ''}
+                        </span>
+                      )}
+                      {milestoneAddonApps > 0 && (
+                        <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full normal-case">+{milestoneAddonApps} addon</span>
+                      )}
+                      {milestoneReferralApps > 0 && (
+                        <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full normal-case">+{milestoneReferralApps} referral</span>
+                      )}
+                      {/* Payment Email shown inline so operators see the milestone recipient at a glance */}
+                      {paymentEmailValue ? (
+                        <span className="text-[10px] text-gray-600 bg-white border border-gray-200 px-1.5 py-0.5 rounded-full normal-case lowercase" title="Milestone emails are sent to this Payment Email">
+                          ✉ {paymentEmailValue}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-rose-600 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-full normal-case" title="No Payment Email set — milestone emails will be skipped">
+                          ✉ no payment email
+                        </span>
+                      )}
                     </h3>
                     {isAdmin && milestoneSchedule.some((m) => !m.sent) && (() => {
                       const noPaymentEmail = !paymentEmailValue || !paymentEmailValue.trim();
