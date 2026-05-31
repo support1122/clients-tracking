@@ -530,7 +530,7 @@ export default function ClientOnboarding() {
     const id = setInterval(() => {
       fetchNotifications();
       fetchNonResolvedIssues();
-    }, 30000);
+    }, 2 * 60 * 1000);
     return () => clearInterval(id);
   }, [fetchNotifications, fetchNonResolvedIssues]);
 
