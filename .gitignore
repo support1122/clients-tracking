@@ -86,3 +86,6 @@ jspm_packages/
 # DynamoDB Local files
 .dynamodb/
 /.omc
+
+.agents
+.claude

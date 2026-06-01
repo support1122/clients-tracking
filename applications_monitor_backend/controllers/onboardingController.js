@@ -351,11 +351,16 @@ export async function listOnboardingJobs(req, res) {
         : Promise.resolve([]),
       clientEmails.length
         ? JobModel.aggregate([
-            { $addFields: { _userIdLower: { $toLower: '$userID' } } },
-            { $match: { _userIdLower: { $in: clientEmails } } },
-            { $sort: { _id: 1 } },
-            { $group: { _id: '$_userIdLower', firstObjId: { $first: '$_id' } } }
-          ])
+            // Match userID directly against the (already-lowercased) clientEmails so
+            // the { userID: 1 } index is used. The previous { $toLower: '$userID' }
+            // in $addFields was computed per document and forced a full-collection
+            // scan of every job. JobModel.userID is the client email, stored
+            // lowercase in practice (same assumption as client-job-analysis).
+            { $match: { userID: { $in: clientEmails } } },
+            // $min on _id = earliest ObjectId per client (ObjectIds sort
+            // chronologically). Avoids a 32MB-blowing $sort before $group.
+            { $group: { _id: '$userID', firstObjId: { $min: '$_id' } } }
+          ], { allowDiskUse: true })
         : Promise.resolve([])
     ]);
 
@@ -376,7 +381,9 @@ export async function listOnboardingJobs(req, res) {
     const firstJobDateMap = new Map();
     for (const row of firstJobAgg) {
       if (row._id && row.firstObjId) {
-        firstJobDateMap.set(row._id, row.firstObjId.getTimestamp());
+        // Lowercase the key defensively so lookups by lowercased clientEmail match
+        // even if a stored userID happens to differ in case.
+        firstJobDateMap.set(String(row._id).toLowerCase(), row.firstObjId.getTimestamp());
       }
     }
 

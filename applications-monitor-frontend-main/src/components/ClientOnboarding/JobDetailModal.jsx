@@ -24,6 +24,7 @@ import { API_BASE, AUTH_HEADERS, LOG } from './constants';
 import { getStatusColor, getAllowedStatusesForPlan, clientDisplayName, convertToDMY } from './helpers';
 import { toastUtils } from '../../utils/toastUtils';
 import { handleAuthFailure } from '../../utils/authUtils';
+import { apiFetch, isAbortError, getCached } from '../../utils/apiClient';
 import { ClientProfileSection } from '../JobDetail/ClientProfileSection';
 import CommentsSection from './CommentsSection';
 import {
@@ -160,38 +161,37 @@ const JobDetailModal = React.memo(({
   }, [selectedJob?.gmailCredentials]);
 
   // Fetch operations for client
-  const fetchOperationsForClient = useCallback(async (clientEmail) => {
+  const fetchOperationsForClient = useCallback(async (clientEmail, signal) => {
     if (!clientEmail || !canViewOperations) return;
     setLoadingOperationsForClient(true);
     try {
-      const res = await fetch(`${API_BASE}/api/operations/by-client/${encodeURIComponent(clientEmail)}`, { headers: AUTH_HEADERS() });
-      if (res.ok) {
-        const data = await res.json();
-        setOperationsForClient(data.operations || []);
-        setClientIdForOperations(data.clientId || null);
-      } else { setOperationsForClient([]); setClientIdForOperations(null); }
-    } catch { setOperationsForClient([]); setClientIdForOperations(null); }
-    finally { setLoadingOperationsForClient(false); }
+      const data = await apiFetch(`/api/operations/by-client/${encodeURIComponent(clientEmail)}`, { signal });
+      setOperationsForClient(data.operations || []);
+      setClientIdForOperations(data.clientId || null);
+    } catch (err) {
+      if (isAbortError(err)) return; // superseded by a newer client — ignore
+      setOperationsForClient([]); setClientIdForOperations(null);
+    } finally {
+      if (!signal?.aborted) setLoadingOperationsForClient(false);
+    }
   }, [canViewOperations]);
 
   useEffect(() => {
-    if (selectedJob?.clientEmail && canViewOperations) fetchOperationsForClient(selectedJob.clientEmail);
-    else { setOperationsForClient([]); setClientIdForOperations(null); }
+    if (!(selectedJob?.clientEmail && canViewOperations)) {
+      setOperationsForClient([]); setClientIdForOperations(null);
+      return;
+    }
+    const ac = new AbortController();
+    fetchOperationsForClient(selectedJob.clientEmail, ac.signal);
+    return () => ac.abort(); // cancel stale request when client changes / modal closes
   }, [selectedJob?.clientEmail, canViewOperations, fetchOperationsForClient]);
 
-  const fetchEmailLogs = useCallback(async (clientEmail) => {
+  const fetchEmailLogs = useCallback(async (clientEmail, signal) => {
     if (!clientEmail) { setEmailLogs([]); return; }
     setEmailLogsLoading(true);
     setEmailLogsError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}/email-logs?limit=100`, { headers: AUTH_HEADERS() });
-      if (!res.ok) {
-        if (res.status === 401) handleAuthFailure();
-        setEmailLogsError('Failed to load email logs');
-        setEmailLogs([]);
-        return;
-      }
-      const data = await res.json();
+      const data = await apiFetch(`/api/clients/${encodeURIComponent(clientEmail)}/email-logs?limit=100`, { signal });
       setEmailLogs(Array.isArray(data?.logs) ? data.logs : []);
       const pe = (data?.paymentEmail || '').trim();
       setPaymentEmailValue(pe);
@@ -202,11 +202,13 @@ const JobDetailModal = React.memo(({
       setMilestoneBaseCap(Number(data?.baseCap) || 0);
       setMilestoneAddonApps(Number(data?.addonApplications) || 0);
       setMilestoneReferralApps(Number(data?.referralApplications) || 0);
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) return; // superseded by a newer client — ignore
+      if (err.status === 401) handleAuthFailure();
       setEmailLogsError('Failed to load email logs');
       setEmailLogs([]);
     } finally {
-      setEmailLogsLoading(false);
+      if (!signal?.aborted) setEmailLogsLoading(false);
     }
   }, []);
 
@@ -288,66 +290,62 @@ const JobDetailModal = React.memo(({
   }, [selectedJob?.clientEmail, paymentEmailValue, fetchEmailLogs]);
 
   useEffect(() => {
-    if (selectedJob?.clientEmail) fetchEmailLogs(selectedJob.clientEmail);
-    else { setEmailLogs([]); setPaymentEmailValue(''); setPaymentEmailDraft(''); setMilestoneSchedule([]); setMilestonePlanCap(0); setMilestonePlanType(''); }
+    if (!selectedJob?.clientEmail) {
+      setEmailLogs([]); setPaymentEmailValue(''); setPaymentEmailDraft(''); setMilestoneSchedule([]); setMilestonePlanCap(0); setMilestonePlanType('');
+      return;
+    }
+    const ac = new AbortController();
+    fetchEmailLogs(selectedJob.clientEmail, ac.signal);
+    return () => ac.abort();
   }, [selectedJob?.clientEmail, fetchEmailLogs]);
 
   // Fetch operator managed users
-  const fetchOperatorManagedUsers = useCallback(async (operatorEmail) => {
+  const fetchOperatorManagedUsers = useCallback(async (operatorEmail, signal) => {
     if (!operatorEmail?.trim()) { setOperatorManagedUsers([]); return; }
     setLoadingOperatorManagedUsers(true);
     try {
-      const res = await fetch(`${API_BASE}/api/operations/${encodeURIComponent(operatorEmail.trim())}/managed-users`, { headers: AUTH_HEADERS() });
-      if (res.ok) { const data = await res.json(); setOperatorManagedUsers(data.managedUsers || []); }
-      else setOperatorManagedUsers([]);
-    } catch { setOperatorManagedUsers([]); }
-    finally { setLoadingOperatorManagedUsers(false); }
+      const data = await apiFetch(`/api/operations/${encodeURIComponent(operatorEmail.trim())}/managed-users`, { signal });
+      setOperatorManagedUsers(data.managedUsers || []);
+    } catch (err) {
+      if (isAbortError(err)) return;
+      setOperatorManagedUsers([]);
+    } finally {
+      if (!signal?.aborted) setLoadingOperatorManagedUsers(false);
+    }
   }, []);
 
   useEffect(() => {
-    if (selectedJob?.operatorEmail) fetchOperatorManagedUsers(selectedJob.operatorEmail);
-    else setOperatorManagedUsers([]);
+    if (!selectedJob?.operatorEmail) { setOperatorManagedUsers([]); return; }
+    const ac = new AbortController();
+    fetchOperatorManagedUsers(selectedJob.operatorEmail, ac.signal);
+    return () => ac.abort();
   }, [selectedJob?.operatorEmail, fetchOperatorManagedUsers]);
 
-  // Job analysis for card
+  // Job analysis for card. Routed through the shared analysis cache so opening a
+  // card reuses the result the board/analysis page already fetched (no duplicate
+  // heavy aggregation). `ignore` guards against a stale response landing after
+  // the user switched to a different client.
   useEffect(() => {
-    if (!selectedJob?.clientEmail) { setCardJobAnalysis(null); return; }
-    if (!cardAnalysisDate) {
-      // Fetch all-time data
-      fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
-        method: 'POST',
-        headers: AUTH_HEADERS(),
-        body: JSON.stringify({})
-      }).then(r => r.ok ? r.json() : null).then(data => {
-        if (!data) return;
-        const clientRow = (data.rows || []).find(r => (r.email || '').toLowerCase() === (selectedJob.clientEmail || '').toLowerCase());
-        if (clientRow) {
-          setCardJobAnalysis({
-            saved: clientRow.saved || 0, applied: clientRow.applied || 0,
-            interviewing: clientRow.interviewing || 0, offer: clientRow.offer || 0,
-            rejected: clientRow.rejected || 0, removed: clientRow.removed || 0,
-            lastAppliedOperatorName: clientRow.lastAppliedOperatorName || ''
-          });
-        } else setCardJobAnalysis(null);
-      }).catch(() => setCardJobAnalysis(null));
-    } else {
-      fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
-        method: 'POST',
-        headers: AUTH_HEADERS(),
-        body: JSON.stringify({ date: convertToDMY(cardAnalysisDate) })
-      }).then(r => r.ok ? r.json() : null).then(data => {
-        if (!data) return;
-        const clientRow = (data.rows || []).find(r => (r.email || '').toLowerCase() === (selectedJob.clientEmail || '').toLowerCase());
-        if (clientRow) {
-          setCardJobAnalysis({
-            saved: clientRow.saved || 0, applied: clientRow.applied || 0,
-            interviewing: clientRow.interviewing || 0, offer: clientRow.offer || 0,
-            rejected: clientRow.rejected || 0, removed: clientRow.removed || 0,
-            lastAppliedOperatorName: clientRow.lastAppliedOperatorName || ''
-          });
-        } else setCardJobAnalysis(null);
-      }).catch(() => setCardJobAnalysis(null));
-    }
+    const email = (selectedJob?.clientEmail || '').toLowerCase();
+    if (!email) { setCardJobAnalysis(null); return; }
+    let ignore = false;
+    const dateKey = cardAnalysisDate ? convertToDMY(cardAnalysisDate) : '';
+    const body = dateKey ? { date: dateKey } : {};
+    getCached(
+      `analysis:${dateKey || '__all__'}`,
+      () => apiFetch('/api/analytics/client-job-analysis', { method: 'POST', body }),
+      { ttl: 30_000 }
+    ).then((data) => {
+      if (ignore || !data) return;
+      const clientRow = (data.rows || []).find(r => (r.email || '').toLowerCase() === email);
+      setCardJobAnalysis(clientRow ? {
+        saved: clientRow.saved || 0, applied: clientRow.applied || 0,
+        interviewing: clientRow.interviewing || 0, offer: clientRow.offer || 0,
+        rejected: clientRow.rejected || 0, removed: clientRow.removed || 0,
+        lastAppliedOperatorName: clientRow.lastAppliedOperatorName || ''
+      } : null);
+    }).catch(() => { if (!ignore) setCardJobAnalysis(null); });
+    return () => { ignore = true; };
   }, [selectedJob?.clientEmail, cardAnalysisDate]);
 
   const findAppliedOnDate = useCallback(async () => {

@@ -71,6 +71,11 @@ import {
   ANALYSIS_CACHE_TTL,
   LAST_APPLIED_CACHE_TTL
 } from './utils/analysisCache.js';
+import {
+  pGetAnalysisCache,
+  pSetAnalysisCache,
+  pClearAnalysisCache
+} from './utils/persistentAnalysisCache.js';
 import { ensureDbIndexes } from './utils/ensureDbIndexes.js';
 import { ExtensionIncentiveComplaintModel } from './ExtensionIncentiveComplaintModel.js';
 import { ExtensionDailyIncentiveModel } from './ExtensionDailyIncentiveModel.js';
@@ -992,6 +997,7 @@ export const createOrUpdateClient = async (req, res) => {
       const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
       if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined) {
         clearAnalysisCache();
+      pClearAnalysisCache().catch(() => {});
       }
       return res.status(200).json({
         message: "🔄 Client fields updated successfully",
@@ -1060,6 +1066,7 @@ export const createOrUpdateClient = async (req, res) => {
     const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
     if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined) {
       clearAnalysisCache();
+      pClearAnalysisCache().catch(() => {});
     }
 
     return res
@@ -1162,6 +1169,7 @@ const updateClientDashboardTeamLead = async (req, res) => {
     // Invalidate onboarding list/detail caches so GET /api/onboarding/jobs/:id is not stale
     invalidateJobListCache();
     clearAnalysisCache();
+      pClearAnalysisCache().catch(() => {});
 
     res.status(200).json({ success: true, client });
   } catch (error) {
@@ -3362,32 +3370,40 @@ function freshPausedDaysFromRow(row) {
 }
 
 // Client Job Analysis (Recent Activity) - per active client status counts and applied-on-date
+// Dedupe concurrent cold computes of the same analysis key within this instance
+// (avoids a thundering herd of full-collection scans when the cache is empty).
+const _analysisInFlight = new Map();
+
 app.post('/api/analytics/client-job-analysis', async (req, res) => {
   try {
     const { date } = req.body || {};
-
-    // Check cache
     const cacheKey = date || '__all__';
-    const cached = getAnalysisCache(cacheKey);
-    if (cached) {
-      const cachedOut = Array.isArray(cached.rows)
-        ? {
-            ...cached,
-            rows: cached.rows.map((row) => ({
-              ...row,
-              lastAppliedOperatorName: formatLastAppliedOperatorDisplayName(row.lastAppliedOperatorName || ''),
-              pausedDays: freshPausedDaysFromRow(row)
-            }))
-          }
-        : cached;
-      if (Array.isArray(cachedOut.rows)) {
-        runHighAppliedJobsNotifications(cachedOut.rows).catch((err) =>
-          console.error('[client-job-analysis] runHighAppliedJobsNotifications (cached):', err?.message || err)
+
+    // Re-apply time-sensitive formatting to cached rows before serving: operator
+    // display name + "paused days" (grows with wall-clock time, so must be recomputed).
+    const freshenForResponse = (result) => {
+      if (!result || !Array.isArray(result.rows)) return result;
+      return {
+        ...result,
+        rows: result.rows.map((row) => ({
+          ...row,
+          lastAppliedOperatorName: formatLastAppliedOperatorDisplayName(row.lastAppliedOperatorName || ''),
+          pausedDays: freshPausedDaysFromRow(row)
+        }))
+      };
+    };
+    const serve = (result, freshen) => {
+      const out = freshen ? freshenForResponse(result) : result;
+      if (out && Array.isArray(out.rows)) {
+        runHighAppliedJobsNotifications(out.rows).catch((err) =>
+          console.error('[client-job-analysis] runHighAppliedJobsNotifications:', err?.message || err)
         );
       }
-      return res.status(200).json(cachedOut);
-    }
+      return res.status(200).json(out);
+    };
 
+    // Heavy compute (cold path). Closes over date/cacheKey; stores to both cache layers.
+    const computeFull = async () => {
     // Build multi-format date regex if provided (for appliedDate)
     let multiFormatDateRegex = null;
     if (date && typeof date === 'string' && /^(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2})$/.test(date)) {
@@ -3404,30 +3420,36 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       multiFormatDateRegex = new RegExp(`^${dayPattern}/${monthPattern}/${y}(?=$|\\D)`);
     }
 
-    // Helper to map statuses fuzzily
-    const statusCase = {
-      $switch: {
-        branches: [
-          { case: { $regexMatch: { input: { $toLower: { $ifNull: ["$currentStatus", ""] } }, regex: /offer/ } }, then: "offer" },
-          { case: { $regexMatch: { input: { $toLower: { $ifNull: ["$currentStatus", ""] } }, regex: /appl/ } }, then: "applied" },
-          { case: { $regexMatch: { input: { $toLower: { $ifNull: ["$currentStatus", ""] } }, regex: /interview/ } }, then: "interviewing" },
-          { case: { $regexMatch: { input: { $toLower: { $ifNull: ["$currentStatus", ""] } }, regex: /reject/ } }, then: "rejected" },
-          { case: { $regexMatch: { input: { $toLower: { $ifNull: ["$currentStatus", ""] } }, regex: /delete|removed/ } }, then: "deleted" },
-          { case: { $regexMatch: { input: { $toLower: { $ifNull: ["$currentStatus", ""] } }, regex: /save/ } }, then: "saved" }
-        ],
-        default: "saved"
-      }
+    // Classify a raw currentStatus string into a bucket. Runs in JS on the small
+    // GROUPED result (a few thousand {userID,status} rows) instead of inside the
+    // aggregation per-document (millions of regex evals) — the previous $switch
+    // of $regexMatch was the single biggest cost of this endpoint.
+    const classifyStatus = (status) => {
+      const s = (status || '').toLowerCase();
+      if (s.includes('offer')) return 'offer';
+      if (s.includes('appl')) return 'applied';
+      if (s.includes('interview')) return 'interviewing';
+      if (s.includes('reject')) return 'rejected';
+      if (s.includes('delete') || s.includes('removed')) return 'deleted';
+      if (s.includes('save')) return 'saved';
+      return 'saved';
     };
 
     // ── Phase 1: Run ALL aggregations + client query in parallel ──
-    const cachedLastApplied = getAnalysisCache('__lastAppliedOperator__');
+    // The last-applied aggregation does a $sort over every applied job (the
+    // heaviest stage), so it gets its own 5-min cache, backed cross-instance.
+    let cachedLastApplied = getAnalysisCache('__lastAppliedOperator__');
+    if (!cachedLastApplied) {
+      const pLA = await pGetAnalysisCache('__lastAppliedOperator__');
+      if (pLA && pLA.fresh) cachedLastApplied = pLA.val;
+    }
     const [overall, appliedOnDate, removedOnDate, lastAppliedAgg, clientInfo] = await Promise.all([
-      // 1) Overall status counts per client
+      // 1) Overall counts per client, grouped on the RAW status. No regex/$switch
+      //    in the pipeline — Mongo can satisfy this from the { userID:1, currentStatus:1 }
+      //    index (covered scan, no document fetch). Buckets are folded in JS below.
       JobModel.aggregate([
-        { $group: { _id: { userID: "$userID", status: statusCase }, count: { $sum: 1 } } },
-        { $group: { _id: "$_id.userID", statuses: { $push: { k: "$_id.status", v: "$count" } } } },
-        { $project: { _id: 0, userID: "$_id", counts: { $arrayToObject: "$statuses" } } }
-      ]),
+        { $group: { _id: { userID: "$userID", status: "$currentStatus" }, count: { $sum: 1 } } }
+      ], { allowDiskUse: true }),
       // 2) Applied-on-date per client (only if date provided)
       multiFormatDateRegex
         ? JobModel.aggregate([
@@ -3467,7 +3489,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
           { $sort: { _id: -1 } },
           { $group: { _id: '$userID', timeline: { $first: '$timeline' } } },
           { $project: { _id: 0, userID: '$_id', timeline: 1 } }
-        ]),
+        ], { allowDiskUse: true }),
       // 5) Client info — runs in parallel with aggregations (no dependency)
       ClientModel.find({})
         .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt clientCountry')
@@ -3477,11 +3499,21 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     // Cache last-applied operator separately with longer TTL (5 min)
     if (!cachedLastApplied) {
       setAnalysisCache('__lastAppliedOperator__', lastAppliedAgg, LAST_APPLIED_CACHE_TTL);
+      pSetAnalysisCache('__lastAppliedOperator__', lastAppliedAgg, LAST_APPLIED_CACHE_TTL).catch(() => {});
     }
 
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
-    const overallMap = new Map(overall.map(r => [r.userID, r.counts]));
+    // Fold raw {userID,status} groups into per-user bucket counts (JS, cheap).
+    const overallMap = new Map();
+    for (const g of overall) {
+      const userID = g._id?.userID;
+      if (userID == null) continue;
+      const bucket = classifyStatus(g._id?.status);
+      let counts = overallMap.get(userID);
+      if (!counts) { counts = {}; overallMap.set(userID, counts); }
+      counts[bucket] = (counts[bucket] || 0) + g.count;
+    }
     const lastAppliedOperatorMap = new Map(
       lastAppliedAgg.map((r) => [
         (r.userID || '').toLowerCase(),
@@ -3598,11 +3630,39 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     });
 
     const result = { success: true, date: date || null, rows, summary };
-    runHighAppliedJobsNotifications(rows).catch((err) =>
-      console.error('[client-job-analysis] runHighAppliedJobsNotifications:', err?.message || err)
-    );
     setAnalysisCache(cacheKey, result);
-    res.status(200).json(result);
+    pSetAnalysisCache(cacheKey, result, ANALYSIS_CACHE_TTL).catch(() => {});
+    return result;
+    }; // end computeFull
+
+    const computeWithLock = () => {
+      if (_analysisInFlight.has(cacheKey)) return _analysisInFlight.get(cacheKey);
+      const p = computeFull().finally(() => _analysisInFlight.delete(cacheKey));
+      _analysisInFlight.set(cacheKey, p);
+      return p;
+    };
+
+    // L1: in-memory cache (dev / single-instance prod).
+    const memHit = getAnalysisCache(cacheKey);
+    if (memHit) return serve(memHit, true);
+
+    // L2: cross-instance persistent cache, with stale-while-revalidate so prod
+    // instances serve a recent result instantly instead of re-scanning the
+    // whole jobs collection on every request.
+    const entry = await pGetAnalysisCache(cacheKey);
+    if (entry) {
+      setAnalysisCache(cacheKey, entry.val); // warm L1 (no-op when memory cache disabled)
+      if (!entry.fresh && !_analysisInFlight.has(cacheKey)) {
+        computeWithLock().catch((err) =>
+          console.error('[client-job-analysis] background refresh:', err?.message || err)
+        );
+      }
+      return serve(entry.val, true);
+    }
+
+    // Cold miss: compute now (deduped across concurrent requests on this instance).
+    const result = await computeWithLock();
+    return serve(result, false);
   } catch (e) {
     console.error('client-job-analysis error', e);
     res.status(500).json({ success: false, error: e.message });
@@ -4276,6 +4336,7 @@ const updateClientCountry = async (req, res) => {
     if (!client) return res.status(404).json({ error: 'Client not found' });
 
     clearAnalysisCache();
+      pClearAnalysisCache().catch(() => {});
     res.status(200).json({
       success: true,
       clientCountry: client.clientCountry ?? null,
