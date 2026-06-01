@@ -8,6 +8,7 @@ import {
   selectValueMatchingOption
 } from '../utils/dashboardManagerSelect.js';
 import { fetchDashboardManagerFullNames } from '../utils/fetchDashboardManagerCatalog.js';
+import { apiFetch, getCached, invalidateCache } from '../utils/apiClient';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
 // Scraper backend (local internal tool at DASH/scraper). Configurable via
@@ -38,6 +39,44 @@ function formatClientLabel(row) {
   const parts = num ? [num, nameSlug, plan] : [nameSlug, plan];
   return parts.join('-') || nameRaw || row.email || '-';
 }
+
+// Per-row derived values (cap math, status normalization). Depends ONLY on the
+// row data, so we compute it once per data change in the processedRows memo
+// instead of re-running it for every row on every render (typing in the scrape
+// box, toggling sort, etc. used to recompute this for all 500+ rows).
+const WARN_OFFSET = 50;
+function computeRowDerived(r) {
+  const totalApplications =
+    Number(r.saved || 0) + Number(r.applied || 0) + Number(r.interviewing || 0) +
+    Number(r.offer || 0) + Number(r.rejected || 0);
+  const plan = String(r.planType || '').trim().toLowerCase();
+  const isPrime = plan.includes('prime');
+  const planLimit = isPrime ? 160
+    : plan.includes('ignite') ? 250
+    : plan.includes('professional') ? 500
+    : plan.includes('executive') ? 1200
+    : Infinity;
+  const addonLimit = Number(r.addonLimit || 0);
+  const referralBonus = Number(r.referralApplicationsAdded || 0);
+  const totalLimit = planLimit + addonLimit + referralBonus;
+  const exceeded = totalLimit !== Infinity && totalApplications >= totalLimit;
+  const warnThreshold = (totalLimit === Infinity || isPrime) ? null : Math.max(1, totalLimit - WARN_OFFSET);
+  const nearCap = !exceeded && warnThreshold != null && totalApplications >= warnThreshold;
+  const s = r.status;
+  const normalizedClientStatus = (s === undefined || s === null || String(s).trim() === '')
+    ? 'active'
+    : (String(s).toLowerCase().trim() === 'inactive' ? 'inactive' : 'active');
+  const isClientRowActive = normalizedClientStatus === 'active';
+  const isActiveWithNoSaved = isClientRowActive && Number(r.saved || 0) === 0;
+  return {
+    totalApplications, addonLimit, referralBonus, totalLimit, exceeded,
+    warnThreshold, nearCap, normalizedClientStatus, isClientRowActive, isActiveWithNoSaved,
+  };
+}
+
+// How many table rows to mount per chunk. Rows render incrementally as the
+// sentinel scrolls into view — keeps initial paint fast and DOM/RAM bounded.
+const ROW_CHUNK = 80;
 
 export default function ClientJobAnalysis() {
   const [date, setDate] = useState('');
@@ -82,18 +121,18 @@ export default function ClientJobAnalysis() {
     return `${d}/${m}/${y}`;
   }, []);
 
-  const fetchAnalysis = useCallback(async (selected) => {
+  const fetchAnalysis = useCallback(async (selected, force = false) => {
     setLoading(true);
     try {
-      const body = selected ? { date: convertToDMY(selected) } : {};
-      const resp = await fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        cache: 'no-store'
-      });
-      if (!resp.ok) throw new Error('Failed');
-      const data = await resp.json();
+      const dateKey = selected ? convertToDMY(selected) : '';
+      const body = dateKey ? { date: dateKey } : {};
+      // Shared cache key with the board + modal; `force` for explicit refresh
+      // and post-mutation reloads.
+      const data = await getCached(
+        `analysis:${dateKey || '__all__'}`,
+        () => apiFetch('/api/analytics/client-job-analysis', { method: 'POST', body }),
+        { ttl: 30_000, force }
+      );
       const newRows = data.rows || [];
 
       if (!selected) {
@@ -133,7 +172,8 @@ export default function ClientJobAnalysis() {
       toast.success('Client number updated');
       setEditingClientNumberEmail(null);
       setEditingClientNumberValue('');
-      fetchAnalysis(date);
+      invalidateCache('analysis:');
+      fetchAnalysis(date, true);
     } catch (e) {
       toast.error(e.message || 'Failed');
     } finally {
@@ -208,7 +248,7 @@ export default function ClientJobAnalysis() {
     [dashboardManagerNames, rows]
   );
 
-  const onRefresh = () => fetchAnalysis(date);
+  const onRefresh = () => { invalidateCache('analysis:'); fetchAnalysis(date, true); };
 
   const findAppliedOnDate = useCallback(async () => {
     if (!date) {
@@ -252,6 +292,7 @@ export default function ClientJobAnalysis() {
         setRows(prev => prev.map(r =>
           r.email === email ? { ...r, dashboardTeamLeadName } : r
         ));
+        invalidateCache('analysis:');
         toast.success('Dashboard Manager updated successfully');
       }
     } catch (e) {
@@ -284,7 +325,8 @@ export default function ClientJobAnalysis() {
         setRows(prev => prev.map(r =>
           r.email === email ? { ...r, status } : r
         ));
-        fetchAnalysis();
+        invalidateCache('analysis:');
+        fetchAnalysis(undefined, true);
         toast.success('Client status updated successfully');
       }
     } catch (e) {
@@ -320,7 +362,8 @@ export default function ClientJobAnalysis() {
         setRows(prev => prev.map(r =>
           r.email === email ? { ...r, isPaused, onboardingPhase } : r
         ));
-        fetchAnalysis();
+        invalidateCache('analysis:');
+        fetchAnalysis(undefined, true);
         const msg = value === 'new' ? 'Client set to New (onboarding phase)' : value === 'paused' ? 'Client paused' : 'Client unpaused';
         toast.success(msg);
       }
@@ -360,6 +403,7 @@ export default function ClientJobAnalysis() {
       setRows((prev) =>
         prev.map((r) => (r.email === email ? { ...r, clientCountry: next } : r)),
       );
+      invalidateCache('analysis:');
       toast.success('Country updated');
     } catch (e) {
       toast.error(e.message || 'Failed to update country');
@@ -575,7 +619,7 @@ export default function ClientJobAnalysis() {
       const filterLower = lastAppliedByFilter.toLowerCase();
       filtered = rows.filter(r => (r.lastAppliedOperatorName || '').toLowerCase() === filterLower);
     }
-    return [...filtered].sort((a, b) => {
+    const sorted = [...filtered].sort((a, b) => {
       if (date) {
         const av = Number(a?.appliedOnDate || 0);
         const bv = Number(b?.appliedOnDate || 0);
@@ -590,7 +634,32 @@ export default function ClientJobAnalysis() {
       const numB = getSortingNumber(b);
       return numA - numB;
     });
+    // Attach derived cap/status math once per data change so per-render row
+    // output stays cheap.
+    return sorted.map((r) => ({ ...r, _d: computeRowDerived(r) }));
   }, [rows, date, sortDir, lastAppliedByFilter, getSortingNumber]);
+
+  // ── Chunked rendering: mount ROW_CHUNK rows at a time, growing as a sentinel
+  // scrolls into view. Bounds initial paint cost + DOM size for big tables. ──
+  const [visibleCount, setVisibleCount] = useState(ROW_CHUNK);
+  const loadMoreRef = useRef(null);
+  // Reset the window whenever the underlying row set changes (refresh, filter, sort).
+  useEffect(() => { setVisibleCount(ROW_CHUNK); }, [processedRows]);
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    if (!node) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries[0]?.isIntersecting) {
+        setVisibleCount((c) => Math.min(c + ROW_CHUNK, processedRows.length));
+      }
+    }, { rootMargin: '600px' });
+    io.observe(node);
+    return () => io.disconnect();
+  }, [processedRows.length, visibleCount]);
+  const visibleRows = useMemo(
+    () => processedRows.slice(0, visibleCount),
+    [processedRows, visibleCount]
+  );
 
   const isAdmin = userRole === 'admin';
 
@@ -758,44 +827,13 @@ export default function ClientJobAnalysis() {
                     {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
                   </td>
                 </tr>
-              ) : processedRows.map((r, idx) => {
-                // Total applications = saved + applied + interviewing + offer + rejected (removed is excluded)
-                const totalApplications = (Number(r.saved || 0) + Number(r.applied || 0) + Number(r.interviewing || 0) + Number(r.offer || 0) + Number(r.rejected || 0));
-                const plan = String(r.planType || '').trim().toLowerCase();
-                const isPrime = plan.includes('prime');
-                const isIgnite = plan.includes('ignite');
-                const isProfessional = plan.includes('professional');
-                const isExecutive = plan.includes('executive');
-
-                const planLimit = isPrime ? 160 : isIgnite ? 250 : isProfessional ? 500 : isExecutive ? 1200 : Infinity;
-                const addonLimit = Number(r.addonLimit || 0);
-                const referralBonus = Number(r.referralApplicationsAdded || 0);
-                const totalLimit = planLimit + addonLimit + referralBonus;
-                // `>=` (not strict `>`) so a client AT cap shows the Excluded
-                // state — addJob enforcement stops them at totalLimit and we
-                // want operators to see that they hit the wall.
-                const exceeded = totalLimit !== Infinity && totalApplications >= totalLimit;
-                // Per-plan "approaching cap" warning. Scales with addons +
-                // referrals — warn fires when count is within 50 of the
-                // effective cap. Prime (160) is too small to be useful —
-                // skip warn entirely there.
-                const warnOffset = 50;
-                const warnThreshold =
-                  totalLimit === Infinity || isPrime
-                    ? null
-                    : Math.max(1, totalLimit - warnOffset);
-                const nearCap = !exceeded && warnThreshold != null && totalApplications >= warnThreshold;
-
-                // Normalize status: API/legacy rows may omit status or use different casing — must match select value and colors.
-                const normalizedClientStatus = (() => {
-                  const s = r.status;
-                  if (s === undefined || s === null || String(s).trim() === '') return 'active';
-                  const low = String(s).toLowerCase().trim();
-                  return low === 'inactive' ? 'inactive' : 'active';
-                })();
-                const isClientRowActive = normalizedClientStatus === 'active';
-
-                const isActiveWithNoSaved = isClientRowActive && Number(r.saved || 0) === 0;
+              ) : visibleRows.map((r, idx) => {
+                // Cap math + status normalization precomputed in processedRows (see computeRowDerived).
+                const {
+                  totalApplications, addonLimit, referralBonus, totalLimit,
+                  exceeded, warnThreshold, nearCap,
+                  normalizedClientStatus, isClientRowActive, isActiveWithNoSaved,
+                } = r._d;
 
                 let rowColor;
                 if (exceeded) {
@@ -1037,6 +1075,14 @@ export default function ClientJobAnalysis() {
                   </tr>
                 )
               })}
+              {/* Sentinel: when scrolled near, mount the next chunk of rows. */}
+              {visibleRows.length < processedRows.length && (
+                <tr ref={loadMoreRef}>
+                  <td colSpan={isAdmin ? 17 : 16} className="px-2 py-3 text-center text-[11px] text-gray-400">
+                    Loading more… ({visibleRows.length}/{processedRows.length})
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

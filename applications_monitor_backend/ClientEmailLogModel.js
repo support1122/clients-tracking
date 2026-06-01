@@ -3,7 +3,9 @@ import mongoose from "mongoose";
 const ClientEmailLogSchema = new mongoose.Schema(
   {
     // For milestone emails this is the FlashFire client email; for OTP/tag/other it's the recipient email.
-    clientEmail: { type: String, required: true, lowercase: true, index: true },
+    // No `index: true` here — the compound `{ clientEmail: 1, createdAt: -1 }` index
+    // declared below already covers clientEmail-only lookups (it's the prefix).
+    clientEmail: { type: String, required: true, lowercase: true },
     // Original recipient (kept distinct from clientEmail for milestone where paymentEmail differs).
     toEmail: { type: String, lowercase: true, default: "" },
     // Milestone-only payment email (kept for backward compat). Optional now that this log is generic.

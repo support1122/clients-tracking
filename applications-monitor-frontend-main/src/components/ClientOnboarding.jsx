@@ -53,6 +53,7 @@ import {
   convertToDMY
 } from './ClientOnboarding/helpers';
 import { API_BASE, AUTH_HEADERS, LOG, LONG_PRESS_MS } from './ClientOnboarding/constants';
+import { apiFetch, getCached, invalidateCache, promisePool } from '../utils/apiClient';
 import { fetchDashboardManagerFullNames } from '../utils/fetchDashboardManagerCatalog.js';
 
 export default function ClientOnboarding() {
@@ -72,6 +73,18 @@ export default function ClientOnboarding() {
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [, startSearchTransition] = useTransition();
+  const searchDebounceRef = useRef(null);
+
+  // Keep the input responsive, but debounce the heavy filter recompute: only
+  // push searchQuery (which drives jobsByColumn) after the user pauses typing.
+  const handleSearchChange = useCallback((val) => {
+    setSearchInput(val);
+    clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      startSearchTransition(() => setSearchQuery(val));
+    }, 200);
+  }, [startSearchTransition]);
+  useEffect(() => () => clearTimeout(searchDebounceRef.current), []);
   const [showPaymentImportModal, setShowPaymentImportModal] = useState(false);
   const [paymentImportRows, setPaymentImportRows] = useState([]);
   const [paymentImportErrors, setPaymentImportErrors] = useState([]);
@@ -148,7 +161,8 @@ export default function ClientOnboarding() {
   const dragCursorXRef = useRef(0);
 
   // ── Computed ──
-  const visibleColumns = getVisibleColumns(user);
+  // Stable identity so downstream memos (jobsByColumn) don't recompute every render.
+  const visibleColumns = useMemo(() => getVisibleColumns(user), [user]);
   const notificationsPerPage = 10;
   const isAdmin = user?.role === 'admin';
   const isCsm = user?.role === 'csm' || user?.roles?.includes?.('csm');
@@ -209,8 +223,15 @@ export default function ClientOnboarding() {
       }
     });
     let deduplicatedJobs = Array.from(uniqueJobsMap.values());
+    // Build email → clientNumber map ONCE (O(clients)) instead of a .find()
+    // scan per job (was O(jobs × clients) — 250k+ ops for 500×500).
+    const clientNumberByEmail = new Map();
+    clientsListArr.forEach((c) => {
+      const email = (c.email || '').toLowerCase();
+      if (email && c.clientNumber != null) clientNumberByEmail.set(email, c.clientNumber);
+    });
     deduplicatedJobs = deduplicatedJobs.map((job) => {
-      const clientNum = clientsListArr.find((c) => (c.email || '').toLowerCase() === (job.clientEmail || '').toLowerCase())?.clientNumber ?? job.clientNumber;
+      const clientNum = clientNumberByEmail.get((job.clientEmail || '').toLowerCase()) ?? job.clientNumber;
       return clientNum != null ? { ...job, clientNumber: clientNum } : job;
     });
 
@@ -363,14 +384,12 @@ export default function ClientOnboarding() {
 
   const fetchRoles = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/onboarding/jobs/roles`, { headers: AUTH_HEADERS() });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setRoles(data);
-      } else if (handleAuthFailure(res, data)) {
-        return;
-      }
-    } catch (_) { }
+      // Roles change rarely — cache 2 min and dedupe across mounts.
+      const data = await getCached('roles', () => apiFetch('/api/onboarding/jobs/roles'), { ttl: 120_000 });
+      setRoles(data);
+    } catch (err) {
+      if (err?.status) handleAuthFailure({ status: err.status }, err.body);
+    }
   }, [setRoles]);
 
   const fetchNotifications = useCallback(async () => {
@@ -418,14 +437,16 @@ export default function ClientOnboarding() {
   const fetchClientJobAnalysis = useCallback(async (selectedDate) => {
     setClientJobAnalysisLoading(true);
     try {
-      const body = selectedDate ? { date: convertToDMY(selectedDate) } : {};
-      const res = await fetch(`${API_BASE}/api/analytics/client-job-analysis`, {
-        method: 'POST',
-        headers: { ...AUTH_HEADERS(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      if (res.ok) {
-        const data = await res.json();
+      const dateKey = selectedDate ? convertToDMY(selectedDate) : '';
+      const body = dateKey ? { date: dateKey } : {};
+      // Shared cache key with JobDetailModal + ClientJobAnalysis so the heavy
+      // aggregation is fetched once and reused across the whole board.
+      const data = await getCached(
+        `analysis:${dateKey || '__all__'}`,
+        () => apiFetch('/api/analytics/client-job-analysis', { method: 'POST', body }),
+        { ttl: 30_000 }
+      );
+      {
         const analysisMap = {};
         (data.rows || []).forEach((row) => {
           analysisMap[row.email.toLowerCase()] = {
@@ -450,10 +471,9 @@ export default function ClientOnboarding() {
     }
   }, []);
 
-  const fetchClients = useCallback(() => {
+  const fetchClients = useCallback((force = false) => {
     setClientsLoading(true);
-    fetch(`${API_BASE}/api/clients`, { headers: AUTH_HEADERS() })
-      .then((r) => r.ok ? r.json() : { clients: [] })
+    getCached('clients', () => apiFetch('/api/clients'), { ttl: 30_000, force })
       .then((data) => setClientsList(data.clients || []))
       .catch(() => setClientsList([]))
       .finally(() => setClientsLoading(false));
@@ -473,7 +493,10 @@ export default function ClientOnboarding() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Failed to update');
       toastUtils.success('Client number updated');
-      fetchClients();
+      // Bust caches so the change is reflected immediately, not after TTL.
+      invalidateCache('clients');
+      invalidateCache('analysis:');
+      fetchClients(true);
       fetchJobs();
     } catch (e) {
       toastUtils.error(e.message || 'Failed');
@@ -933,9 +956,7 @@ export default function ClientOnboarding() {
     setImportProgress({ total: 0, imported: 0, failed: 0 });
 
     try {
-      const clientsRes = await fetch(`${API_BASE}/api/clients`, { headers: AUTH_HEADERS() });
-      if (!clientsRes.ok) throw new Error('Failed to fetch clients');
-      const clientsData = await clientsRes.json();
+      const clientsData = await getCached('clients', () => apiFetch('/api/clients'), { ttl: 30_000, force: true });
       const allClients = clientsData.clients || [];
 
       const existingClientEmails = new Set((jobs || []).map((j) => (j.clientEmail || '').toLowerCase()));
@@ -944,38 +965,35 @@ export default function ClientOnboarding() {
         (c) => c.email && !existingClientEmails.has((c.email || '').toLowerCase())
       );
 
-      setImportProgress({ total: clientsToImport.length, imported: 0, failed: 0 });
+      const total = clientsToImport.length;
+      setImportProgress({ total, imported: 0, failed: 0 });
 
       let imported = 0;
       let failed = 0;
 
-      for (const client of clientsToImport) {
+      // Concurrency-capped import. The server's jobNumber counter is atomic
+      // ($inc), so parallel creates are safe — far faster than one-at-a-time.
+      await promisePool(clientsToImport, async (client) => {
         try {
-          const res = await fetch(`${API_BASE}/api/onboarding/jobs`, {
+          await apiFetch('/api/onboarding/jobs', {
             method: 'POST',
-            headers: AUTH_HEADERS(),
-            body: JSON.stringify({
+            body: {
               clientEmail: client.email,
               clientName: client.name || client.email,
               planType: client.planType || 'Professional',
               dashboardManagerName: client.dashboardTeamLeadName || ''
-            })
+            }
           });
-
-          if (res.ok) {
-            imported++;
-          } else {
-            failed++;
-          }
-
-          setImportProgress({ total: clientsToImport.length, imported, failed });
-        } catch (err) {
+          imported++;
+        } catch {
           failed++;
-          setImportProgress({ total: clientsToImport.length, imported, failed });
+        } finally {
+          setImportProgress({ total, imported, failed });
         }
-      }
+      }, 6);
 
       toastUtils.success(`Import complete: ${imported} imported, ${failed} failed`);
+      invalidateCache('analysis:');
       await fetchJobs();
     } catch (e) {
       toastUtils.error(e.message || 'Failed to import clients');
@@ -1309,11 +1327,7 @@ export default function ClientOnboarding() {
                 type="text"
                 placeholder="Search by client name, email, or number..."
                 value={searchInput}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setSearchInput(val);
-                  startSearchTransition(() => setSearchQuery(val));
-                }}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 className="pl-10 pr-4 py-2 w-72 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white shadow-sm text-sm"
               />
             </div>
