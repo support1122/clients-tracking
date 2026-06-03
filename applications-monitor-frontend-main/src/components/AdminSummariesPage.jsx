@@ -1365,6 +1365,8 @@ function OperatorActivityTable() {
                                     <th className="px-2 py-2 text-right font-semibold text-slate-500" title="Other skips: threshold/seniority/location/auth/company">Other-skip</th>
                                     <th className="px-2 py-2 text-right font-semibold text-blue-700" title="AI picked">✓ Picks</th>
                                     <th className="px-2 py-2 text-right font-semibold text-emerald-700" title="Successfully pushed to dashboard">→ Pushed</th>
+                                    <th className="px-2 py-2 text-right font-semibold text-violet-700" title="Average jobs pushed per client served (pushed ÷ distinct clients)">⌀ Avg/client</th>
+                                    <th className="px-2 py-2 text-right font-semibold text-slate-400" title="Distinct clients served">Clients</th>
                                     <th className="px-2 py-2 text-right font-semibold text-slate-400" title="Sessions logged">Sess</th>
                                 </tr>
                             </thead>
@@ -1390,6 +1392,10 @@ function OperatorActivityTable() {
                                             }</td>
                                             <td className={`px-2 py-1.5 text-right tabular-nums ${r.picks > 0 ? 'text-blue-700 font-semibold' : 'text-slate-400'}`}>{r.picks || 0}</td>
                                             <td className={`px-2 py-1.5 text-right tabular-nums ${r.pushed > 0 ? 'text-emerald-700 font-bold' : 'text-slate-400'}`}>{r.pushed || 0}</td>
+                                            <td className={`px-2 py-1.5 text-right tabular-nums ${(r.clientCount || 0) > 0 && (r.pushed || 0) > 0 ? 'text-violet-700 font-semibold' : 'text-slate-400'}`}>{
+                                                (r.clientCount || 0) > 0 ? ((r.pushed || 0) / r.clientCount).toFixed(1) : '—'
+                                            }</td>
+                                            <td className="px-2 py-1.5 text-right tabular-nums text-slate-500">{r.clientCount || 0}</td>
                                             <td className="px-2 py-1.5 text-right tabular-nums text-slate-400">{r.sessions || 0}</td>
                                         </tr>
                                     ))
