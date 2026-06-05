@@ -995,9 +995,9 @@ export const createOrUpdateClient = async (req, res) => {
         await addClientActionToJobMoveHistory(emailLower, 'client_unpaused', movedBy);
       }
       const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
-      if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined) {
+      if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined || req.body.status !== undefined) {
         clearAnalysisCache();
-      pClearAnalysisCache().catch(() => {});
+        pClearAnalysisCache().catch(() => {});
       }
       return res.status(200).json({
         message: "🔄 Client fields updated successfully",
@@ -1064,7 +1064,7 @@ export const createOrUpdateClient = async (req, res) => {
       );
     }
     const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
-    if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined) {
+    if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined || req.body.status !== undefined) {
       clearAnalysisCache();
       pClearAnalysisCache().catch(() => {});
     }
