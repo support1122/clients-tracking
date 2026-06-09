@@ -508,6 +508,12 @@ function ClientDetailPane({ row, onProfileChanged }) {
     const [notes, setNotes] = useState(null);
     const [notesDraft, setNotesDraft] = useState('');
     const [savingNotes, setSavingNotes] = useState(false);
+    // Per-client scrape-source allowlist ('jobright' / 'indeed'). JobRight is
+    // the default when a client has none saved. Extension only scrapes the
+    // selected sites for this client.
+    const [sourcesDraft, setSourcesDraft] = useState(['jobright']);
+    const [savedSources, setSavedSources] = useState(['jobright']);
+    const [savingSources, setSavingSources] = useState(false);
     function showMessage(text, kind = 'ok') {
         setMessage({ text, kind });
         setError(null);
@@ -532,6 +538,12 @@ function ClientDetailPane({ row, onProfileChanged }) {
             setProfile(p);
             setDraft(p?.aiSummary || '');
             setTargetDraft(p?.targetJobCount != null ? String(p.targetJobCount) : '');
+            const src = Array.isArray(p?.scrapeSources) && p.scrapeSources.length
+                ? p.scrapeSources.map((s) => String(s).toLowerCase()).filter((s) => s === 'jobright' || s === 'indeed')
+                : ['jobright'];
+            const normalized = src.length ? src : ['jobright'];
+            setSourcesDraft(normalized);
+            setSavedSources(normalized);
         } catch (e) {
             showError(`Network error: ${e.message}`);
         } finally {
@@ -691,9 +703,53 @@ function ClientDetailPane({ row, onProfileChanged }) {
         }
     }
 
+    // Toggle a source on/off in the draft, enforcing "at least one selected".
+    function toggleSource(src) {
+        setSourcesDraft((prev) => {
+            const has = prev.includes(src);
+            if (has) {
+                if (prev.length === 1) return prev; // never deselect the last one
+                return prev.filter((s) => s !== src);
+            }
+            return [...prev, src];
+        });
+    }
+
+    async function saveSources() {
+        // Persist in a stable order so the saved/draft comparison is reliable.
+        const ORDER = ['jobright', 'indeed'];
+        const ordered = ORDER.filter((s) => sourcesDraft.includes(s));
+        if (ordered.length === 0) {
+            showError('Select at least one scrape source.');
+            return;
+        }
+        setSavingSources(true);
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/update-scrape-sources`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ email: row.email, scrapeSources: ordered }),
+            });
+            const body = await r.json().catch(() => null);
+            if (!r.ok || body?.success === false) {
+                showError(`Save sources failed: ${body?.message || `HTTP ${r.status}`}`);
+                return;
+            }
+            showMessage(`Scrape sources updated: ${ordered.join(' + ')}.`);
+            setSavedSources(ordered);
+            setSourcesDraft(ordered);
+        } catch (e) {
+            showError(`Network error: ${e.message}`);
+        } finally {
+            setSavingSources(false);
+        }
+    }
+
     const summary = profile?.aiSummary || '';
     const meta = profile?.aiSummaryMeta || {};
     const builtAt = meta.builtAt ? new Date(meta.builtAt).toLocaleString() : null;
+    const sourcesDirty =
+        [...sourcesDraft].sort().join(',') !== [...savedSources].sort().join(',');
 
     return (
         <div className="space-y-5">
@@ -748,6 +804,67 @@ function ClientDetailPane({ row, onProfileChanged }) {
 
             {/* Push history */}
             <PushHistoryCard history={history} loading={historyLoading} onReload={loadHistory} />
+
+            {/* Scrape sources — per-client site allowlist for the JR-direct extension */}
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+                <div className="flex items-start justify-between gap-3 mb-4">
+                    <div>
+                        <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                            🧭 Scrape sources
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-1">
+                            Which job sites the extension scrapes for <strong>this client</strong>. Pick one or both — the extension only captures cards from the selected sites. Empty defaults to JobRight.
+                        </p>
+                    </div>
+                    <span className={`px-3 py-1 rounded-full text-xs font-bold ${savedSources.length > 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-sky-100 text-sky-700'}`}>
+                        {savedSources.map((s) => (s === 'indeed' ? 'ca.indeed' : 'JobRight')).join(' + ')}
+                    </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {[
+                        { id: 'jobright', label: 'JobRight', host: 'jobright.ai', accent: 'sky' },
+                        { id: 'indeed', label: 'ca.indeed', host: 'ca.indeed.com', accent: 'indigo' },
+                    ].map((opt) => {
+                        const on = sourcesDraft.includes(opt.id);
+                        return (
+                            <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() => toggleSource(opt.id)}
+                                className={`flex items-center gap-3 px-4 py-3 rounded-xl border-2 text-left transition ${
+                                    on
+                                        ? 'border-indigo-500 bg-indigo-50 shadow-sm'
+                                        : 'border-slate-200 bg-white hover:border-slate-300'
+                                }`}
+                            >
+                                <span className={`flex items-center justify-center w-5 h-5 rounded-md border-2 flex-shrink-0 ${
+                                    on ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300 bg-white text-transparent'
+                                }`}>
+                                    ✓
+                                </span>
+                                <span>
+                                    <span className={`block text-sm font-bold ${on ? 'text-indigo-900' : 'text-slate-700'}`}>{opt.label}</span>
+                                    <span className="block text-[11px] font-mono text-slate-400">{opt.host}</span>
+                                </span>
+                            </button>
+                        );
+                    })}
+                </div>
+                <div className="flex justify-between items-center mt-4">
+                    <span className="text-xs text-slate-500">
+                        {sourcesDirty
+                            ? <span className="text-amber-700 font-semibold">• unsaved changes</span>
+                            : <span>Active for this client</span>}
+                    </span>
+                    <button
+                        onClick={saveSources}
+                        disabled={savingSources || !sourcesDirty}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {savingSources ? 'Saving…' : 'Save sources'}
+                    </button>
+                </div>
+            </div>
 
             {/* Target cap */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
