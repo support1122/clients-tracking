@@ -4584,6 +4584,37 @@ app.post('/api/admin/run-milestone-cron', verifyToken, verifyAdmin, async (req, 
   }
 });
 
+// Secret-protected external trigger for the milestone sweep. Lets an EXTERNAL
+// scheduler (Render Cron Job, cron-job.org, UptimeRobot, GitHub Action) fire
+// the sweep on a fixed schedule even when the web instance was idle/spun down —
+// the inbound request itself wakes the instance, then the sweep runs. This is
+// the reliable path on hosts that suspend idle web services; the in-process
+// node-cron only ticks while the instance happens to be awake.
+//
+// Auth: OPTIONAL shared secret. If MILESTONE_CRON_SECRET is set in env, it must
+// be supplied via `x-cron-secret` header OR `?key=` query. If it is NOT set, the
+// endpoint is open (no secret needed) — just hit the URL. No JWT needed.
+// Accepts GET and POST so simple cron pingers work.
+const MILESTONE_CRON_SECRET = process.env.MILESTONE_CRON_SECRET || '';
+const handleExternalMilestoneTrigger = async (req, res) => {
+  try {
+    if (MILESTONE_CRON_SECRET) {
+      const provided = req.get('x-cron-secret') || req.query.key || '';
+      if (provided !== MILESTONE_CRON_SECRET) {
+        return res.status(401).json({ error: 'unauthorized' });
+      }
+    }
+    const verbose = req.query.verbose === '1';
+    const result = await runClientMilestoneCron({ trigger: 'external-cron', verbose });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[external-cron] error:', e?.message);
+    res.status(500).json({ error: 'sweep failed' });
+  }
+};
+app.get('/api/internal/run-milestone-cron', handleExternalMilestoneTrigger);
+app.post('/api/internal/run-milestone-cron', handleExternalMilestoneTrigger);
+
 app.post('/api/clients/payment-emails/bulk', verifyToken, async (req, res) => {
   try {
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
@@ -8268,13 +8299,26 @@ dbReady
       console.log(`✅ Server is live at port: ${process.env.PORT}`);
       console.log(`📡 Dashboard Backend URL: ${FLASHFIRE_API_BASE_URL}`);
 
+      // NOTE: any synchronous throw in the startup steps below would abort the
+      // rest of this listen callback — including the milestone cron
+      // registration further down. Each step is isolated so one failure can
+      // never silently prevent the cron from scheduling.
+
       // Sync client numbers on startup (Client model → OnboardingJob)
-      syncClientNumbersToOnboardingJobs().catch((err) =>
-        console.error('❌ [Client Numbers] Startup sync error:', err)
-      );
+      try {
+        syncClientNumbersToOnboardingJobs().catch((err) =>
+          console.error('❌ [Client Numbers] Startup sync error:', err)
+        );
+      } catch (e) {
+        console.error('❌ [Startup] syncClientNumbersToOnboardingJobs threw:', e?.message || e);
+      }
 
       // Start the automated call sweep job
-      startCallSweepJob();
+      try {
+        startCallSweepJob();
+      } catch (e) {
+        console.error('❌ [Startup] startCallSweepJob threw:', e?.message || e);
+      }
 
       // Job card reminder: 8:00 PM IST daily (14:30 UTC)
       if (DISCORD_JOBCARD_REMINDER_WEBHOOK) {
@@ -8296,12 +8340,23 @@ if (DISCORD_ZERO_SAVED_WEBHOOK) {
 
       // Client milestone email cron: every 30 minutes IST (at :00 and :30).
       // node-cron v4 — `scheduled: true` is default, but set explicit for clarity.
-      const milestoneTask = cron.schedule(
-        '*/30 * * * *',
-        () => { runClientMilestoneCron({ trigger: 'cron' }).catch((e) => console.error('[Client Milestones] tick crashed:', e)); },
-        { timezone: 'Asia/Kolkata', scheduled: true }
-      );
-      console.log('📬 [Client Milestones] Cron scheduled every 30 min (*/30 * * * *) IST', { running: !!milestoneTask });
+      // Registration is isolated: if node-cron throws here it must NOT take down
+      // the boot sweep below. NOTE: in-process node-cron only ticks while THIS
+      // instance is awake. On hosts that suspend idle web services, rely on the
+      // external trigger (GET/POST /api/internal/run-milestone-cron) instead.
+      try {
+        const milestoneTask = cron.schedule(
+          '*/30 * * * *',
+          () => {
+            console.log('[Client Milestones] cron tick firing', new Date().toISOString());
+            runClientMilestoneCron({ trigger: 'cron' }).catch((e) => console.error('[Client Milestones] tick crashed:', e));
+          },
+          { timezone: 'Asia/Kolkata', scheduled: true }
+        );
+        console.log('📬 [Client Milestones] Cron scheduled every 30 min (*/30 * * * *) IST', { running: !!milestoneTask });
+      } catch (e) {
+        console.error('❌ [Client Milestones] cron registration failed:', e?.message || e);
+      }
       // Boot-time catch-up sweep — closes the gap when service redeploys
       // mid-hour. Delayed 15s so DB warms + initial routes register first.
       setTimeout(() => {

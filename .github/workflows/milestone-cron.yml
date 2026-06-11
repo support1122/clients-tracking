@@ -1,0 +1,44 @@
+name: Milestone Email Cron
+
+# Fires the milestone/payment email sweep on a fixed schedule by hitting the
+# backend's external trigger endpoint. This works even when the Render web
+# instance is idle/spun-down: the inbound HTTPS request wakes the instance and
+# the sweep runs. The endpoint is idempotent — it never re-sends an
+# already-sent milestone, so extra/overlapping calls are harmless.
+#
+# Endpoint: GET/POST /api/internal/run-milestone-cron  (open, no secret needed)
+# If you later set MILESTONE_CRON_SECRET in the backend env, add a repo secret
+# named MILESTONE_CRON_SECRET and the step below will pass it automatically.
+
+on:
+  schedule:
+    # Every 30 minutes (GitHub Actions cron is UTC; interval is timezone-agnostic).
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}   # allows manual "Run workflow" from the Actions tab
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit milestone sweep endpoint
+        env:
+          BASE_URL: https://clients-tracking-backend-580t.onrender.com
+          CRON_SECRET: ${{ secrets.MILESTONE_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          URL="$BASE_URL/api/internal/run-milestone-cron?verbose=1"
+          echo "Triggering: $URL"
+          # Retry up to 5 times — first hit may just be waking a cold instance.
+          for attempt in 1 2 3 4 5; do
+            CODE=$(curl -sS -o resp.json -w "%{http_code}" -m 120 \
+              -X POST "$URL" \
+              ${CRON_SECRET:+-H "x-cron-secret: $CRON_SECRET"}) || CODE=000
+            echo "Attempt $attempt -> HTTP $CODE"
+            if [ "$CODE" = "200" ]; then
+              echo "Sweep response:"; cat resp.json; echo
+              exit 0
+            fi
+            echo "Not ready (HTTP $CODE), waiting 20s..."; sleep 20
+          done
+          echo "Sweep failed after retries. Last response:"; cat resp.json || true
+          exit 1
