@@ -8143,8 +8143,9 @@ async function runSendPreviousMilestones() {
 let _milestoneSweepRunning = false;
 
 /**
- * Hourly sweep. Sends to ALL active clients with paymentEmail set, regardless
- * of pause / onboarding / ticket status. Per-client try/catch so one bad row
+ * Daily 9 PM IST sweep. Sends to all ACTIVE, NON-PAUSED clients with
+ * paymentEmail set whose milestone thresholds are reached. Paused clients
+ * (isPaused === true) are excluded. Per-client try/catch so one bad row
  * does not abort the whole sweep. Returns { processed, sent, failed, skipped,
  * details } so the on-demand admin endpoint can surface results.
  *
@@ -8164,6 +8165,7 @@ async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}
   try {
     const clients = await ClientModel.find({
       status: 'active',
+      isPaused: { $ne: true },
       paymentEmail: { $exists: true, $ne: '' }
     }).lean();
     console.log(`[Client Milestones] candidate clients: ${clients.length}`);
@@ -8338,22 +8340,23 @@ if (DISCORD_ZERO_SAVED_WEBHOOK) {
       cron.schedule('30 7 * * *', runDailyIncentiveSnapshot);
       console.log('📬 [Incentive Cron] Scheduled for 1:00 PM IST daily');
 
-      // Client milestone email cron: every 30 minutes IST (at :00 and :30).
+      // Client milestone email cron: once daily at 9:00 PM IST (21:00 Asia/Kolkata).
       // node-cron v4 — `scheduled: true` is default, but set explicit for clarity.
       // Registration is isolated: if node-cron throws here it must NOT take down
       // the boot sweep below. NOTE: in-process node-cron only ticks while THIS
-      // instance is awake. On hosts that suspend idle web services, rely on the
-      // external trigger (GET/POST /api/internal/run-milestone-cron) instead.
+      // instance is awake. On hosts that suspend idle web services, the external
+      // trigger (GET/POST /api/internal/run-milestone-cron), fired by the GitHub
+      // Actions workflow at 15:30 UTC = 9 PM IST, is the reliable path.
       try {
         const milestoneTask = cron.schedule(
-          '*/30 * * * *',
+          '0 21 * * *',
           () => {
             console.log('[Client Milestones] cron tick firing', new Date().toISOString());
             runClientMilestoneCron({ trigger: 'cron' }).catch((e) => console.error('[Client Milestones] tick crashed:', e));
           },
           { timezone: 'Asia/Kolkata', scheduled: true }
         );
-        console.log('📬 [Client Milestones] Cron scheduled every 30 min (*/30 * * * *) IST', { running: !!milestoneTask });
+        console.log('📬 [Client Milestones] Cron scheduled daily 9:00 PM IST (0 21 * * * Asia/Kolkata)', { running: !!milestoneTask });
       } catch (e) {
         console.error('❌ [Client Milestones] cron registration failed:', e?.message || e);
       }

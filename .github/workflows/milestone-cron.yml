@@ -12,8 +12,9 @@ name: Milestone Email Cron
 
 on:
   schedule:
-    # Every 30 minutes (GitHub Actions cron is UTC; interval is timezone-agnostic).
-    - cron: "*/30 * * * *"
+    # Daily at 9:00 PM IST. GitHub Actions cron is UTC; IST = UTC+5:30, so
+    # 21:00 IST = 15:30 UTC.
+    - cron: "30 15 * * *"
   workflow_dispatch: {}   # allows manual "Run workflow" from the Actions tab
 
 jobs:
