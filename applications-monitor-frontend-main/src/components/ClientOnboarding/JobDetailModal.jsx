@@ -292,21 +292,23 @@ const JobDetailModal = React.memo(({
     }
   }, [selectedJob?.clientEmail, paymentEmailValue, fetchEmailLogs]);
 
-  // Retry a single failed milestone email (the "Send again" button on a failed
-  // row). Force-resends that specific milestone via the backend.
-  const resendMilestoneEmail = useCallback(async (log) => {
+  // Force-resend one specific milestone email. Powers both the "Send again"
+  // button on a failed Email Activity row AND the "Send again" button on a
+  // SENT item in the Milestone Timeline. `loadingId` keys the spinner so only
+  // the clicked button shows it.
+  const resendMilestoneEmail = useCallback(async ({ milestoneKey, type, loadingId }) => {
     const clientEmail = selectedJob?.clientEmail;
-    if (!clientEmail || !log) return;
+    if (!clientEmail || (!milestoneKey && !type)) return;
     if (!paymentEmailValue || !paymentEmailValue.trim()) {
       toastUtils.error('Payment Email is not set for this client. Add one in the INFO panel first.');
       return;
     }
-    setResendingLogId(log._id);
+    setResendingLogId(loadingId);
     try {
       const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}/resend-milestone`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS() },
-        body: JSON.stringify({ milestoneKey: log.type, type: log.meta?.milestoneType })
+        body: JSON.stringify({ milestoneKey, type })
       });
       if (!res.ok) {
         if (res.status === 401) handleAuthFailure();
@@ -1173,6 +1175,24 @@ const JobDetailModal = React.memo(({
                                 {new Date(m.at).toLocaleString()}{m.count ? ` · count ${m.count}` : ''}
                               </div>
                             )}
+                            {sent && isAdmin && (() => {
+                              const noPaymentEmail = !paymentEmailValue || !paymentEmailValue.trim();
+                              const resending = resendingLogId === `ms_${m.key}`;
+                              return (
+                                <div className="mt-2 flex items-center justify-end">
+                                  <button
+                                    type="button"
+                                    onClick={() => resendMilestoneEmail({ milestoneKey: m.key, type: m.type, loadingId: `ms_${m.key}` })}
+                                    disabled={resending || noPaymentEmail}
+                                    title={noPaymentEmail ? 'Payment Email is not set — add one in the INFO panel first' : 'Re-send this milestone email now'}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                  >
+                                    {resending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                    {resending ? 'Sending…' : 'Send again'}
+                                  </button>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </li>
                       );
@@ -1241,7 +1261,7 @@ const JobDetailModal = React.memo(({
                               <div className="mt-2 flex items-center justify-end">
                                 <button
                                   type="button"
-                                  onClick={() => resendMilestoneEmail(l)}
+                                  onClick={() => resendMilestoneEmail({ milestoneKey: l.type, type: l.meta?.milestoneType, loadingId: l._id })}
                                   disabled={resending || noPaymentEmail}
                                   title={noPaymentEmail ? 'Payment Email is not set — add one in the INFO panel first' : 'Resend this milestone email now'}
                                   className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 disabled:opacity-50 disabled:cursor-not-allowed"
