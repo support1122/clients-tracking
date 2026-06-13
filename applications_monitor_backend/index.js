@@ -4629,6 +4629,46 @@ app.post('/api/clients/:email/resend-milestone', verifyToken, verifyAdmin, async
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// ⚠️ TEMPORARY TEST ENDPOINT — NO AUTH, NO MIDDLEWARE. REMOVE AFTER TESTING. ⚠️
+// Fires a real milestone email to any address so SMTP/OAuth can be verified
+// from Postman/browser. Does NOT touch the DB or any client record.
+//
+//   GET  /test?email=you@gmail.com
+//   POST /test            body: { "email": "you@gmail.com" }
+//
+// Optional params (query or body): type (started|count_milestone|completed,
+// default completed), count (default 1000), planType (default executive),
+// name (default "Test User").
+// ─────────────────────────────────────────────────────────────────────────
+const handleTestMilestoneEmail = async (req, res) => {
+  try {
+    const email = String(req.query.email || req.body?.email || '').trim();
+    if (!email) return res.status(400).json({ error: 'email required (?email= or body.email)' });
+
+    const type = String(req.query.type || req.body?.type || 'completed').trim();
+    const count = Number(req.query.count || req.body?.count || 1000);
+    const planType = String(req.query.planType || req.body?.planType || 'executive').trim();
+    const name = String(req.query.name || req.body?.name || 'Test User').trim();
+
+    // Synthetic client — never persisted.
+    const client = { email, name, planType, paymentEmail: email };
+    const result = await sendMilestoneEmail({
+      client,
+      type,
+      milestoneKey: `test_${type}_${count}`,
+      snapshot: { planCap: count, currentCount: count, threshold: count }
+    });
+
+    res.json({ ok: !!result?.success, to: email, type, count, planType, result });
+  } catch (e) {
+    console.error('[test-email] error:', e?.message);
+    res.status(500).json({ error: e?.message || 'test send failed' });
+  }
+};
+app.get('/test', handleTestMilestoneEmail);
+app.post('/test', handleTestMilestoneEmail);
+
 app.post('/api/clients/email-export/send-previous', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const result = await runSendPreviousMilestones();
