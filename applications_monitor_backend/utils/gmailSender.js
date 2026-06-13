@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import { GmailUser } from "../schema_models/GmailUser.js";
 import { ClientEmailLogModel } from "../ClientEmailLogModel.js";
+import { isGmailAuthError, notifyGmailAuthError } from "./discordMilestoneNotify.js";
 
 function encodeRfc2047Header(value) {
   if (typeof value !== "string" || value.length === 0) return value;
@@ -166,6 +167,12 @@ export async function sendGmailEmail({
     const msg = err?.response?.data?.error?.message || err?.message || "send_failed";
     console.error(`[GmailSender] ${category}/${type} failed to ${recipient}: ${msg}`);
     await ClientEmailLogModel.create({ ...logBase, status: "failed", errorMessage: msg });
+    // Auth failures (invalid_grant / token revoked) mean nothing will send until
+    // the Google account is reconnected — fire a loud, throttled Discord alert.
+    if (isGmailAuthError(msg)) {
+      notifyGmailAuthError({ error: msg, senderEmail: sender.email, recipient, category, type })
+        .catch((e) => console.error('[GmailSender] auth alert failed:', e?.message || e));
+    }
     return { success: false, error: msg };
   }
 }

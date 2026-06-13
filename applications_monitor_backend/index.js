@@ -92,6 +92,8 @@ import FormData from 'form-data';
 import cron from 'node-cron';
 import { ClientEmailLogModel } from './ClientEmailLogModel.js';
 import { sendMilestoneEmail } from './utils/clientMilestoneEmails.js';
+import { getActiveGmailSender } from './utils/gmailSender.js';
+import { notifyMilestoneSweep } from './utils/discordMilestoneNotify.js';
 import {
   startGoogleAuth,
   googleAuthCallback,
@@ -4469,7 +4471,10 @@ app.post('/api/clients/email-export', verifyToken, verifyAdmin, async (req, res)
       clientEmail: l.clientEmail,
       clientName: nameByEmail.get(l.clientEmail) || '',
       receiverEmail: l.paymentEmail || '',
-      senderEmail,
+      // Show the ACTUAL sender stored on the log (the connected Google account,
+      // e.g. support@flashfirejobs.com). Fall back to the default only for
+      // legacy rows that predate fromEmail being recorded.
+      senderEmail: l.fromEmail || senderEmail,
       senderName,
       subject: l.subject || '',
       template: l.type || '',
@@ -8283,6 +8288,16 @@ async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}
   }
   const tookMs = Date.now() - startedAt;
   console.log(`[Client Milestones] sweep done in ${tookMs}ms processed=${summary.processed} sent=${summary.sent} failed=${summary.failed} skipped=${summary.skipped} errors=${summary.errors}`);
+
+  // Post a beautified Discord summary (skips silent no-op runs internally).
+  // Never let a notification failure affect the sweep result.
+  try {
+    const sender = await getActiveGmailSender();
+    await notifyMilestoneSweep({ ...summary, tookMs }, { trigger, senderEmail: sender?.email });
+  } catch (e) {
+    console.error('[Client Milestones] discord summary failed:', e?.message || e);
+  }
+
   return { ...summary, tookMs };
 }
 
