@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import { GmailUser } from "../schema_models/GmailUser.js";
 import { ClientEmailLogModel } from "../ClientEmailLogModel.js";
 import { isGmailAuthError, notifyGmailAuthError } from "./discordMilestoneNotify.js";
+import { isSmtpConfigured, sendViaSmtp, smtpFromEmail } from "./smtpSender.js";
 
 function encodeRfc2047Header(value) {
   if (typeof value !== "string" || value.length === 0) return value;
@@ -138,7 +139,13 @@ export async function sendGmailEmail({
     return { skipped: true, reason: "no_type" };
   }
 
-  const sender = await getActiveGmailSender();
+  // Prefer SMTP (Gmail App Password) when configured — it uses a static
+  // username + app password, so it never hits invalid_grant / token revocation.
+  // Falls back to the Gmail OAuth API when SMTP env is not set.
+  const useSmtp = isSmtpConfigured();
+  const sender = useSmtp ? null : await getActiveGmailSender();
+  const fromEmail = useSmtp ? smtpFromEmail() : (sender ? sender.email : "");
+
   const logBase = {
     clientEmail: (clientEmail || recipient).toLowerCase(),
     toEmail: recipient.toLowerCase(),
@@ -146,31 +153,36 @@ export async function sendGmailEmail({
     category,
     type,
     subject,
-    provider: "gmail",
-    fromEmail: sender ? sender.email : "",
+    provider: useSmtp ? "smtp" : "gmail",
+    fromEmail,
     snapshot: snapshot || undefined,
     meta
   };
 
-  if (!sender) {
-    console.warn(`[GmailSender] no connected Gmail sender — skip ${type} to ${recipient}`);
-    await ClientEmailLogModel.create({ ...logBase, status: "failed", errorMessage: "gmail_sender_not_configured" });
-    return { skipped: true, reason: "gmail_sender_not_configured" };
+  if (!useSmtp && !sender) {
+    console.warn(`[GmailSender] no SMTP env and no connected Gmail sender — skip ${type} to ${recipient}`);
+    await ClientEmailLogModel.create({ ...logBase, status: "failed", errorMessage: "no_sender_configured" });
+    return { skipped: true, reason: "no_sender_configured" };
   }
 
   try {
-    await sendViaGmailRaw(sender, { to: recipient, subject, html, text, attachment });
+    if (useSmtp) {
+      await sendViaSmtp({ to: recipient, subject, html, text, attachment });
+    } else {
+      await sendViaGmailRaw(sender, { to: recipient, subject, html, text, attachment });
+    }
     await ClientEmailLogModel.create({ ...logBase, status: "success" });
-    console.log(`[GmailSender] sent ${category}/${type} to ${recipient} from ${sender.email}`);
+    console.log(`[GmailSender] sent ${category}/${type} to ${recipient} from ${fromEmail} via ${useSmtp ? "smtp" : "oauth"}`);
     return { success: true };
   } catch (err) {
     const msg = err?.response?.data?.error?.message || err?.message || "send_failed";
-    console.error(`[GmailSender] ${category}/${type} failed to ${recipient}: ${msg}`);
+    console.error(`[GmailSender] ${category}/${type} failed to ${recipient} via ${useSmtp ? "smtp" : "oauth"}: ${msg}`);
     await ClientEmailLogModel.create({ ...logBase, status: "failed", errorMessage: msg });
-    // Auth failures (invalid_grant / token revoked) mean nothing will send until
-    // the Google account is reconnected — fire a loud, throttled Discord alert.
+    // Auth failures (invalid_grant / token revoked for OAuth; bad app password
+    // for SMTP) mean nothing will send until credentials are fixed — fire a
+    // loud, throttled Discord alert.
     if (isGmailAuthError(msg)) {
-      notifyGmailAuthError({ error: msg, senderEmail: sender.email, recipient, category, type })
+      notifyGmailAuthError({ error: msg, senderEmail: fromEmail, recipient, category, type })
         .catch((e) => console.error('[GmailSender] auth alert failed:', e?.message || e));
     }
     return { success: false, error: msg };

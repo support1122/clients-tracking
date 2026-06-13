@@ -19,12 +19,20 @@ const MILESTONE_ALERT_WEBHOOK =
 // Patterns that mean "the Google connection itself is broken" — these need a
 // human to reconnect the account, so they get the loud red alert.
 const AUTH_ERROR_PATTERNS = [
+  // OAuth failures
   /invalid_grant/i,
   /token has been expired or revoked/i,
   /invalid_request/i,
   /invalid_client/i,
   /unauthorized/i,
   /insufficient.*permission/i,
+  // SMTP / app-password failures
+  /username and password not accepted/i,
+  /invalid login/i,
+  /\b535\b/,
+  /\bEAUTH\b/,
+  /bad credentials/i,
+  /authentication failed/i,
 ];
 
 export function isGmailAuthError(msg = '') {
@@ -77,8 +85,9 @@ export async function notifyGmailAuthError({ error, senderEmail, recipient, cate
   fields.push({
     name: '➡️ Action needed',
     value:
-      'Open the portal → **Client Onboarding** → Google account menu → **Change account**, ' +
-      'and re-connect the sending mailbox. Milestone & payment emails will NOT go out until this is fixed.',
+      '**If using SMTP:** regenerate the Gmail App Password and update `SMTP_PASS` in the backend env, then redeploy.\n' +
+      '**If using OAuth:** portal → **Client Onboarding** → Google account menu → **Change account** and re-connect.\n' +
+      'Milestone & payment emails will NOT go out until this is fixed.',
     inline: false,
   });
 
