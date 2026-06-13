@@ -12,7 +12,9 @@ import {
   FileText,
   ChevronDown,
   CheckCircle,
-  Mail
+  Mail,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import {
   useOnboardingStore,
@@ -94,6 +96,7 @@ const JobDetailModal = React.memo(({
   const [milestoneAddonApps, setMilestoneAddonApps] = useState(0);
   const [milestoneReferralApps, setMilestoneReferralApps] = useState(0);
   const [sendingPendingMilestone, setSendingPendingMilestone] = useState(false);
+  const [resendingLogId, setResendingLogId] = useState(null);
   const [savingClientName, setSavingClientName] = useState(false);
   const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
   const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
@@ -286,6 +289,47 @@ const JobDetailModal = React.memo(({
       toastUtils.error('Send failed');
     } finally {
       setSendingPendingMilestone(false);
+    }
+  }, [selectedJob?.clientEmail, paymentEmailValue, fetchEmailLogs]);
+
+  // Retry a single failed milestone email (the "Send again" button on a failed
+  // row). Force-resends that specific milestone via the backend.
+  const resendMilestoneEmail = useCallback(async (log) => {
+    const clientEmail = selectedJob?.clientEmail;
+    if (!clientEmail || !log) return;
+    if (!paymentEmailValue || !paymentEmailValue.trim()) {
+      toastUtils.error('Payment Email is not set for this client. Add one in the INFO panel first.');
+      return;
+    }
+    setResendingLogId(log._id);
+    try {
+      const res = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(clientEmail)}/resend-milestone`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS() },
+        body: JSON.stringify({ milestoneKey: log.type, type: log.meta?.milestoneType })
+      });
+      if (!res.ok) {
+        if (res.status === 401) handleAuthFailure();
+        const err = await res.json().catch(() => ({}));
+        const friendly = {
+          no_payment_email: 'Payment Email is not set for this client. Add one in the INFO panel first.',
+          inactive: 'Client is not active — milestone emails are only sent to active clients.',
+          no_milestone: 'This milestone is no longer part of the client’s plan.',
+        }[err?.code] || err?.error || 'Resend failed';
+        toastUtils.error(friendly);
+        return;
+      }
+      const data = await res.json();
+      if (data?.sent) {
+        toastUtils.success(`Re-sent · ${data.milestone} · ${data.currentCount}/${data.planCap}`);
+      } else {
+        toastUtils.error(data?.error || 'Did not send');
+      }
+      fetchEmailLogs(clientEmail);
+    } catch {
+      toastUtils.error('Resend failed');
+    } finally {
+      setResendingLogId(null);
     }
   }, [selectedJob?.clientEmail, paymentEmailValue, fetchEmailLogs]);
 
@@ -1169,14 +1213,44 @@ const JobDetailModal = React.memo(({
                           pct100: '100% milestone'
                         })[l.type] || l.type;
                         const ok = l.status === 'success';
+                        const canResend = !ok && isAdmin && l.category === 'milestone';
+                        const noPaymentEmail = !paymentEmailValue || !paymentEmailValue.trim();
+                        const resending = resendingLogId === l._id;
                         return (
-                          <div key={l._id} className="bg-white border border-gray-200 rounded-lg p-3">
+                          <div key={l._id} className={`rounded-lg p-3 border ${ok ? 'bg-white border-gray-200' : 'bg-red-50/60 border-red-200'}`}>
                             <div className="flex items-center justify-between gap-2 mb-1">
-                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${ok ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>{typeLabel}</span>
-                              <span className="text-[10px] text-gray-500">{new Date(l.createdAt).toLocaleString()}</span>
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${ok ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700'}`}>{typeLabel}</span>
+                                <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${ok ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                  {ok ? <CheckCircle className="w-2.5 h-2.5" /> : <AlertTriangle className="w-2.5 h-2.5" />}
+                                  {ok ? 'Sent' : 'Failed'}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-gray-500 whitespace-nowrap">{new Date(l.createdAt).toLocaleString()}</span>
                             </div>
                             <div className="text-xs text-gray-700 truncate" title={l.subject}>{l.subject}</div>
-                            <div className="text-[11px] text-gray-500 mt-1">to {l.paymentEmail} · {ok ? 'sent' : `failed${l.errorMessage ? ` — ${l.errorMessage}` : ''}`}{l.snapshot?.planCap ? ` · ${l.snapshot.currentCount}/${l.snapshot.planCap} (${Math.round(l.snapshot.percent || 0)}%)` : ''}</div>
+                            <div className="text-[11px] text-gray-500 mt-1">
+                              to {l.paymentEmail}{l.fromEmail ? ` · from ${l.fromEmail}` : ''}{l.snapshot?.planCap ? ` · ${l.snapshot.currentCount}/${l.snapshot.planCap} (${Math.round(l.snapshot.percent || 0)}%)` : ''}
+                            </div>
+                            {!ok && l.errorMessage && (
+                              <div className="text-[11px] text-red-700 bg-red-100/70 border border-red-200 rounded-md px-2 py-1 mt-1.5 break-words">
+                                <span className="font-semibold">Error:</span> {l.errorMessage}
+                              </div>
+                            )}
+                            {canResend && (
+                              <div className="mt-2 flex items-center justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => resendMilestoneEmail(l)}
+                                  disabled={resending || noPaymentEmail}
+                                  title={noPaymentEmail ? 'Payment Email is not set — add one in the INFO panel first' : 'Resend this milestone email now'}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  {resending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                  {resending ? 'Sending…' : 'Send again'}
+                                </button>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
