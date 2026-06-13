@@ -92,6 +92,8 @@ import FormData from 'form-data';
 import cron from 'node-cron';
 import { ClientEmailLogModel } from './ClientEmailLogModel.js';
 import { sendMilestoneEmail } from './utils/clientMilestoneEmails.js';
+import { getActiveGmailSender } from './utils/gmailSender.js';
+import { notifyMilestoneSweep } from './utils/discordMilestoneNotify.js';
 import {
   startGoogleAuth,
   googleAuthCallback,
@@ -4469,7 +4471,10 @@ app.post('/api/clients/email-export', verifyToken, verifyAdmin, async (req, res)
       clientEmail: l.clientEmail,
       clientName: nameByEmail.get(l.clientEmail) || '',
       receiverEmail: l.paymentEmail || '',
-      senderEmail,
+      // Show the ACTUAL sender stored on the log (the connected Google account,
+      // e.g. support@flashfirejobs.com). Fall back to the default only for
+      // legacy rows that predate fromEmail being recorded.
+      senderEmail: l.fromEmail || senderEmail,
       senderName,
       subject: l.subject || '',
       template: l.type || '',
@@ -4529,14 +4534,18 @@ app.post('/api/clients/:email/send-pending-milestones', verifyToken, verifyAdmin
       snapshot: { planCap, currentCount, threshold: highest.threshold }
     });
 
-    const setOps = {};
-    for (const m of reachedUnsent) {
-      setOps[`milestonesNotified.${m.key}.sent`] = true;
-      setOps[`milestonesNotified.${m.key}.at`] = new Date();
-      setOps[`milestonesNotified.${m.key}.count`] = currentCount;
-      if (m.type === 'completed') setOps[`milestonesNotified.${m.key}.cap`] = m.threshold;
+    // Only mark milestones sent when the email actually went out. A failed
+    // send stays unsent so it shows as pending/failed and can be retried.
+    if (sendResult?.success) {
+      const setOps = {};
+      for (const m of reachedUnsent) {
+        setOps[`milestonesNotified.${m.key}.sent`] = true;
+        setOps[`milestonesNotified.${m.key}.at`] = new Date();
+        setOps[`milestonesNotified.${m.key}.count`] = currentCount;
+        if (m.type === 'completed') setOps[`milestonesNotified.${m.key}.cap`] = m.threshold;
+      }
+      await ClientModel.updateOne({ email: emailLower }, { $set: setOps });
     }
-    await ClientModel.updateOne({ email: emailLower }, { $set: setOps });
 
     await recordMilestoneInMoveHistory(emailLower, highest.key, sendResult, client.paymentEmail, { currentCount, planCap, threshold: highest.threshold });
     for (const m of reachedUnsent) {
@@ -4559,6 +4568,106 @@ app.post('/api/clients/:email/send-pending-milestones', verifyToken, verifyAdmin
     res.status(500).json({ error: 'send failed' });
   }
 });
+
+// Admin: resend ONE specific milestone email — used by the "Send again" button
+// on a failed email row in the client ticket. Force-sends the given milestone
+// regardless of its current notified state, recomputing live counts so the
+// email reflects current progress. Body: { milestoneKey } (preferred) or { type }.
+app.post('/api/clients/:email/resend-milestone', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const emailLower = String(req.params.email || '').toLowerCase().trim();
+    const milestoneKey = String(req.body?.milestoneKey || '').trim();
+    const milestoneType = String(req.body?.type || '').trim();
+    if (!emailLower) return res.status(400).json({ error: 'email required' });
+    if (!milestoneKey && !milestoneType) return res.status(400).json({ error: 'milestoneKey or type required', code: 'no_milestone' });
+
+    const client = await ClientModel.findOne({ email: emailLower }).lean();
+    if (!client) return res.status(404).json({ error: 'client not found' });
+    if (client.status !== 'active') return res.status(400).json({ error: 'client is not active', code: 'inactive' });
+    if (!client.paymentEmail) return res.status(400).json({ error: 'paymentEmail not set', code: 'no_payment_email' });
+
+    const referralUser = await NewUserModel.findOne({ email: emailLower }, 'referrals').lean();
+    const referralAdded = referralApplicationsFor(referralUser?.referrals);
+    const planCap = getEffectiveCap(client, referralAdded);
+    const milestones = computeClientMilestones(client, referralAdded);
+    const target = milestones.find((m) =>
+      (milestoneKey && m.key === milestoneKey) || (!milestoneKey && m.type === milestoneType)
+    );
+    if (!target) return res.status(404).json({ error: 'milestone not found for client', code: 'no_milestone' });
+
+    const currentCount = await JobModel.countDocuments(milestoneCountFilter(emailLower));
+    const sendResult = await sendMilestoneEmail({
+      client,
+      type: target.type,
+      milestoneKey: target.key,
+      snapshot: { planCap, currentCount, threshold: target.threshold }
+    });
+
+    if (sendResult?.success) {
+      const setOps = {
+        [`milestonesNotified.${target.key}.sent`]: true,
+        [`milestonesNotified.${target.key}.at`]: new Date(),
+        [`milestonesNotified.${target.key}.count`]: currentCount
+      };
+      if (target.type === 'completed') setOps[`milestonesNotified.${target.key}.cap`] = target.threshold;
+      await ClientModel.updateOne({ email: emailLower }, { $set: setOps });
+    }
+    await recordMilestoneInMoveHistory(emailLower, target.key, sendResult, client.paymentEmail, { currentCount, planCap, threshold: target.threshold });
+
+    res.json({
+      sent: !!sendResult?.success,
+      skipped: !!sendResult?.skipped,
+      milestone: target.key,
+      threshold: target.threshold,
+      currentCount,
+      planCap,
+      error: sendResult?.error || sendResult?.reason || null
+    });
+  } catch (e) {
+    console.error('[resend-milestone] error:', e?.message);
+    res.status(500).json({ error: 'resend failed' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// ⚠️ TEMPORARY TEST ENDPOINT — NO AUTH, NO MIDDLEWARE. REMOVE AFTER TESTING. ⚠️
+// Fires a real milestone email to any address so SMTP/OAuth can be verified
+// from Postman/browser. Does NOT touch the DB or any client record.
+//
+//   GET  /test?email=you@gmail.com
+//   POST /test            body: { "email": "you@gmail.com" }
+//
+// Optional params (query or body): type (started|count_milestone|completed,
+// default completed), count (default 1000), planType (default executive),
+// name (default "Test User").
+// ─────────────────────────────────────────────────────────────────────────
+const handleTestMilestoneEmail = async (req, res) => {
+  try {
+    const email = String(req.query.email || req.body?.email || '').trim();
+    if (!email) return res.status(400).json({ error: 'email required (?email= or body.email)' });
+
+    const type = String(req.query.type || req.body?.type || 'completed').trim();
+    const count = Number(req.query.count || req.body?.count || 1000);
+    const planType = String(req.query.planType || req.body?.planType || 'executive').trim();
+    const name = String(req.query.name || req.body?.name || 'Test User').trim();
+
+    // Synthetic client — never persisted.
+    const client = { email, name, planType, paymentEmail: email };
+    const result = await sendMilestoneEmail({
+      client,
+      type,
+      milestoneKey: `test_${type}_${count}`,
+      snapshot: { planCap: count, currentCount: count, threshold: count }
+    });
+
+    res.json({ ok: !!result?.success, to: email, type, count, planType, result });
+  } catch (e) {
+    console.error('[test-email] error:', e?.message);
+    res.status(500).json({ error: e?.message || 'test send failed' });
+  }
+};
+app.get('/test', handleTestMilestoneEmail);
+app.post('/test', handleTestMilestoneEmail);
 
 app.post('/api/clients/email-export/send-previous', verifyToken, verifyAdmin, async (req, res) => {
   try {
@@ -8242,19 +8351,26 @@ async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}
             snapshot: { planCap, currentCount, threshold: m.threshold }
           });
 
-          const setOps = {
-            [`milestonesNotified.${m.key}.sent`]: true,
-            [`milestonesNotified.${m.key}.at`]: new Date(),
-            [`milestonesNotified.${m.key}.count`]: currentCount
-          };
-          // Snapshot effective cap on the completed record so the next addon
-          // top-up triggers a re-fire (and only one re-fire per cap level).
-          if (m.type === 'completed') setOps[`milestonesNotified.${m.key}.cap`] = m.threshold;
+          // Only mark the milestone as sent when the send actually SUCCEEDED.
+          // Previously this was unconditional, so a failed send (e.g.
+          // invalid_grant) was recorded as `sent` and never retried — showing
+          // "Sent" in the UI while the client got nothing. On failure we leave
+          // it unsent so the next sweep (or a manual resend) tries again.
+          if (result?.success) {
+            const setOps = {
+              [`milestonesNotified.${m.key}.sent`]: true,
+              [`milestonesNotified.${m.key}.at`]: new Date(),
+              [`milestonesNotified.${m.key}.count`]: currentCount
+            };
+            // Snapshot effective cap on the completed record so the next addon
+            // top-up triggers a re-fire (and only one re-fire per cap level).
+            if (m.type === 'completed') setOps[`milestonesNotified.${m.key}.cap`] = m.threshold;
 
-          await ClientModel.updateOne(
-            { email: client.email },
-            { $set: setOps }
-          );
+            await ClientModel.updateOne(
+              { email: client.email },
+              { $set: setOps }
+            );
+          }
           await recordMilestoneInMoveHistory(client.email, m.key, result, client.paymentEmail, { currentCount, planCap, threshold: m.threshold });
 
           if (result?.success) {
@@ -8283,6 +8399,16 @@ async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}
   }
   const tookMs = Date.now() - startedAt;
   console.log(`[Client Milestones] sweep done in ${tookMs}ms processed=${summary.processed} sent=${summary.sent} failed=${summary.failed} skipped=${summary.skipped} errors=${summary.errors}`);
+
+  // Post a beautified Discord summary (skips silent no-op runs internally).
+  // Never let a notification failure affect the sweep result.
+  try {
+    const sender = await getActiveGmailSender();
+    await notifyMilestoneSweep({ ...summary, tookMs }, { trigger, senderEmail: sender?.email });
+  } catch (e) {
+    console.error('[Client Milestones] discord summary failed:', e?.message || e);
+  }
+
   return { ...summary, tookMs };
 }
 
