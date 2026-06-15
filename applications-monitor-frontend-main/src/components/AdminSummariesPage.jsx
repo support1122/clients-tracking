@@ -874,7 +874,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                             🎯 Target job count cap
                         </h3>
                         <p className="text-xs text-slate-500 mt-1">
-                            Daily cap. <code>/addjob</code> refuses ops pushes once today's count hits this number — resets at 00:00 IST. Empty = falls back to default 30/day.
+                            Daily cap. <code>/addjob</code> refuses ops pushes once today's count hits this number — resets at 10:00 PM IST. Empty = falls back to default 30/day.
                         </p>
                     </div>
                     {(() => {
@@ -1584,7 +1584,7 @@ function OperatorBreakdownCard({ clientEmail }) {
             <div className="flex items-center justify-between mb-3">
                 <h3 className="font-bold text-slate-900 flex items-center gap-2">
                     📊 Today
-                    <span className="text-[10px] font-normal text-slate-500">resets at 00:00 IST</span>
+                    <span className="text-[10px] font-normal text-slate-500">resets at 10:00 PM IST</span>
                 </h3>
                 {err && <span className="text-[10px] text-red-600">{err}</span>}
             </div>

@@ -5776,9 +5776,9 @@ const buildExtensionJobsParsedRangeStages = (bounds) => [
 
 /**
  * Build daily incentive rows per operator.
- * Day window = 11 PM IST (prev night) → 12:59 PM IST (this day).
- * Only jobs within the 11 PM–1 PM IST window count.
- * Jobs at 11 PM roll into the next day via +1h offset in the aggregation.
+ * Day window = 24 hours, resetting at 10 PM IST (prev day 10 PM → this day 10 PM).
+ * Every job in that window counts. Jobs from 10 PM–midnight roll into the next
+ * day via the +2h offset in the aggregation.
  */
 function buildIncentiveDailyRows(dailyMetrics, complaintSet, clientJobCounts) {
   const byAdderMap = new Map();
@@ -5831,9 +5831,10 @@ async function syncExtensionDailyRecordsForDate(dateYmd) {
 
   const prevDay = new Date(new Date(`${dateYmd}T00:00:00.000+05:30`).getTime() - 86400000);
   const prevYmd = prevDay.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-  const dayStart = new Date(`${prevYmd}T23:00:00.000+05:30`);
-  const dayEnd = new Date(`${dateYmd}T12:59:59.999+05:30`);
-  const isPastOnePmIst = istHourNow() >= 13;
+  // 24-hour incentive day resets at 10 PM IST: prev day 10 PM → this day 10 PM.
+  const dayStart = new Date(`${prevYmd}T22:00:00.000+05:30`);
+  const dayEnd = new Date(`${dateYmd}T21:59:59.999+05:30`);
+  const isPastTenPmIst = istHourNow() >= 22;
 
   const [results, complaints] = await Promise.all([
     JobModel.aggregate([
@@ -5884,9 +5885,9 @@ async function syncExtensionDailyRecordsForDate(dateYmd) {
     const incentiveAmount = metrics.eligible && !hasComplaint ? metrics.incentiveAmount : 0;
     const existing = await ExtensionDailyIncentiveModel.findOne({ dateYmd, addedBy }).lean();
 
-    let nextStatus = existing?.status || (isPastOnePmIst ? 'approved' : 'pending');
-    if (existing?.status !== 'rejected' && isPastOnePmIst) nextStatus = 'approved';
-    if (existing?.status !== 'approved' && existing?.status !== 'rejected' && !isPastOnePmIst) nextStatus = 'pending';
+    let nextStatus = existing?.status || (isPastTenPmIst ? 'approved' : 'pending');
+    if (existing?.status !== 'rejected' && isPastTenPmIst) nextStatus = 'approved';
+    if (existing?.status !== 'approved' && existing?.status !== 'rejected' && !isPastTenPmIst) nextStatus = 'pending';
 
     await ExtensionDailyIncentiveModel.findOneAndUpdate(
       { dateYmd, addedBy },
@@ -6012,27 +6013,19 @@ const getExtensionJobsReport = async (req, res) => {
                 },
               },
             ],
-            // Day window = 11 PM IST → 1 PM IST next day (14-hour counting window)
-            // Only jobs within this window count for incentives.
-            // +1h offset: 23:xx IST → 00:xx next day IST → correct day assignment.
+            // Day window = 24 hours, resetting at 10 PM IST (10 PM → 10 PM next day).
+            // Every job in the queried range counts for incentives.
+            // +2h offset: 22:xx IST → 00:xx next day IST → correct day assignment.
             dailyMetrics: [
               {
                 $addFields: {
-                  hourIST: {
-                    $hour: { date: '$parsedAt', timezone: 'Asia/Kolkata' },
-                  },
                   dayKey: {
                     $dateToString: {
                       format: '%Y-%m-%d',
-                      date: { $add: ['$parsedAt', 1 * 60 * 60 * 1000] },
+                      date: { $add: ['$parsedAt', 2 * 60 * 60 * 1000] },
                       timezone: 'Asia/Kolkata',
                     },
                   },
-                },
-              },
-              {
-                $match: {
-                  $or: [{ hourIST: { $gte: 23 } }, { hourIST: { $lt: 13 } }],
                 },
               },
               {
@@ -6066,17 +6059,14 @@ const getExtensionJobsReport = async (req, res) => {
                 },
               },
             ],
-            // Per-client job counts — same 11 PM → 1 PM window with +1h offset
+            // Per-client job counts — same 24h window (10 PM reset) with +2h offset
             clientJobCounts: [
               {
                 $addFields: {
-                  hourIST: {
-                    $hour: { date: '$parsedAt', timezone: 'Asia/Kolkata' },
-                  },
                   dayKey: {
                     $dateToString: {
                       format: '%Y-%m-%d',
-                      date: { $add: ['$parsedAt', 1 * 60 * 60 * 1000] },
+                      date: { $add: ['$parsedAt', 2 * 60 * 60 * 1000] },
                       timezone: 'Asia/Kolkata',
                     },
                   },
@@ -6098,7 +6088,6 @@ const getExtensionJobsReport = async (req, res) => {
               {
                 $match: {
                   _clientKey: { $nin: [null, ''] },
-                  $or: [{ hourIST: { $gte: 23 } }, { hourIST: { $lt: 13 } }],
                 },
               },
               {
@@ -7968,8 +7957,8 @@ const syncClientNumbersToOnboardingJobs = async () => {
 };
 
 /**
- * Daily incentive cron job — runs at 1:00 PM IST (07:30 UTC).
- * Counting window: yesterday 11:00 PM IST → today 12:59 PM IST (14 hours).
+ * Daily incentive cron job — runs at 10:00 PM IST (16:30 UTC), when the day closes.
+ * Counting window: yesterday 10:00 PM IST → today 10:00 PM IST (24 hours).
  * Calculates qualified clients (20+ jobs) per operator and upserts to DB.
  */
 async function runDailyIncentiveSnapshot() {
@@ -7977,14 +7966,14 @@ async function runDailyIncentiveSnapshot() {
   console.log(`[Incentive Cron] Running daily incentive snapshot for ${dateYmd}`);
 
   try {
-    // Day window = yesterday 11 PM IST → today 12:59:59 PM IST (14-hour window)
-    // This matches the +1h offset and hourIST filter used in the report aggregation
+    // Day window = yesterday 10 PM IST → today 10 PM IST (24-hour window).
+    // Matches the +2h offset used in the report aggregation.
     const prevDay = new Date(new Date(`${dateYmd}T00:00:00.000+05:30`).getTime() - 86400000);
     const prevYmd = prevDay.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    const dayStart = new Date(`${prevYmd}T23:00:00.000+05:30`);
-    const dayEnd = new Date(`${dateYmd}T12:59:59.999+05:30`);
+    const dayStart = new Date(`${prevYmd}T22:00:00.000+05:30`);
+    const dayEnd = new Date(`${dateYmd}T21:59:59.999+05:30`);
 
-    // Aggregate: per operator, per client, count jobs in this 11PM-1PM window
+    // Aggregate: per operator, per client, count jobs in this 24h (10 PM reset) window
     const results = await JobModel.aggregate([
       ...buildExtensionJobsParsedRangeStages({ start: dayStart, end: dayEnd }),
       {
@@ -8465,9 +8454,9 @@ if (DISCORD_ZERO_SAVED_WEBHOOK) {
   console.warn('⚠️ [Zero Saved Reminder] DISCORD_ZERO_SAVED is not set; reminders are disabled');
 }
 
-      // Daily incentive snapshot: 1:00 PM IST (07:30 UTC)
-      cron.schedule('30 7 * * *', runDailyIncentiveSnapshot);
-      console.log('📬 [Incentive Cron] Scheduled for 1:00 PM IST daily');
+      // Daily incentive snapshot: 10:00 PM IST (16:30 UTC) — when the 24h day closes
+      cron.schedule('30 16 * * *', runDailyIncentiveSnapshot);
+      console.log('📬 [Incentive Cron] Scheduled for 10:00 PM IST daily');
 
       // Client milestone email cron: once daily at 9:00 PM IST (21:00 Asia/Kolkata).
       // node-cron v4 — `scheduled: true` is default, but set explicit for clarity.
