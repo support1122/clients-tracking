@@ -8400,11 +8400,14 @@ async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}
   const tookMs = Date.now() - startedAt;
   console.log(`[Client Milestones] sweep done in ${tookMs}ms processed=${summary.processed} sent=${summary.sent} failed=${summary.failed} skipped=${summary.skipped} errors=${summary.errors}`);
 
-  // Post a beautified Discord summary (skips silent no-op runs internally).
+  // Post a beautified Discord summary. The daily 9 PM runs (cron / external-cron)
+  // ALWAYS post — a heartbeat even on quiet days ("no milestone emails due") and
+  // on errors. Other triggers (boot redeploy, admin) stay quiet on no-op runs.
   // Never let a notification failure affect the sweep result.
   try {
     const sender = await getActiveGmailSender();
-    await notifyMilestoneSweep({ ...summary, tookMs }, { trigger, senderEmail: sender?.email });
+    const isDaily = trigger === 'cron' || trigger === 'external-cron';
+    await notifyMilestoneSweep({ ...summary, tookMs }, { trigger, senderEmail: sender?.email, always: isDaily });
   } catch (e) {
     console.error('[Client Milestones] discord summary failed:', e?.message || e);
   }

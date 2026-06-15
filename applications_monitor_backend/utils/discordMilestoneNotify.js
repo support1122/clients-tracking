@@ -106,13 +106,15 @@ export async function notifyGmailAuthError({ error, senderEmail, recipient, cate
  * @param {Object} summary - { processed, sent, failed, skipped, errors, tookMs, details[] }
  * @param {Object} [opts]  - { trigger, senderEmail }
  */
-export async function notifyMilestoneSweep(summary = {}, { trigger = 'cron', senderEmail } = {}) {
+export async function notifyMilestoneSweep(summary = {}, { trigger = 'cron', senderEmail, always = false } = {}) {
   const details = Array.isArray(summary.details) ? summary.details : [];
   const failures = details.filter((d) => d && (d.status === 'failed' || d.status === 'error'));
   const sent = summary.sent || 0;
 
-  // Nothing happened and nothing broke → don't ping.
-  if (!sent && !failures.length) return;
+  // Nothing happened and nothing broke → only ping when `always` (the daily
+  // 9 PM run wants a heartbeat even on quiet days). Other triggers (boot,
+  // admin) stay quiet on no-op runs.
+  if (!sent && !failures.length && !always) return;
 
   const hasAuth = failures.some((f) => isGmailAuthError(f.error));
   const failCount = (summary.failed || 0) + (summary.errors || 0);
@@ -121,9 +123,12 @@ export async function notifyMilestoneSweep(summary = {}, { trigger = 'cron', sen
   if (failures.length) {
     statusLine = hasAuth ? '🔐 Auth error — emails NOT sending' : '⚠️ Completed with failures';
     color = hasAuth ? 0xef4444 : 0xf59e0b; // red / amber
-  } else {
+  } else if (sent) {
     statusLine = '✅ Completed';
     color = 0x22c55e; // green
+  } else {
+    statusLine = '🟢 No milestone emails due today';
+    color = 0x3b82f6; // blue — quiet, healthy day
   }
 
   const fields = [
@@ -146,6 +151,14 @@ export async function notifyMilestoneSweep(summary = {}, { trigger = 'cron', sen
     fields.push({
       name: `Failures (${failures.length})`,
       value: (lines.join('\n') + extra).slice(0, 1024),
+      inline: false,
+    });
+  }
+
+  if (!sent && !failures.length) {
+    fields.push({
+      name: 'Result',
+      value: `No client reached a new milestone today — checked ${summary.processed || 0} active client(s), all caught up. No emails were due.`,
       inline: false,
     });
   }
