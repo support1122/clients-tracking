@@ -645,7 +645,7 @@ export default function ExtensionJobsReport() {
             <h1 className="text-3xl font-bold tracking-tight text-gray-900 sm:text-4xl">Extension Jobs</h1>
             <p className="mt-2 max-w-3xl text-sm text-gray-600 sm:text-base">
               Track jobs added from the extension, see operator productivity, and review daily incentives.
-              Incentive days use the 11:00 PM IST to 12:59 PM IST counting window.
+              Incentive days use a 24-hour counting window that resets at 10:00 PM IST.
             </p>
           </div>
           <button
@@ -939,7 +939,7 @@ export default function ExtensionJobsReport() {
             <div className="mb-8 rounded-3xl border border-gray-200 bg-white shadow-sm">
               <SectionHeading
                 title="Incentive records"
-                description="Pending rows can be approved or rejected before 1 PM IST. If no action is taken, they auto-approve after 1 PM and can still be rejected later if a complaint comes in."
+                description="Pending rows can be approved or rejected before 10 PM IST. If no action is taken, they auto-approve after 10 PM and can still be rejected later if a complaint comes in."
                 action={<button type="button" onClick={applyHistoryFilters} className="rounded-lg bg-orange-600 px-3 py-2 text-xs font-semibold text-white hover:bg-orange-700">Refresh records</button>}
               />
               <div className="border-b border-gray-100 px-6 py-4">
