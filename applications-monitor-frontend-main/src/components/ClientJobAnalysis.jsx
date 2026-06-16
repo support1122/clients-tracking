@@ -648,7 +648,7 @@ export default function ClientJobAnalysis() {
     // Attach derived cap/status math once per data change so per-render row
     // output stays cheap.
     return sorted.map((r) => ({ ...r, _d: computeRowDerived(r) }));
-  }, [rows, date, sortDir, lastAppliedByFilter, getSortingNumber]);
+  }, [rows, date, sortDir, lastAppliedByFilter, searchQuery, getSortingNumber]);
 
   // ── Chunked rendering: mount ROW_CHUNK rows at a time, growing as a sentinel
   // scrolls into view. Bounds initial paint cost + DOM size for big tables. ──
