@@ -19,6 +19,8 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 
 const DASHBOARD_BASE = (import.meta.env.VITE_DASHBOARD_BASE || 'http://localhost:8086').replace(/\/+$/, '');
+// Main client portal — used to deep-link a removed job card open (?jobId=<id>).
+const PORTAL_BASE = (import.meta.env.VITE_PORTAL_BASE || 'https://portal.flashfirejobs.com').replace(/\/+$/, '');
 
 const FILTER_LABELS = {
     all: 'All',
@@ -327,13 +329,14 @@ export default function AdminSummariesPage() {
                     <PricingCard />
 
                     {/* STAT TILES */}
-                    <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mt-5">
+                    <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mt-5">
                         <StatTile label="Clients" value={totals.clients} />
                         <StatTile label="Summaries built" value={totals.withSummary} sub={`${coverage}% coverage`} accent="emerald" />
                         <StatTile label="Missing summary" value={totals.withoutSummary} sub="needs build" accent="amber" />
                         <StatTile label="Profile changed" value={totals.stale || 0} sub="needs rebuild" accent="orange" />
                         <StatTile label="Ops today" value={totals.opsToday || 0} sub={`${totals.opsTotal} lifetime`} accent="blue" />
                         <StatTile label="LinkedIn skipped" value={totals.linkedinSkippedTotal || 0} sub="ext sessions" accent="rose" />
+                        <StatTile label="Removed by AI" value={totals.removedByAITotal || 0} sub={`${totals.removedTotal || 0} removed total`} accent="rose" />
                     </div>
 
                     {/* TOP OPERATORS — who pushed how many today + lifetime */}
@@ -514,6 +517,40 @@ function ClientDetailPane({ row, onProfileChanged }) {
     const [sourcesDraft, setSourcesDraft] = useState(['jobright']);
     const [savedSources, setSavedSources] = useState(['jobright']);
     const [savingSources, setSavingSources] = useState(false);
+    // "See AI reasons to remove" modal — lists AI-removed jobs (top 5/page).
+    const [showAiRemoved, setShowAiRemoved] = useState(false);
+    const [aiRemoved, setAiRemoved] = useState({ jobs: [], total: 0, totalPages: 1, page: 1 });
+    const [aiRemovedLoading, setAiRemovedLoading] = useState(false);
+    const [aiRemovedError, setAiRemovedError] = useState(null);
+    const AI_REMOVED_PAGE_SIZE = 5;
+
+    async function loadAiRemoved(page = 1) {
+        setAiRemovedLoading(true);
+        setAiRemovedError(null);
+        try {
+            const url = `${DASHBOARD_BASE}/ai-removed-jobs?email=${encodeURIComponent(row.email)}&page=${page}&limit=${AI_REMOVED_PAGE_SIZE}`;
+            const r = await fetch(url);
+            const body = await r.json().catch(() => null);
+            if (!r.ok || !body?.success) {
+                throw new Error(body?.message || `HTTP ${r.status}`);
+            }
+            setAiRemoved({
+                jobs: Array.isArray(body.jobs) ? body.jobs : [],
+                total: body.total || 0,
+                totalPages: body.totalPages || 1,
+                page: body.page || page,
+            });
+        } catch (e) {
+            setAiRemovedError(e.message || 'Failed to load');
+            setAiRemoved({ jobs: [], total: 0, totalPages: 1, page: 1 });
+        } finally {
+            setAiRemovedLoading(false);
+        }
+    }
+    function openAiRemoved() {
+        setShowAiRemoved(true);
+        loadAiRemoved(1);
+    }
     function showMessage(text, kind = 'ok') {
         setMessage({ text, kind });
         setError(null);
@@ -864,6 +901,23 @@ function ClientDetailPane({ row, onProfileChanged }) {
                         {savingSources ? 'Saving…' : 'Save sources'}
                     </button>
                 </div>
+                {/* AI removal reasons — opens a modal listing jobs the second-stage
+                    screening (or exclusion AI) removed, with the reason + a deep
+                    link into the main portal job card. */}
+                <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+                    <button
+                        type="button"
+                        onClick={openAiRemoved}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-rose-200 bg-rose-50 text-rose-700 font-medium hover:bg-rose-100 transition"
+                    >
+                        🛡️ See AI reasons to remove
+                    </button>
+                    <div className="text-xs text-slate-500">
+                        Removed <span className="font-semibold text-slate-700">{row.removed ?? 0}</span>
+                        <span className="mx-1">·</span>
+                        by AI <span className="font-semibold text-rose-700">{row.removedByAI ?? 0}</span>
+                    </div>
+                </div>
             </div>
 
             {/* Target cap */}
@@ -1095,6 +1149,90 @@ function ClientDetailPane({ row, onProfileChanged }) {
             {/* Per-client OpenAI key card removed — single global key now lives
                 in the page header. Extension falls back to that global key
                 whenever a client profile doesn't carry its own. */}
+
+            {/* AI removal reasons modal — top 5 per page, deep-links to portal */}
+            {showAiRemoved && (
+                <div
+                    className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+                    onClick={() => setShowAiRemoved(false)}
+                >
+                    <div
+                        className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="px-6 py-4 border-b border-slate-200 bg-rose-50 flex items-center justify-between">
+                            <div>
+                                <h3 className="text-lg font-bold text-rose-800">🛡️ AI reasons to remove</h3>
+                                <p className="text-xs text-slate-600 mt-0.5">
+                                    {row.email} · {aiRemoved.total} job{aiRemoved.total === 1 ? '' : 's'} removed by AI
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setShowAiRemoved(false)}
+                                className="text-slate-400 hover:text-slate-700 text-xl leading-none"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="p-5 space-y-3 overflow-y-auto">
+                            {aiRemovedLoading ? (
+                                <div className="text-center text-slate-500 py-8 text-sm">Loading…</div>
+                            ) : aiRemovedError ? (
+                                <div className="text-center text-rose-600 py-8 text-sm">{aiRemovedError}</div>
+                            ) : aiRemoved.jobs.length === 0 ? (
+                                <div className="text-center text-slate-500 py-8 text-sm">No AI-removed jobs for this client.</div>
+                            ) : (
+                                aiRemoved.jobs.map((j) => (
+                                    <div key={j._id} className="border border-slate-200 rounded-xl p-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="font-semibold text-slate-900 truncate">{j.jobTitle || '(untitled)'}</div>
+                                                <div className="text-xs text-slate-500 truncate">{j.companyName}</div>
+                                            </div>
+                                            <a
+                                                href={`${PORTAL_BASE}/?tab=jobtracker&jobId=${encodeURIComponent(j.jobID)}`}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                                            >
+                                                Open card ↗
+                                            </a>
+                                        </div>
+                                        <p className="mt-2 text-sm text-rose-700 bg-rose-50 border-l-4 border-rose-300 rounded-r px-3 py-2">
+                                            {j.removalReason || j.secondJudgeReason || 'Removed by AI'}
+                                        </p>
+                                        <div className="mt-1.5 flex items-center gap-3 text-[11px] text-slate-400">
+                                            {j.secondJudgeScore != null && <span>score {j.secondJudgeScore}</span>}
+                                            {j.removalDate && <span>{j.removalDate}</span>}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+
+                        {aiRemoved.totalPages > 1 && (
+                            <div className="px-6 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+                                <button
+                                    onClick={() => loadAiRemoved(aiRemoved.page - 1)}
+                                    disabled={aiRemovedLoading || aiRemoved.page <= 1}
+                                    className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 bg-white disabled:opacity-40"
+                                >
+                                    ← Prev
+                                </button>
+                                <span className="text-xs text-slate-500">Page {aiRemoved.page} of {aiRemoved.totalPages}</span>
+                                <button
+                                    onClick={() => loadAiRemoved(aiRemoved.page + 1)}
+                                    disabled={aiRemovedLoading || aiRemoved.page >= aiRemoved.totalPages}
+                                    className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 bg-white disabled:opacity-40"
+                                >
+                                    Next →
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

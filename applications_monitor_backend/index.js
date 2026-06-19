@@ -3445,7 +3445,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const pLA = await pGetAnalysisCache('__lastAppliedOperator__');
       if (pLA && pLA.fresh) cachedLastApplied = pLA.val;
     }
-    const [overall, appliedOnDate, removedOnDate, lastAppliedAgg, clientInfo] = await Promise.all([
+    const [overall, appliedOnDate, removedOnDate, removedByAiOnDate, lastAppliedAgg, clientInfo] = await Promise.all([
       // 1) Overall counts per client, grouped on the RAW status. No regex/$switch
       //    in the pipeline — Mongo can satisfy this from the { userID:1, currentStatus:1 }
       //    index (covered scan, no document fetch). Buckets are folded in JS below.
@@ -3467,6 +3467,22 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
             $match: {
               $and: [
                 { $or: [{ currentStatus: { $regex: /delete/i } }, { currentStatus: { $regex: /removed/i } }] },
+                { updatedAt: { $regex: multiFormatDateRegex } }
+              ]
+            }
+          },
+          { $group: { _id: "$userID", count: { $sum: 1 } } },
+          { $project: { _id: 0, userID: "$_id", count: 1 } }
+        ])
+        : Promise.resolve([]),
+      // 3b) AI-removed-on-date per client (only if date provided). Mirrors (3)
+      //     but restricted to removedBy:'AI' (second judge + exclusion AI).
+      multiFormatDateRegex
+        ? JobModel.aggregate([
+          {
+            $match: {
+              $and: [
+                { $or: [{ removedBy: 'AI' }, { currentStatus: { $regex: /by ai\s*$/i } }] },
                 { updatedAt: { $regex: multiFormatDateRegex } }
               ]
             }
@@ -3506,6 +3522,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
+    const removedByAiMap = new Map(removedByAiOnDate.map(r => [r.userID, r.count]));
     // Fold raw {userID,status} groups into per-user bucket counts (JS, cheap).
     const overallMap = new Map();
     for (const g of overall) {
@@ -3515,6 +3532,12 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       let counts = overallMap.get(userID);
       if (!counts) { counts = {}; overallMap.set(userID, counts); }
       counts[bucket] = (counts[bucket] || 0) + g.count;
+      // Track the AI-removed subset separately (currentStatus "… by AI" — set
+      // by the second judge + exclusion reconciliation) so the CRM can show
+      // "Removed" and "Removed by AI" as distinct columns.
+      if (bucket === 'deleted' && /by ai\s*$/i.test(String(g._id?.status || ''))) {
+        counts.deletedByAI = (counts.deletedByAI || 0) + g.count;
+      }
     }
     const lastAppliedOperatorMap = new Map(
       lastAppliedAgg.map((r) => [
@@ -3577,6 +3600,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const client = clientMap.get(email) || {};
       const referralMeta = referralMap.get(email.toLowerCase()) || {};
       const removedCount = multiFormatDateRegex ? (removedMap.get(email) || 0) : (counts.deleted || 0);
+      const removedByAICount = multiFormatDateRegex ? (removedByAiMap.get(email) || 0) : (counts.deletedByAI || 0);
       return {
         email,
         name: client.name || email,
@@ -3607,6 +3631,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         offer: counts.offer || 0,
         rejected: counts.rejected || 0,
         removed: removedCount,
+        removedByAI: removedByAICount,
         appliedOnDate: appliedMap.get(email) || 0
       };
     });
