@@ -774,6 +774,7 @@ export default function ClientJobAnalysis() {
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Offer</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Rejected</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Removed</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-rose-700" title="Of the removed jobs, how many were removed by AI (second-stage screening / exclusion).">Removed by AI</th>
                 {isAdmin && (
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700" title="Admin: trigger internal JR scraper for this client. Completion + errors post to Discord.">
                     Scrape
@@ -823,7 +824,7 @@ export default function ClientJobAnalysis() {
                 ))
               ) : processedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdmin ? 17 : 16} className="px-2 py-8 text-center text-gray-500 text-sm">
+                  <td colSpan={isAdmin ? 18 : 17} className="px-2 py-8 text-center text-gray-500 text-sm">
                     {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
                   </td>
                 </tr>
@@ -1019,6 +1020,7 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1 text-right">{r.offer}</td>
                     <td className="px-2 py-1 text-right">{r.rejected}</td>
                     <td className="px-2 py-1 text-right">{r.removed}</td>
+                  <td className="px-2 py-1 text-right font-semibold text-rose-700">{r.removedByAI || 0}</td>
                     {isAdmin && (
                       <td className="px-2 py-1">
                         <div className="flex items-center gap-1">
@@ -1078,7 +1080,7 @@ export default function ClientJobAnalysis() {
               {/* Sentinel: when scrolled near, mount the next chunk of rows. */}
               {visibleRows.length < processedRows.length && (
                 <tr ref={loadMoreRef}>
-                  <td colSpan={isAdmin ? 17 : 16} className="px-2 py-3 text-center text-[11px] text-gray-400">
+                  <td colSpan={isAdmin ? 18 : 17} className="px-2 py-3 text-center text-[11px] text-gray-400">
                     Loading more… ({visibleRows.length}/{processedRows.length})
                   </td>
                 </tr>
