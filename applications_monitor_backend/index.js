@@ -530,7 +530,7 @@ const cleanupSessionKeys = async () => {
 // Session cleanup runs after dbReady (see server start below), not on a blind timer
 //get all the jobdatabase data..
 const getAllJobs = async (req, res) => {
-  const jobDB = await JobModel.find().select('-jobDescription').lean();
+  const jobDB = await JobModel.find({ operatorEmail: req.body.email }).select('-jobDescription').lean();
   res.status(200).json({ jobDB });
 }
 
@@ -997,9 +997,9 @@ export const createOrUpdateClient = async (req, res) => {
         await addClientActionToJobMoveHistory(emailLower, 'client_unpaused', movedBy);
       }
       const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
-      if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined) {
+      if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined || req.body.status !== undefined) {
         clearAnalysisCache();
-      pClearAnalysisCache().catch(() => {});
+        pClearAnalysisCache().catch(() => {});
       }
       return res.status(200).json({
         message: "🔄 Client fields updated successfully",
@@ -1066,7 +1066,7 @@ export const createOrUpdateClient = async (req, res) => {
       );
     }
     const updatedClientsTracking = await ClientModel.findOne({ email: emailLower }).lean();
-    if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined) {
+    if (req.body.isPaused !== undefined || req.body.onboardingPhase !== undefined || req.body.dashboardTeamLeadName !== undefined || req.body.status !== undefined) {
       clearAnalysisCache();
       pClearAnalysisCache().catch(() => {});
     }

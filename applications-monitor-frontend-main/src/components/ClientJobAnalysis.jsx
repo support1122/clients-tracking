@@ -101,6 +101,7 @@ export default function ClientJobAnalysis() {
   const batchSourceRef = useRef(null); // active EventSource
   const [userRole, setUserRole] = useState(null);
   const [lastAppliedByFilter, setLastAppliedByFilter] = useState(''); // Filter for "Last applied by" operator name
+  const [searchQuery, setSearchQuery] = useState('');
   const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
   const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
   const [savingClientNumber, setSavingClientNumber] = useState(false);
@@ -619,6 +620,16 @@ export default function ClientJobAnalysis() {
       const filterLower = lastAppliedByFilter.toLowerCase();
       filtered = rows.filter(r => (r.lastAppliedOperatorName || '').toLowerCase() === filterLower);
     }
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      filtered = filtered.filter(r => {
+        const num = r.clientNumber != null ? String(r.clientNumber) : '';
+        const name = (r.name || '').toLowerCase();
+        const email = (r.email || '').toLowerCase();
+        const label = formatClientLabel(r).toLowerCase();
+        return num.includes(q) || name.includes(q) || email.includes(q) || label.includes(q);
+      });
+    }
     const sorted = [...filtered].sort((a, b) => {
       if (date) {
         const av = Number(a?.appliedOnDate || 0);
@@ -637,7 +648,7 @@ export default function ClientJobAnalysis() {
     // Attach derived cap/status math once per data change so per-render row
     // output stays cheap.
     return sorted.map((r) => ({ ...r, _d: computeRowDerived(r) }));
-  }, [rows, date, sortDir, lastAppliedByFilter, getSortingNumber]);
+  }, [rows, date, sortDir, lastAppliedByFilter, searchQuery, getSortingNumber]);
 
   // ── Chunked rendering: mount ROW_CHUNK rows at a time, growing as a sentinel
   // scrolls into view. Bounds initial paint cost + DOM size for big tables. ──
@@ -691,6 +702,25 @@ export default function ClientJobAnalysis() {
         <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-3 flex-wrap">
           <h1 className="text-xl font-semibold text-gray-900">Client Job Analysis</h1>
           <div className="ml-auto flex items-center gap-2 flex-wrap">
+            <div className="relative">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by name, #, email…"
+                className="pl-7 pr-7 py-1 text-xs border border-gray-300 rounded-md w-52 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+              <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" /></svg>
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              )}
+            </div>
             <label className="text-xs text-gray-700">Select Date:</label>
             <input
               type="date"
@@ -825,7 +855,7 @@ export default function ClientJobAnalysis() {
               ) : processedRows.length === 0 ? (
                 <tr>
                   <td colSpan={isAdmin ? 18 : 17} className="px-2 py-8 text-center text-gray-500 text-sm">
-                    {lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
+                    {searchQuery.trim() ? `No clients match "${searchQuery}"` : lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
                   </td>
                 </tr>
               ) : visibleRows.map((r, idx) => {
