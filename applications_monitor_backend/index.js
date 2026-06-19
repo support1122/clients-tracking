@@ -3445,7 +3445,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const pLA = await pGetAnalysisCache('__lastAppliedOperator__');
       if (pLA && pLA.fresh) cachedLastApplied = pLA.val;
     }
-    const [overall, appliedOnDate, removedOnDate, removedByAiOnDate, lastAppliedAgg, clientInfo] = await Promise.all([
+    const [overall, appliedOnDate, removedOnDate, removedByAiOnDate, lastAppliedAgg, clientInfo, flaggedAgg] = await Promise.all([
       // 1) Overall counts per client, grouped on the RAW status. No regex/$switch
       //    in the pipeline — Mongo can satisfy this from the { userID:1, currentStatus:1 }
       //    index (covered scan, no document fetch). Buckets are folded in JS below.
@@ -3511,7 +3511,14 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       // 5) Client info — runs in parallel with aggregations (no dependency)
       ClientModel.find({})
         .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt clientCountry')
-        .lean()
+        .lean(),
+      // 6) AI second-stage FLAGS per client (secondJudge.status:'failed') —
+      //    advisory flags the AI raised; the job is KEPT, not removed.
+      JobModel.aggregate([
+        { $match: { 'secondJudge.status': 'failed' } },
+        { $group: { _id: '$userID', count: { $sum: 1 } } },
+        { $project: { _id: 0, userID: '$_id', count: 1 } }
+      ])
     ]);
 
     // Cache last-applied operator separately with longer TTL (5 min)
@@ -3523,6 +3530,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const removedByAiMap = new Map(removedByAiOnDate.map(r => [r.userID, r.count]));
+    const flaggedMap = new Map((flaggedAgg || []).map(r => [r.userID, r.count]));
     // Fold raw {userID,status} groups into per-user bucket counts (JS, cheap).
     const overallMap = new Map();
     for (const g of overall) {
@@ -3632,6 +3640,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         rejected: counts.rejected || 0,
         removed: removedCount,
         removedByAI: removedByAICount,
+        flaggedByAI: flaggedMap.get(email) || 0,
         appliedOnDate: appliedMap.get(email) || 0
       };
     });

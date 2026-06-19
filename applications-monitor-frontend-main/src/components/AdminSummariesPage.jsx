@@ -336,7 +336,7 @@ export default function AdminSummariesPage() {
                         <StatTile label="Profile changed" value={totals.stale || 0} sub="needs rebuild" accent="orange" />
                         <StatTile label="Ops today" value={totals.opsToday || 0} sub={`${totals.opsTotal} lifetime`} accent="blue" />
                         <StatTile label="LinkedIn skipped" value={totals.linkedinSkippedTotal || 0} sub="ext sessions" accent="rose" />
-                        <StatTile label="Removed by AI" value={totals.removedByAITotal || 0} sub={`${totals.removedTotal || 0} removed total`} accent="rose" />
+                        <StatTile label="AI flagged" value={totals.flaggedByAITotal || 0} sub={`${totals.removedTotal || 0} removed total`} accent="amber" />
                     </div>
 
                     {/* TOP OPERATORS — who pushed how many today + lifetime */}
@@ -910,12 +910,12 @@ function ClientDetailPane({ row, onProfileChanged }) {
                         onClick={openAiRemoved}
                         className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-rose-200 bg-rose-50 text-rose-700 font-medium hover:bg-rose-100 transition"
                     >
-                        🛡️ See AI reasons to remove
+                        🛡️ See AI flags
                     </button>
                     <div className="text-xs text-slate-500">
                         Removed <span className="font-semibold text-slate-700">{row.removed ?? 0}</span>
                         <span className="mx-1">·</span>
-                        by AI <span className="font-semibold text-rose-700">{row.removedByAI ?? 0}</span>
+                        AI flagged <span className="font-semibold text-amber-700">{row.flaggedByAI ?? 0}</span>
                     </div>
                 </div>
             </div>
@@ -1162,9 +1162,9 @@ function ClientDetailPane({ row, onProfileChanged }) {
                     >
                         <div className="px-6 py-4 border-b border-slate-200 bg-rose-50 flex items-center justify-between">
                             <div>
-                                <h3 className="text-lg font-bold text-rose-800">🛡️ AI reasons to remove</h3>
+                                <h3 className="text-lg font-bold text-rose-800">🛡️ AI second-stage flags</h3>
                                 <p className="text-xs text-slate-600 mt-0.5">
-                                    {row.email} · {aiRemoved.total} job{aiRemoved.total === 1 ? '' : 's'} removed by AI
+                                    {row.email} · {aiRemoved.total} job{aiRemoved.total === 1 ? '' : 's'} flagged by AI (kept — operator decides)
                                 </p>
                             </div>
                             <button

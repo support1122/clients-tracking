@@ -804,7 +804,7 @@ export default function ClientJobAnalysis() {
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Offer</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Rejected</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Removed</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-rose-700" title="Of the removed jobs, how many were removed by AI (second-stage screening / exclusion).">Removed by AI</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-amber-700" title="Jobs the AI second-stage screening flagged for operator review (location/closed). The job is KEPT — not removed.">AI flagged</th>
                 {isAdmin && (
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700" title="Admin: trigger internal JR scraper for this client. Completion + errors post to Discord.">
                     Scrape
@@ -1050,7 +1050,7 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1 text-right">{r.offer}</td>
                     <td className="px-2 py-1 text-right">{r.rejected}</td>
                     <td className="px-2 py-1 text-right">{r.removed}</td>
-                  <td className="px-2 py-1 text-right font-semibold text-rose-700">{r.removedByAI || 0}</td>
+                  <td className="px-2 py-1 text-right font-semibold text-amber-700">{r.flaggedByAI || 0}</td>
                     {isAdmin && (
                       <td className="px-2 py-1">
                         <div className="flex items-center gap-1">
