@@ -329,13 +329,14 @@ export default function AdminSummariesPage() {
                     <PricingCard />
 
                     {/* STAT TILES */}
-                    <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mt-5">
+                    <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mt-5">
                         <StatTile label="Clients" value={totals.clients} />
                         <StatTile label="Summaries built" value={totals.withSummary} sub={`${coverage}% coverage`} accent="emerald" />
                         <StatTile label="Missing summary" value={totals.withoutSummary} sub="needs build" accent="amber" />
                         <StatTile label="Profile changed" value={totals.stale || 0} sub="needs rebuild" accent="orange" />
                         <StatTile label="Ops today" value={totals.opsToday || 0} sub={`${totals.opsTotal} lifetime`} accent="blue" />
                         <StatTile label="LinkedIn skipped" value={totals.linkedinSkippedTotal || 0} sub="ext sessions" accent="rose" />
+                        <StatTile label="Removed by AI" value={totals.removedByAITotal || 0} sub={`${totals.removedTotal || 0} removed total`} accent="rose" />
                     </div>
 
                     {/* TOP OPERATORS — who pushed how many today + lifetime */}
@@ -903,7 +904,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                 {/* AI removal reasons — opens a modal listing jobs the second-stage
                     screening (or exclusion AI) removed, with the reason + a deep
                     link into the main portal job card. */}
-                <div className="mt-4 pt-4 border-t border-slate-100">
+                <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap">
                     <button
                         type="button"
                         onClick={openAiRemoved}
@@ -911,6 +912,11 @@ function ClientDetailPane({ row, onProfileChanged }) {
                     >
                         🛡️ See AI reasons to remove
                     </button>
+                    <div className="text-xs text-slate-500">
+                        Removed <span className="font-semibold text-slate-700">{row.removed ?? 0}</span>
+                        <span className="mx-1">·</span>
+                        by AI <span className="font-semibold text-rose-700">{row.removedByAI ?? 0}</span>
+                    </div>
                 </div>
             </div>
 
