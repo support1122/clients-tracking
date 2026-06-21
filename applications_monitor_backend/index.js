@@ -3515,7 +3515,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       // 6) AI second-stage FLAGS per client (secondJudge.status:'failed') —
       //    advisory flags the AI raised; the job is KEPT, not removed.
       JobModel.aggregate([
-        { $match: { 'secondJudge.status': 'failed' } },
+        { $match: { 'secondJudge.status': 'failed', currentStatus: { $not: /^(deleted|removed)/i } } },
         { $group: { _id: '$userID', count: { $sum: 1 } } },
         { $project: { _id: 0, userID: '$_id', count: 1 } }
       ])
