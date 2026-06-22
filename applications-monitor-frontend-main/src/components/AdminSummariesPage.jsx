@@ -510,6 +510,17 @@ function ClientDetailPane({ row, onProfileChanged }) {
     const [savingTarget, setSavingTarget] = useState(false);
     const [notes, setNotes] = useState(null);
     const [notesDraft, setNotesDraft] = useState('');
+    // Point-adder: pick Skip/Scrap + text → appends a canonical "SKIP:/SCRAP:"
+    // line so polarity is explicit (the builder treats the prefix as final).
+    const [noteType, setNoteType] = useState('scrap');
+    const [notePoint, setNotePoint] = useState('');
+    function addNotePoint() {
+        const t = notePoint.trim();
+        if (!t) return;
+        const line = `${noteType.toUpperCase()}: ${t}`;
+        setNotesDraft((d) => (d.trim() ? `${d.replace(/\s+$/, '')}\n${line}` : line).slice(0, 4000));
+        setNotePoint('');
+    }
     const [savingNotes, setSavingNotes] = useState(false);
     // Per-client scrape-source allowlist ('jobright' / 'indeed'). JobRight is
     // the default when a client has none saved. Extension only scrapes the
@@ -1010,6 +1021,25 @@ function ClientDetailPane({ row, onProfileChanged }) {
                     </div>
                 </div>
                 <div className="p-4">
+                    {/* Add a point with explicit polarity → appends a SKIP:/SCRAP: line. */}
+                    <div className="flex gap-2 mb-2">
+                        <select
+                            value={noteType}
+                            onChange={(e) => setNoteType(e.target.value)}
+                            className="px-2 py-2 border border-violet-300 rounded-lg bg-white text-sm font-semibold text-slate-800"
+                        >
+                            <option value="scrap">Scrap (want)</option>
+                            <option value="skip">Skip (exclude)</option>
+                        </select>
+                        <input
+                            value={notePoint}
+                            onChange={(e) => setNotePoint(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addNotePoint(); } }}
+                            placeholder="e.g. Business intelligence analyst roles · employers that sponsor · JP Morgan Chase"
+                            className="flex-1 px-3 py-2 border border-violet-300 rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
+                        />
+                        <button onClick={addNotePoint} className="px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-medium hover:bg-violet-700">Add</button>
+                    </div>
                     <textarea
                         value={notesDraft}
                         onChange={(e) => setNotesDraft(e.target.value.slice(0, 4000))}
