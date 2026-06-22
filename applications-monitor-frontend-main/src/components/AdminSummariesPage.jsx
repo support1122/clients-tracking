@@ -551,6 +551,21 @@ function ClientDetailPane({ row, onProfileChanged }) {
         setShowAiRemoved(true);
         loadAiRemoved(1);
     }
+    // Keep (dismiss flag) or Remove the flagged job, then drop it from the list.
+    async function resolveFlag(job, action) {
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/second-judge-flag/resolve`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jobID: job.jobID, email: row.email, action }),
+            });
+            const b = await r.json().catch(() => null);
+            if (!r.ok || !b?.success) throw new Error(b?.message || `HTTP ${r.status}`);
+            setAiRemoved((s) => ({ ...s, jobs: s.jobs.filter((x) => x._id !== job._id), total: Math.max(0, s.total - 1) }));
+        } catch (e) {
+            setAiRemovedError(e.message || 'action failed');
+        }
+    }
     function showMessage(text, kind = 'ok') {
         setMessage({ text, kind });
         setError(null);
@@ -1202,9 +1217,15 @@ function ClientDetailPane({ row, onProfileChanged }) {
                                         <p className="mt-2 text-sm text-rose-700 bg-rose-50 border-l-4 border-rose-300 rounded-r px-3 py-2">
                                             {j.removalReason || j.secondJudgeReason || 'Removed by AI'}
                                         </p>
-                                        <div className="mt-1.5 flex items-center gap-3 text-[11px] text-slate-400">
-                                            {j.secondJudgeScore != null && <span>score {j.secondJudgeScore}</span>}
-                                            {j.removalDate && <span>{j.removalDate}</span>}
+                                        <div className="mt-1.5 flex items-center justify-between gap-3">
+                                            <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                                                {j.secondJudgeScore != null && <span>score {j.secondJudgeScore}</span>}
+                                                {j.removalDate && <span>{j.removalDate}</span>}
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <button onClick={() => resolveFlag(j, 'keep')} className="px-3 py-1 text-xs rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100">Keep</button>
+                                                <button onClick={() => resolveFlag(j, 'remove')} className="px-3 py-1 text-xs rounded-lg border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100">Remove</button>
+                                            </div>
                                         </div>
                                     </div>
                                 ))
