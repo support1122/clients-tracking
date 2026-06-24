@@ -223,6 +223,11 @@ export const ClientSchema = new mongoose.Schema({
     required: false,
     default: []
   },
+  upgradePayments: {
+    type: Array,
+    required: false,
+    default: []
+  },
   paymentEmail: {
     type: String,
     required: false,
