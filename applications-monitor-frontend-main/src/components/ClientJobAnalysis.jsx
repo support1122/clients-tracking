@@ -995,9 +995,14 @@ export default function ClientJobAnalysis() {
                                 Addon: +{addonLimit}
                               </span>
                             )}
-                            {addonLimit > 0 && Array.isArray(r.upgradePayments) && r.upgradePayments.filter(p => p.for?.startsWith('addon_')).length > 0 && (
+                            {Array.isArray(r.upgradePayments) && r.upgradePayments.filter(p => p.for?.startsWith('addon_')).length > 0 && (
                               <span className="text-[10px] text-purple-600 font-medium">
-                                Paid: {r.upgradePayments.filter(p => p.for?.startsWith('addon_')).map(p => `${p.currency} ${p.amount}`).join(', ')}
+                                Addon Paid: {r.upgradePayments.filter(p => p.for?.startsWith('addon_')).map(p => `${p.currency} ${p.amount}`).join(', ')}
+                              </span>
+                            )}
+                            {Array.isArray(r.upgradePayments) && r.upgradePayments.filter(p => p.for?.startsWith('plan_upgrade')).length > 0 && (
+                              <span className="text-[10px] text-indigo-600 font-medium">
+                                Upgrade Paid: {r.upgradePayments.filter(p => p.for?.startsWith('plan_upgrade')).map(p => `${p.currency} ${p.amount}`).join(', ')}
                               </span>
                             )}
                             {referralBonus > 0 && (
