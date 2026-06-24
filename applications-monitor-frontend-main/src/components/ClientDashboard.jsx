@@ -28,6 +28,10 @@ export default function ClientDashboard() {
   const [upgrading, setUpgrading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [selectedAddon, setSelectedAddon] = useState(null);
+  const [upgradePaymentAmount, setUpgradePaymentAmount] = useState('');
+  const [upgradePaymentCurrency, setUpgradePaymentCurrency] = useState('USD');
+  const [addonPaymentAmount, setAddonPaymentAmount] = useState('');
+  const [addonPaymentCurrency, setAddonPaymentCurrency] = useState('USD');
   // Referral Management state
   const [referralUsers, setReferralUsers] = useState([]);
   const [loadingReferralUsers, setLoadingReferralUsers] = useState(false);
@@ -467,6 +471,11 @@ export default function ClientDashboard() {
       return;
     }
 
+    if (!upgradePaymentAmount || isNaN(parseFloat(upgradePaymentAmount)) || parseFloat(upgradePaymentAmount) <= 0) {
+      toast.error('Please enter the amount paid for this upgrade');
+      return;
+    }
+
     setUpgrading(true);
     try {
       const token = localStorage.getItem('authToken');
@@ -477,7 +486,9 @@ export default function ClientDashboard() {
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          planType: selectedPlan
+          planType: selectedPlan,
+          paymentAmount: parseFloat(upgradePaymentAmount),
+          paymentCurrency: upgradePaymentCurrency
         })
       });
 
@@ -486,6 +497,8 @@ export default function ClientDashboard() {
       if (response.ok && data.success) {
         toast.success(`Plan upgraded to ${selectedPlan} successfully!`);
         setSelectedPlan(null);
+        setUpgradePaymentAmount('');
+        setUpgradePaymentCurrency('USD');
         await handleClientSearch(selectedClient);
         await loadAnalyticsData();
       } else {
@@ -502,6 +515,11 @@ export default function ClientDashboard() {
   const handleAddAddon = async () => {
     if (!selectedAddon || !clientDetails) return;
 
+    if (!addonPaymentAmount || isNaN(parseFloat(addonPaymentAmount)) || parseFloat(addonPaymentAmount) <= 0) {
+      toast.error('Please enter the amount paid for this add-on');
+      return;
+    }
+
     setUpgrading(true);
     try {
       const addonPrices = { '250': 120, '500': 200, '1000': 350 };
@@ -516,7 +534,9 @@ export default function ClientDashboard() {
         },
         body: JSON.stringify({
           addonType: selectedAddon,
-          addonPrice: addonPrice
+          addonPrice: addonPrice,
+          paymentAmount: parseFloat(addonPaymentAmount),
+          paymentCurrency: addonPaymentCurrency
         })
       });
 
@@ -525,6 +545,8 @@ export default function ClientDashboard() {
       if (response.ok && data.success) {
         toast.success(`Addon ${selectedAddon} added successfully!`);
         setSelectedAddon(null);
+        setAddonPaymentAmount('');
+        setAddonPaymentCurrency('USD');
         await handleClientSearch(selectedClient);
         await loadAnalyticsData();
       } else {
@@ -1152,6 +1174,29 @@ export default function ClientDashboard() {
                         );
                       })}
                       
+                      <div className="mt-3 space-y-2">
+                        <p className="text-xs font-semibold text-gray-700">Amount Paid <span className="text-red-500">*</span></p>
+                        <div className="flex gap-2">
+                          <select
+                            value={upgradePaymentCurrency}
+                            onChange={(e) => setUpgradePaymentCurrency(e.target.value)}
+                            className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent"
+                          >
+                            <option value="USD">USD</option>
+                            <option value="INR">INR</option>
+                            <option value="CAD">CAD</option>
+                          </select>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="Enter amount"
+                            value={upgradePaymentAmount}
+                            onChange={(e) => setUpgradePaymentAmount(e.target.value)}
+                            className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent"
+                          />
+                        </div>
+                      </div>
+
                       <button
                         onClick={handleUpgradePlan}
                         disabled={!selectedPlan || upgrading || getCurrentPlan()?.value === selectedPlan}
@@ -1222,6 +1267,29 @@ export default function ClientDashboard() {
                         );
                       })}
                       
+                      <div className="mt-3 space-y-2">
+                        <p className="text-xs font-semibold text-gray-700">Amount Paid <span className="text-red-500">*</span></p>
+                        <div className="flex gap-2">
+                          <select
+                            value={addonPaymentCurrency}
+                            onChange={(e) => setAddonPaymentCurrency(e.target.value)}
+                            className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                          >
+                            <option value="USD">USD</option>
+                            <option value="INR">INR</option>
+                            <option value="CAD">CAD</option>
+                          </select>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="Enter amount"
+                            value={addonPaymentAmount}
+                            onChange={(e) => setAddonPaymentAmount(e.target.value)}
+                            className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+                          />
+                        </div>
+                      </div>
+
                       <button
                         onClick={handleAddAddon}
                         disabled={!selectedAddon || upgrading}
