@@ -1182,7 +1182,7 @@ const updateClientDashboardTeamLead = async (req, res) => {
 const upgradeClientPlan = async (req, res) => {
   try {
     const { email } = req.params;
-    const { planType } = req.body;
+    const { planType, paymentAmount, paymentCurrency } = req.body;
 
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required' });
@@ -1190,6 +1190,10 @@ const upgradeClientPlan = async (req, res) => {
 
     if (!planType) {
       return res.status(400).json({ success: false, error: 'Plan type is required' });
+    }
+
+    if (!paymentAmount || !paymentCurrency) {
+      return res.status(400).json({ success: false, error: 'Payment amount and currency are required' });
     }
 
     const emailLower = email.toLowerCase();
@@ -1224,6 +1228,13 @@ const upgradeClientPlan = async (req, res) => {
     const newAmountPaid = currentAmountPaid + upgradeDifference;
 
     const planChanged = String(existingClient.planType || '').toLowerCase() !== planTypeLower;
+    const newUpgradePayment = {
+      amount: parseFloat(paymentAmount),
+      currency: paymentCurrency.toUpperCase(),
+      for: `plan_upgrade_to_${planTypeLower}`,
+      paidAt: currentDate
+    };
+
     const upgradeOps = {
       $set: {
         planType: planTypeLower,
@@ -1231,6 +1242,9 @@ const upgradeClientPlan = async (req, res) => {
         amountPaid: newAmountPaid.toString(),
         amountPaidDate: currentDate,
         updatedAt: currentDate
+      },
+      $push: {
+        upgradePayments: newUpgradePayment
       }
     };
     if (planChanged) {
@@ -1276,7 +1290,7 @@ const upgradeClientPlan = async (req, res) => {
 const addClientAddon = async (req, res) => {
   try {
     const { email } = req.params;
-    const { addonType, addonPrice } = req.body;
+    const { addonType, addonPrice, paymentAmount, paymentCurrency } = req.body;
 
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required' });
@@ -1284,6 +1298,10 @@ const addClientAddon = async (req, res) => {
 
     if (!addonType || !addonPrice) {
       return res.status(400).json({ success: false, error: 'Addon type and price are required' });
+    }
+
+    if (!paymentAmount || !paymentCurrency) {
+      return res.status(400).json({ success: false, error: 'Payment amount and currency are required' });
     }
 
     const emailLower = email.toLowerCase();
@@ -1306,6 +1324,13 @@ const addClientAddon = async (req, res) => {
     const existingAddons = existingClient.addons || [];
     const updatedAddons = [...existingAddons, newAddon];
 
+    const newUpgradePayment = {
+      amount: parseFloat(paymentAmount),
+      currency: paymentCurrency.toUpperCase(),
+      for: `addon_${addonType}`,
+      paidAt: currentDate
+    };
+
     await ClientModel.updateOne(
       { email: emailLower },
       {
@@ -1314,6 +1339,9 @@ const addClientAddon = async (req, res) => {
           amountPaid: newAmountPaid.toString(),
           amountPaidDate: currentDate,
           updatedAt: currentDate
+        },
+        $push: {
+          upgradePayments: newUpgradePayment
         }
       },
       { runValidators: false }
