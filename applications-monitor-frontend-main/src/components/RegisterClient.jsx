@@ -11,7 +11,7 @@ const RegisterClient = () => {
     oldEmail: '',
     password: '',
     confirmPassword: '',
-    planType: 'Free Trial',
+    planType: 'Ignite',
     dashboardManager: '',
     amountPaid: '',
     currency: '$',
@@ -120,7 +120,6 @@ const RegisterClient = () => {
   }, [showForm]);
 
   const planOptions = [
-    { value: 'Free Trial', label: 'Free Trial', description: 'Basic features to get started' },
     { value: 'Ignite', label: 'Ignite', description: 'Perfect for job seekers starting their journey' },
     { value: 'Professional', label: 'Professional', description: 'Advanced features for serious job seekers' },
     { value: 'Executive', label: 'Executive', description: 'Premium features for executive positions' },
@@ -152,6 +151,11 @@ const RegisterClient = () => {
       newErrors.email = 'Email is required';
     } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
       newErrors.email = 'Please enter a valid email address';
+    }
+    if (!formData.oldEmail.trim()) {
+      newErrors.oldEmail = 'Email used in CRM is required to mark the client as paid';
+    } else if (!/\S+@\S+\.\S+/.test(formData.oldEmail)) {
+      newErrors.oldEmail = 'Please enter a valid CRM email address';
     }
     if (!formData.password) {
       newErrors.password = 'Password is required';
@@ -261,12 +265,27 @@ const RegisterClient = () => {
           body: JSON.stringify(microservicePayload),
         });
 
-        if (!microserviceResponse.ok) {
-          console.error('Microservice call failed:', await microserviceResponse.text());
+        const microserviceData = await microserviceResponse.json().catch(() => ({}));
+
+        if (microserviceResponse.ok) {
+          const updated = microserviceData?.data?.updatedCount ?? 0;
+          if (updated > 0) {
+            toastUtils.success(`Marked ${updated} CRM lead(s) as paid`);
+          } else {
+            toastUtils.error(
+              `Client created, but no CRM lead was marked paid. Check the "email used in CRM" matches a lead.`
+            );
+          }
+        } else {
+          console.error('Microservice call failed:', microserviceData);
+          toastUtils.error(
+            `Client created, but CRM paid-sync failed: ${microserviceData?.message || microserviceResponse.statusText}`
+          );
         }
       } catch (microserviceError) {
         console.error('Error calling microservice:', microserviceError);
-        // Don't fail the main registration if microservice call fails
+        // Client creation already succeeded; surface the sync failure so it isn't silent.
+        toastUtils.error('Client created, but CRM paid-sync could not be reached.');
       }
 
       // Sync target-job-count cap to the dashboard backend's ProfileModel
@@ -302,7 +321,7 @@ const RegisterClient = () => {
         oldEmail: "",
         password: "",
         confirmPassword: "",
-        planType: "Free Trial",
+        planType: "Ignite",
         dashboardManager: "",
         amountPaid: "",
         currency: "$",
@@ -513,7 +532,7 @@ const RegisterClient = () => {
                   <button
                     onClick={() => {
                       setShowForm(false);
-                      setFormData({ firstName: '', lastName: '', email: '', oldEmail: '', password: '', confirmPassword: '', planType: 'Free Trial', dashboardManager: '', amountPaid: '', currency: '$', clientNumber: '', paymentEmail: '' });
+                      setFormData({ firstName: '', lastName: '', email: '', oldEmail: '', password: '', confirmPassword: '', planType: 'Ignite', dashboardManager: '', amountPaid: '', currency: '$', clientNumber: '', paymentEmail: '' });
                       setErrors({});
                     }}
                     className="text-gray-400 hover:text-gray-600"
@@ -577,7 +596,7 @@ const RegisterClient = () => {
                       name="oldEmail"
                       value={formData.oldEmail}
                       onChange={handleInputChange}
-                      placeholder="email used in crm"
+                      placeholder="email used in crm (required to mark paid)"
                       className={`w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
                         errors.oldEmail ? 'border-red-400' : 'border-gray-300'
                       }`}
