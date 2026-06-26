@@ -602,7 +602,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
             setDraft(p?.aiSummary || '');
             setTargetDraft(p?.targetJobCount != null ? String(p.targetJobCount) : '');
             const src = Array.isArray(p?.scrapeSources) && p.scrapeSources.length
-                ? p.scrapeSources.map((s) => String(s).toLowerCase()).filter((s) => s === 'jobright' || s === 'indeed')
+                ? p.scrapeSources.map((s) => String(s).toLowerCase()).filter((s) => s === 'jobright' || s === 'indeed' || s === 'reed')
                 : ['jobright'];
             const normalized = src.length ? src : ['jobright'];
             setSourcesDraft(normalized);
@@ -780,7 +780,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
 
     async function saveSources() {
         // Persist in a stable order so the saved/draft comparison is reliable.
-        const ORDER = ['jobright', 'indeed'];
+        const ORDER = ['jobright', 'indeed', 'reed'];
         const ordered = ORDER.filter((s) => sourcesDraft.includes(s));
         if (ordered.length === 0) {
             showError('Select at least one scrape source.');
@@ -887,6 +887,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                     {[
                         { id: 'jobright', label: 'JobRight', host: 'jobright.ai', accent: 'sky' },
                         { id: 'indeed', label: 'ca.indeed', host: 'ca.indeed.com', accent: 'indigo' },
+                        { id: 'reed', label: 'Reed UK', host: 'reed.co.uk', accent: 'rose' },
                     ].map((opt) => {
                         const on = sourcesDraft.includes(opt.id);
                         return (
