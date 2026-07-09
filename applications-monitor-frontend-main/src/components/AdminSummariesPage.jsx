@@ -602,7 +602,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
             setDraft(p?.aiSummary || '');
             setTargetDraft(p?.targetJobCount != null ? String(p.targetJobCount) : '');
             const src = Array.isArray(p?.scrapeSources) && p.scrapeSources.length
-                ? p.scrapeSources.map((s) => String(s).toLowerCase()).filter((s) => s === 'jobright' || s === 'indeed' || s === 'reed')
+                ? p.scrapeSources.map((s) => String(s).toLowerCase()).filter((s) => s === 'jobright' || s === 'indeed')
                 : ['jobright'];
             const normalized = src.length ? src : ['jobright'];
             setSourcesDraft(normalized);
@@ -780,7 +780,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
 
     async function saveSources() {
         // Persist in a stable order so the saved/draft comparison is reliable.
-        const ORDER = ['jobright', 'indeed', 'reed'];
+        const ORDER = ['jobright', 'indeed'];
         const ordered = ORDER.filter((s) => sourcesDraft.includes(s));
         if (ordered.length === 0) {
             showError('Select at least one scrape source.');
@@ -880,14 +880,13 @@ function ClientDetailPane({ row, onProfileChanged }) {
                         </p>
                     </div>
                     <span className={`px-3 py-1 rounded-full text-xs font-bold ${savedSources.length > 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-sky-100 text-sky-700'}`}>
-                        {savedSources.map((s) => (s === 'indeed' ? 'ca.indeed' : 'JobRight')).join(' + ')}
+                        {savedSources.map((s) => (s === 'indeed' ? 'ca.indeed' : s === 'reed' ? 'Reed UK' : 'JobRight')).join(' + ')}
                     </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {[
                         { id: 'jobright', label: 'JobRight', host: 'jobright.ai', accent: 'sky' },
                         { id: 'indeed', label: 'ca.indeed', host: 'ca.indeed.com', accent: 'indigo' },
-                        { id: 'reed', label: 'Reed UK', host: 'reed.co.uk', accent: 'rose' },
                     ].map((opt) => {
                         const on = sourcesDraft.includes(opt.id);
                         return (
@@ -1210,7 +1209,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                             <div>
                                 <h3 className="text-lg font-bold text-rose-800">🛡️ AI second-stage flags</h3>
                                 <p className="text-xs text-slate-600 mt-0.5">
-                                    {row.email} · {aiRemoved.total} job{aiRemoved.total === 1 ? '' : 's'} flagged by AI (kept — operator decides)
+                                    {row.email} · {aiRemoved.total} job{aiRemoved.total === 1 ? '' : 's'} flagged by AI (kept — operator decides). Closed/expired postings are removed automatically and never listed here.
                                 </p>
                             </div>
                             <button
@@ -1227,7 +1226,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                             ) : aiRemovedError ? (
                                 <div className="text-center text-rose-600 py-8 text-sm">{aiRemovedError}</div>
                             ) : aiRemoved.jobs.length === 0 ? (
-                                <div className="text-center text-slate-500 py-8 text-sm">No AI-removed jobs for this client.</div>
+                                <div className="text-center text-slate-500 py-8 text-sm">No AI flags for this client.</div>
                             ) : (
                                 aiRemoved.jobs.map((j) => (
                                     <div key={j._id} className="border border-slate-200 rounded-xl p-4">
