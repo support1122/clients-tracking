@@ -126,7 +126,14 @@ export default function ClientJobAnalysis() {
     setLoading(true);
     try {
       const dateKey = selected ? convertToDMY(selected) : '';
-      const body = dateKey ? { date: dateKey } : {};
+      // `force` bypasses the BROWSER cache; `refresh: true` tells the server to
+      // skip its own stale-while-revalidate path too. Without it, Refresh could
+      // be answered from the server's persistent cache with an arbitrarily old
+      // payload — the button would look like it worked and change nothing.
+      const body = {
+        ...(dateKey ? { date: dateKey } : {}),
+        ...(force ? { refresh: true } : {})
+      };
       // Shared cache key with the board + modal; `force` for explicit refresh
       // and post-mutation reloads.
       const data = await getCached(

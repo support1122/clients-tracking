@@ -76,6 +76,7 @@ import {
   pSetAnalysisCache,
   pClearAnalysisCache
 } from './utils/persistentAnalysisCache.js';
+import { istDayStamp, decideAnalysisCacheAction } from './utils/analysisCachePolicy.js';
 import { ensureDbIndexes } from './utils/ensureDbIndexes.js';
 import { ExtensionIncentiveComplaintModel } from './ExtensionIncentiveComplaintModel.js';
 import { ExtensionDailyIncentiveModel } from './ExtensionDailyIncentiveModel.js';
@@ -3378,8 +3379,15 @@ const _analysisInFlight = new Map();
 
 app.post('/api/analytics/client-job-analysis', async (req, res) => {
   try {
-    const { date } = req.body || {};
+    const { date, refresh } = req.body || {};
     const cacheKey = date || '__all__';
+    // The response carries a day-scoped number (flaggedByAIToday), so a cached
+    // payload is only valid on the IST day it was computed. See
+    // utils/analysisCachePolicy.js for why freshness alone is not enough.
+    const istDay = istDayStamp();
+    const sameIstDay = (val) => !!val && val.istDay === istDay;
+    // Explicit operator Refresh (see fetchAnalysis in ClientJobAnalysis.jsx).
+    const forceFresh = refresh === true;
 
     // Re-apply time-sensitive formatting to cached rows before serving: operator
     // display name + "paused days" (grows with wall-clock time, so must be recomputed).
@@ -3702,7 +3710,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return numA - numB;
     });
 
-    const result = { success: true, date: date || null, rows, summary };
+    // istDay stamps which IST calendar day flaggedByAIToday belongs to; the
+    // cache readers below refuse an entry from a different day.
+    const result = { success: true, date: date || null, istDay, rows, summary };
     setAnalysisCache(cacheKey, result);
     pSetAnalysisCache(cacheKey, result, ANALYSIS_CACHE_TTL).catch(() => {});
     return result;
@@ -3715,27 +3725,36 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return p;
     };
 
-    // L1: in-memory cache (dev / single-instance prod).
-    const memHit = getAnalysisCache(cacheKey);
-    if (memHit) return serve(memHit, true);
+    // L1: in-memory cache (dev / single-instance prod; disabled in multi-instance
+    // prod). L2 is only read when L1 cannot answer, so a hit costs no Mongo call.
+    const memHit = forceFresh ? null : getAnalysisCache(cacheKey);
+    const entry = sameIstDay(memHit) ? null : await pGetAnalysisCache(cacheKey);
 
-    // L2: cross-instance persistent cache, with stale-while-revalidate so prod
-    // instances serve a recent result instantly instead of re-scanning the
-    // whole jobs collection on every request.
-    const entry = await pGetAnalysisCache(cacheKey);
-    if (entry) {
-      setAnalysisCache(cacheKey, entry.val); // warm L1 (no-op when memory cache disabled)
-      if (!entry.fresh && !_analysisInFlight.has(cacheKey)) {
-        computeWithLock().catch((err) =>
-          console.error('[client-job-analysis] background refresh:', err?.message || err)
-        );
+    switch (decideAnalysisCacheAction({ forceFresh, memHit, entry, istDay })) {
+      case 'l1':
+        return serve(memHit, true);
+
+      case 'l2-fresh':
+        setAnalysisCache(cacheKey, entry.val); // warm L1 (no-op when memory cache disabled)
+        return serve(entry.val, true);
+
+      case 'l2-stale':
+        // Stale-while-revalidate: answer instantly, recompute in the background.
+        setAnalysisCache(cacheKey, entry.val);
+        if (!_analysisInFlight.has(cacheKey)) {
+          computeWithLock().catch((err) =>
+            console.error('[client-job-analysis] background refresh:', err?.message || err)
+          );
+        }
+        return serve(entry.val, true);
+
+      default: {
+        // Cold miss, an entry from another IST day, or a forced Refresh of a
+        // stale entry: compute now (deduped across concurrent requests here).
+        const result = await computeWithLock();
+        return serve(result, false);
       }
-      return serve(entry.val, true);
     }
-
-    // Cold miss: compute now (deduped across concurrent requests on this instance).
-    const result = await computeWithLock();
-    return serve(result, false);
   } catch (e) {
     console.error('client-job-analysis error', e);
     res.status(500).json({ success: false, error: e.message });
