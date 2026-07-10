@@ -811,8 +811,8 @@ export default function ClientJobAnalysis() {
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Offer</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Rejected</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Removed</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-amber-700" title="Flags the AI raised TODAY (since midnight IST). A subset of the 'AI flagged (open)' column.">AI flagged today</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-amber-700" title="All AI flags still awaiting an operator decision, however old. The job is KEPT — not removed. Expired postings are auto-removed and never counted here.">AI flagged (open)</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-amber-700" title="Jobs the AI removed TODAY (since midnight IST). A subset of 'AI removed'.">AI removed today</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-amber-700" title="Jobs the AI moved to Removed, all time: closed/expired postings caught by second-stage screening, plus client exclusion-list matches. A subset of 'Removed'. Jobs the AI merely FLAGGED (e.g. a location mismatch) are NOT counted here — they stay in place until an operator decides, and are reviewed under 'See AI flags' on the summaries page.">AI removed</th>
                 {isAdmin && (
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700" title="Admin: trigger internal JR scraper for this client. Completion + errors post to Discord.">
                     Scrape
@@ -854,7 +854,7 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
-                    {/* AI flagged today + AI flagged (open). The skeleton was already one
+                    {/* AI removed today + AI removed. The skeleton was already one
                         cell short of the header row before these two columns existed. */}
                     <td className="px-2 py-2"><div className="h-3.5 bg-amber-200/80 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-amber-200/80 rounded animate-pulse w-8 ml-auto" /></td>
@@ -1073,10 +1073,10 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1 text-right">{r.rejected}</td>
                     <td className="px-2 py-1 text-right">{r.removed}</td>
                     <td className="px-2 py-1 text-right font-semibold text-amber-700">
-                      {r.flaggedByAIToday || 0}
+                      {r.aiRemovedToday || 0}
                     </td>
                     <td className="px-2 py-1 text-right font-semibold text-amber-700">
-                      {r.flaggedByAI || 0}
+                      {r.aiRemoved || 0}
                     </td>
                     {isAdmin && (
                       <td className="px-2 py-1">
