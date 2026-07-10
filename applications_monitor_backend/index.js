@@ -3437,6 +3437,16 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return 'saved';
     };
 
+    // Midnight of the current IST calendar day, as a UTC instant. Used to split
+    // the AI-flag count into "flagged today" vs "open flags overall". We compare
+    // against secondJudge.completedAt (a real Date) rather than the locale-string
+    // updatedAt the date-filter columns regex over — the flag's own timestamp is
+    // what "flagged today" means, and it needs no parsing.
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const istNow = new Date(Date.now() + IST_OFFSET_MS);
+    istNow.setUTCHours(0, 0, 0, 0);
+    const todayStartIST = new Date(istNow.getTime() - IST_OFFSET_MS);
+
     // ── Phase 1: Run ALL aggregations + client query in parallel ──
     // The last-applied aggregation does a $sort over every applied job (the
     // heaviest stage), so it gets its own 5-min cache, backed cross-instance.
@@ -3513,11 +3523,35 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt clientCountry')
         .lean(),
       // 6) AI second-stage FLAGS per client (secondJudge.status:'failed') —
-      //    advisory flags the AI raised; the job is KEPT, not removed.
+      //    advisory flags the AI raised; the job is KEPT, not removed. Split into
+      //    "raised today" and "still open overall": one number for both was
+      //    ambiguous on the client table (is 26 today's work, or a backlog?).
+      //    The $ne-null guard is explicit rather than leaning on BSON's
+      //    null-sorts-before-Date rule: rows written before secondJudge.completedAt
+      //    existed have no timestamp, and they must land in `count` only.
       JobModel.aggregate([
         { $match: { 'secondJudge.status': 'failed', currentStatus: { $not: /^(deleted|removed)/i } } },
-        { $group: { _id: '$userID', count: { $sum: 1 } } },
-        { $project: { _id: 0, userID: '$_id', count: 1 } }
+        {
+          $group: {
+            _id: '$userID',
+            count: { $sum: 1 },
+            todayCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $ne: ['$secondJudge.completedAt', null] },
+                      { $gte: ['$secondJudge.completedAt', todayStartIST] }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            }
+          }
+        },
+        { $project: { _id: 0, userID: '$_id', count: 1, todayCount: 1 } }
       ])
     ]);
 
@@ -3530,7 +3564,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const removedByAiMap = new Map(removedByAiOnDate.map(r => [r.userID, r.count]));
-    const flaggedMap = new Map((flaggedAgg || []).map(r => [r.userID, r.count]));
+    const flaggedMap = new Map(
+      (flaggedAgg || []).map(r => [r.userID, { count: r.count || 0, todayCount: r.todayCount || 0 }])
+    );
     // Fold raw {userID,status} groups into per-user bucket counts (JS, cheap).
     const overallMap = new Map();
     for (const g of overall) {
@@ -3640,7 +3676,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         rejected: counts.rejected || 0,
         removed: removedCount,
         removedByAI: removedByAICount,
-        flaggedByAI: flaggedMap.get(email) || 0,
+        flaggedByAI: flaggedMap.get(email)?.count || 0,
+        flaggedByAIToday: flaggedMap.get(email)?.todayCount || 0,
         appliedOnDate: appliedMap.get(email) || 0
       };
     });
