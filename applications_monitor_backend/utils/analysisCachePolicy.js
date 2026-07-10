@@ -4,7 +4,7 @@
  * Pulled out of the route so the branch that decides "serve cached vs recompute"
  * can be tested without a Mongo instance. Two rules the route cannot get wrong:
  *
- *   1. The payload carries flaggedByAIToday, a number scoped to one IST calendar
+ *   1. The payload carries aiRemovedToday, a number scoped to one IST calendar
  *      day. pGetAnalysisCache() enforces no maximum age — it returns a day-old
  *      document marked `fresh: false` — and even a *fresh* entry (120s TTL) can
  *      straddle IST midnight. So an entry stamped with a different istDay is

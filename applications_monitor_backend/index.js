@@ -3381,7 +3381,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
   try {
     const { date, refresh } = req.body || {};
     const cacheKey = date || '__all__';
-    // The response carries a day-scoped number (flaggedByAIToday), so a cached
+    // The response carries a day-scoped number (aiRemovedToday), so a cached
     // payload is only valid on the IST day it was computed. See
     // utils/analysisCachePolicy.js for why freshness alone is not enough.
     const istDay = istDayStamp();
@@ -3445,15 +3445,17 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return 'saved';
     };
 
-    // Midnight of the current IST calendar day, as a UTC instant. Used to split
-    // the AI-flag count into "flagged today" vs "open flags overall". We compare
-    // against secondJudge.completedAt (a real Date) rather than the locale-string
-    // updatedAt the date-filter columns regex over — the flag's own timestamp is
-    // what "flagged today" means, and it needs no parsing.
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const istNow = new Date(Date.now() + IST_OFFSET_MS);
-    istNow.setUTCHours(0, 0, 0, 0);
-    const todayStartIST = new Date(istNow.getTime() - IST_OFFSET_MS);
+    // "Removed by AI today" is matched on removalDate, which is written once, at
+    // removal, as an IST locale string ("10/07/2026, 3:45:12 pm") by both AI
+    // removal paths. updatedAt would be wrong here — it moves on every later
+    // write, so a job removed last week but touched today would count as today's.
+    const istNow = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+    const iD = istNow.getUTCDate();
+    const iM = istNow.getUTCMonth() + 1;
+    const iY = istNow.getUTCFullYear();
+    const todayRemovalDateRegex = new RegExp(
+      `^${iD < 10 ? `0?${iD}` : iD}/${iM < 10 ? `0?${iM}` : iM}/${iY}(?=$|\\D)`
+    );
 
     // ── Phase 1: Run ALL aggregations + client query in parallel ──
     // The last-applied aggregation does a $sort over every applied job (the
@@ -3463,7 +3465,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const pLA = await pGetAnalysisCache('__lastAppliedOperator__');
       if (pLA && pLA.fresh) cachedLastApplied = pLA.val;
     }
-    const [overall, appliedOnDate, removedOnDate, removedByAiOnDate, lastAppliedAgg, clientInfo, flaggedAgg] = await Promise.all([
+    const [overall, appliedOnDate, removedOnDate, removedByAiOnDate, lastAppliedAgg, clientInfo, aiRemovedAgg] = await Promise.all([
       // 1) Overall counts per client, grouped on the RAW status. No regex/$switch
       //    in the pipeline — Mongo can satisfy this from the { userID:1, currentStatus:1 }
       //    index (covered scan, no document fetch). Buckets are folded in JS below.
@@ -3530,15 +3532,25 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       ClientModel.find({})
         .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt clientCountry')
         .lean(),
-      // 6) AI second-stage FLAGS per client (secondJudge.status:'failed') —
-      //    advisory flags the AI raised; the job is KEPT, not removed. Split into
-      //    "raised today" and "still open overall": one number for both was
-      //    ambiguous on the client table (is 26 today's work, or a backlog?).
-      //    The $ne-null guard is explicit rather than leaning on BSON's
-      //    null-sorts-before-Date rule: rows written before secondJudge.completedAt
-      //    existed have no timestamp, and they must land in `count` only.
+      // 6) AI-REMOVED per client, lifetime + today. Jobs the AI actually moved to
+      //    the Removed column, never jobs it merely FLAGGED — a flag leaves the
+      //    job exactly where it was, and only an operator may remove it. Two
+      //    sources stamp removedBy:'AI': second-stage screening (closed/expired
+      //    postings) and the client exclusion list (blocked company/location).
+      //    Same match as pipeline (3b), minus its date filter.
       JobModel.aggregate([
-        { $match: { 'secondJudge.status': 'failed', currentStatus: { $not: /^(deleted|removed)/i } } },
+        {
+          $match: {
+            $and: [
+              // Must actually BE removed. Without this, a job that was AI-removed
+              // and later restored would still carry removedBy:'AI' and could make
+              // "AI removed" exceed "Removed", which is its parent bucket. The
+              // status test mirrors classifyStatus(), which feeds that column.
+              { $or: [{ currentStatus: { $regex: /delete/i } }, { currentStatus: { $regex: /removed/i } }] },
+              { $or: [{ removedBy: 'AI' }, { currentStatus: { $regex: /by ai\s*$/i } }] }
+            ]
+          }
+        },
         {
           $group: {
             _id: '$userID',
@@ -3546,12 +3558,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
             todayCount: {
               $sum: {
                 $cond: [
-                  {
-                    $and: [
-                      { $ne: ['$secondJudge.completedAt', null] },
-                      { $gte: ['$secondJudge.completedAt', todayStartIST] }
-                    ]
-                  },
+                  { $regexMatch: { input: { $ifNull: ['$removalDate', ''] }, regex: todayRemovalDateRegex } },
                   1,
                   0
                 ]
@@ -3572,8 +3579,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const removedByAiMap = new Map(removedByAiOnDate.map(r => [r.userID, r.count]));
-    const flaggedMap = new Map(
-      (flaggedAgg || []).map(r => [r.userID, { count: r.count || 0, todayCount: r.todayCount || 0 }])
+    const aiRemovedMap = new Map(
+      (aiRemovedAgg || []).map(r => [r.userID, { count: r.count || 0, todayCount: r.todayCount || 0 }])
     );
     // Fold raw {userID,status} groups into per-user bucket counts (JS, cheap).
     const overallMap = new Map();
@@ -3684,8 +3691,11 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         rejected: counts.rejected || 0,
         removed: removedCount,
         removedByAI: removedByAICount,
-        flaggedByAI: flaggedMap.get(email)?.count || 0,
-        flaggedByAIToday: flaggedMap.get(email)?.todayCount || 0,
+        // Lifetime + today, always (unlike removedByAI, which narrows to the
+        // selected date). These count REMOVALS only — never AI flags, which
+        // leave the job in place for an operator to decide.
+        aiRemoved: aiRemovedMap.get(email)?.count || 0,
+        aiRemovedToday: aiRemovedMap.get(email)?.todayCount || 0,
         appliedOnDate: appliedMap.get(email) || 0
       };
     });
@@ -3710,7 +3720,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return numA - numB;
     });
 
-    // istDay stamps which IST calendar day flaggedByAIToday belongs to; the
+    // istDay stamps which IST calendar day aiRemovedToday belongs to; the
     // cache readers below refuse an entry from a different day.
     const result = { success: true, date: date || null, istDay, rows, summary };
     setAnalysisCache(cacheKey, result);

@@ -1,7 +1,7 @@
 // node utils/analysisCachePolicy.test.mjs
 //
 // Guards two things that are invisible until they bite:
-//   * a cached flaggedByAIToday must never be served on a different IST day
+//   * a cached aiRemovedToday must never be served on a different IST day
 //   * an operator Refresh must never be answered from the stale cache
 import { istDayStamp, decideAnalysisCacheAction } from './analysisCachePolicy.js';
 
