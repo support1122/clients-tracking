@@ -3409,7 +3409,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
   try {
     const { date, refresh } = req.body || {};
     const cacheKey = date || '__all__';
-    // The response carries a day-scoped number (aiRemovedToday), so a cached
+    // The response carries a day-scoped number (removedByAI, which defaults to
+    // TODAY when no date filter is set), so a cached
     // payload is only valid on the IST day it was computed. See
     // utils/analysisCachePolicy.js for why freshness alone is not enough.
     const istDay = istDayStamp();
@@ -3687,7 +3688,16 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const client = clientMap.get(email) || {};
       const referralMeta = referralMap.get(email.toLowerCase()) || {};
       const removedCount = multiFormatDateRegex ? (removedMap.get(email) || 0) : (counts.deleted || 0);
-      const removedByAICount = multiFormatDateRegex ? (removedByAiMap.get(email) || 0) : (counts.deletedByAI || 0);
+      // ONE AI-removed number, and it always answers "on the day you are looking
+      // at": the selected date when a date filter is set, otherwise TODAY. Two
+      // columns (today + lifetime) made the operator read a total and a daily
+      // figure side by side and decide which one the date picker applied to.
+      // Lifetime is deliberately NOT exposed here — "Removed" already carries the
+      // running total, and an AI lifetime number next to a per-day one is exactly
+      // the ambiguity being removed.
+      const removedByAICount = multiFormatDateRegex
+        ? (removedByAiMap.get(email) || 0)
+        : (aiRemovedMap.get(email)?.todayCount || 0);
       return {
         email,
         name: client.name || email,
@@ -3718,12 +3728,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         offer: counts.offer || 0,
         rejected: counts.rejected || 0,
         removed: removedCount,
+        // Counts REMOVALS only — never AI flags, which leave the job in place for
+        // an operator to decide. Scoped to the selected date, or today.
         removedByAI: removedByAICount,
-        // Lifetime + today, always (unlike removedByAI, which narrows to the
-        // selected date). These count REMOVALS only — never AI flags, which
-        // leave the job in place for an operator to decide.
-        aiRemoved: aiRemovedMap.get(email)?.count || 0,
-        aiRemovedToday: aiRemovedMap.get(email)?.todayCount || 0,
         appliedOnDate: appliedMap.get(email) || 0
       };
     });
@@ -3748,7 +3755,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return numA - numB;
     });
 
-    // istDay stamps which IST calendar day aiRemovedToday belongs to; the
+    // istDay stamps which IST calendar day removedByAI belongs to; the
     // cache readers below refuse an entry from a different day.
     const result = { success: true, date: date || null, istDay, rows, summary };
     setAnalysisCache(cacheKey, result);
