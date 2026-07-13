@@ -15,8 +15,7 @@ import {
   getAllowedStatusesForPlan,
   parseMentions,
   extractTextFromContentEditable,
-  renderTextWithMentions,
-  findMentionUser
+  renderTextWithMentions
 } from './helpers';
 import { toastUtils } from '../../utils/toastUtils';
 
@@ -24,7 +23,6 @@ const CommentsSection = React.memo(({
   selectedJob,
   user,
   roles,
-  loadingJobDetails,
   loadingComments = false,
   onUpdateJob,
   onMoveJob,
@@ -34,7 +32,7 @@ const CommentsSection = React.memo(({
 }) => {
   const commentTextRef = useRef('');
   const [commentHasContent, setCommentHasContent] = useState(false);
-  const [commentHasTags, setCommentHasTags] = useState(false);
+  const [, setCommentHasTags] = useState(false);
   const [addingComment, setAddingComment] = useState(false);
   const [resolvingCommentId, setResolvingCommentId] = useState(null);
   const [commentImages, setCommentImages] = useState([]);

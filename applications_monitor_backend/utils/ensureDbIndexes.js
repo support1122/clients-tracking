@@ -8,6 +8,7 @@ import { UserModel } from '../UserModel.js';
 import { ManagerModel } from '../ManagerModel.js';
 import { CallLogModel } from '../CallLogModel.js';
 import { OnboardingJobModel } from '../OnboardingJobModel.js';
+import { ChatConversationModel, ChatMessageModel } from '../ChatModels.js';
 
 export async function ensureDbIndexes() {
   await Promise.all([
@@ -46,5 +47,26 @@ export async function ensureDbIndexes() {
     // (Per-client email-log index { clientEmail:1, createdAt:-1 } is already declared
     //  on ClientEmailLogSchema itself, so it is not repeated here.)
     OnboardingJobModel.collection.createIndex({ 'comments.taggedUserIds': 1 })
+  ]);
+
+  // ── Chat ──
+  // Migration: the first chat release had UNIQUE { participants: 1 } — on an
+  // ARRAY that is per-element (multikey), so a user with 2+ conversations hit
+  // E11000. Uniqueness now lives on the scalar `key` ("a|b", sorted pair).
+  await ChatConversationModel.collection.dropIndex('participants_1').catch(() => { /* absent on fresh DBs */ });
+  const missingKey = await ChatConversationModel.collection
+    .find({ key: { $exists: false } })
+    .project({ participants: 1 })
+    .toArray();
+  for (const doc of missingKey) {
+    const key = [...(doc.participants || [])].sort().join('|');
+    await ChatConversationModel.collection.updateOne({ _id: doc._id }, { $set: { key } });
+  }
+  await Promise.all([
+    ChatConversationModel.collection.createIndex({ key: 1 }, { unique: true }),
+    ChatConversationModel.collection.createIndex({ participants: 1, lastMessageAt: -1 }),
+    ChatMessageModel.collection.createIndex({ conversationId: 1, createdAt: -1 }),
+    ChatMessageModel.collection.createIndex({ source: 1, 'escalation.emailSentAt': 1, createdAt: 1 }),
+    ChatMessageModel.collection.createIndex({ source: 1, 'escalation.adminNotifiedAt': 1, createdAt: 1 })
   ]);
 }

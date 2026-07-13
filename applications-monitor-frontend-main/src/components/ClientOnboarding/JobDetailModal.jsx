@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { motion as Motion } from 'framer-motion';
 import {
   X,
   Loader2,
@@ -13,20 +14,25 @@ import {
   ChevronDown,
   CheckCircle,
   Mail,
+  MessageSquare,
   RefreshCw,
   AlertTriangle
 } from 'lucide-react';
+import { useChatStore } from '../../store/chatStore';
 import {
   useOnboardingStore,
   useClientProfileStore,
+  useSectionOpen,
   STATUS_LABELS,
   ONBOARDING_STATUSES
 } from '../../store/onboardingStore';
+import CollapsibleSection from './CollapsibleSection';
+import { OVERLAY_FADE, PANEL_RISE } from './animation';
 import { API_BASE, AUTH_HEADERS, LOG } from './constants';
-import { getStatusColor, getAllowedStatusesForPlan, clientDisplayName, convertToDMY } from './helpers';
+import { getStatusColor, clientDisplayName, convertToDMY } from './helpers';
 import { toastUtils } from '../../utils/toastUtils';
 import { handleAuthFailure } from '../../utils/authUtils';
-import { apiFetch, isAbortError, getCached } from '../../utils/apiClient';
+import { apiFetch, getCached } from '../../utils/apiClient';
 import { ClientProfileSection } from '../JobDetail/ClientProfileSection';
 import CommentsSection from './CommentsSection';
 import {
@@ -48,13 +54,13 @@ const JobDetailModal = React.memo(({
   onFetchNonResolvedIssues,
   dashboardManagerNames
 }) => {
-  // Local modal state — completely isolated from the kanban board
-  const [showClientProfile, setShowClientProfile] = useState(false);
+  // Local modal state — completely isolated from the kanban board.
+  // Section open/closed state lives in the persisted modal UI store
+  // (useSectionOpen / useModalUiStore), not here.
+  const profileOpen = useSectionOpen('profile');
   const [clientProfileData, setClientProfileData] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState(null);
-  const [showAttachments, setShowAttachments] = useState(false);
-  const [showMoveHistory, setShowMoveHistory] = useState(false);
   const [gmailUsername, setGmailUsername] = useState('');
   const [gmailPassword, setGmailPassword] = useState('');
   const [savingGmailCredentials, setSavingGmailCredentials] = useState(false);
@@ -84,7 +90,6 @@ const JobDetailModal = React.memo(({
   const [emailLogs, setEmailLogs] = useState([]);
   const [emailLogsLoading, setEmailLogsLoading] = useState(false);
   const [emailLogsError, setEmailLogsError] = useState(null);
-  const [showEmailActivity, setShowEmailActivity] = useState(false);
   const [paymentEmailValue, setPaymentEmailValue] = useState('');
   const [paymentEmailDraft, setPaymentEmailDraft] = useState('');
   const [editingPaymentEmail, setEditingPaymentEmail] = useState(false);
@@ -133,13 +138,11 @@ const JobDetailModal = React.memo(({
     [dashboardManagerNames, selectedJob?.dashboardManagerName, selectedJob?.taggedDashboardManagerNames]
   );
 
-  // Reset modal sections on job change
+  // Reset per-job data on job change (section open/closed prefs persist —
+  // they are user layout, not job data)
   useEffect(() => {
     const currentJobId = selectedJob?._id;
     if (previousJobIdRef.current !== null && previousJobIdRef.current !== currentJobId) {
-      setShowClientProfile(false);
-      setShowAttachments(false);
-      setShowMoveHistory(false);
       setClientProfileData(null);
       setProfileError(null);
       setProfileLoading(false);
@@ -163,19 +166,29 @@ const JobDetailModal = React.memo(({
     }
   }, [selectedJob?.gmailCredentials]);
 
-  // Fetch operations for client
-  const fetchOperationsForClient = useCallback(async (clientEmail, signal) => {
+  // Fetch operations for client — TTL-cached so reopening a ticket renders
+  // instantly instead of refetching. The ref guards stale responses landing
+  // after the user switched clients.
+  const opsClientRef = useRef('');
+  const fetchOperationsForClient = useCallback(async (clientEmail, { force = false } = {}) => {
     if (!clientEmail || !canViewOperations) return;
+    const key = clientEmail.toLowerCase();
+    opsClientRef.current = key;
     setLoadingOperationsForClient(true);
     try {
-      const data = await apiFetch(`/api/operations/by-client/${encodeURIComponent(clientEmail)}`, { signal });
+      const data = await getCached(
+        `ops:${key}`,
+        () => apiFetch(`/api/operations/by-client/${encodeURIComponent(clientEmail)}`),
+        { ttl: 120_000, force }
+      );
+      if (opsClientRef.current !== key) return; // superseded by a newer client
       setOperationsForClient(data.operations || []);
       setClientIdForOperations(data.clientId || null);
-    } catch (err) {
-      if (isAbortError(err)) return; // superseded by a newer client — ignore
+    } catch {
+      if (opsClientRef.current !== key) return;
       setOperationsForClient([]); setClientIdForOperations(null);
     } finally {
-      if (!signal?.aborted) setLoadingOperationsForClient(false);
+      if (opsClientRef.current === key) setLoadingOperationsForClient(false);
     }
   }, [canViewOperations]);
 
@@ -184,17 +197,24 @@ const JobDetailModal = React.memo(({
       setOperationsForClient([]); setClientIdForOperations(null);
       return;
     }
-    const ac = new AbortController();
-    fetchOperationsForClient(selectedJob.clientEmail, ac.signal);
-    return () => ac.abort(); // cancel stale request when client changes / modal closes
+    fetchOperationsForClient(selectedJob.clientEmail);
   }, [selectedJob?.clientEmail, canViewOperations, fetchOperationsForClient]);
 
-  const fetchEmailLogs = useCallback(async (clientEmail, signal) => {
+  // Email logs + milestone schedule — TTL-cached (mutations pass force:true).
+  const emailLogsClientRef = useRef('');
+  const fetchEmailLogs = useCallback(async (clientEmail, { force = false } = {}) => {
     if (!clientEmail) { setEmailLogs([]); return; }
+    const key = clientEmail.toLowerCase();
+    emailLogsClientRef.current = key;
     setEmailLogsLoading(true);
     setEmailLogsError(null);
     try {
-      const data = await apiFetch(`/api/clients/${encodeURIComponent(clientEmail)}/email-logs?limit=100`, { signal });
+      const data = await getCached(
+        `emailLogs:${key}`,
+        () => apiFetch(`/api/clients/${encodeURIComponent(clientEmail)}/email-logs?limit=100`),
+        { ttl: 60_000, force }
+      );
+      if (emailLogsClientRef.current !== key) return; // superseded by a newer client
       setEmailLogs(Array.isArray(data?.logs) ? data.logs : []);
       const pe = (data?.paymentEmail || '').trim();
       setPaymentEmailValue(pe);
@@ -206,12 +226,12 @@ const JobDetailModal = React.memo(({
       setMilestoneAddonApps(Number(data?.addonApplications) || 0);
       setMilestoneReferralApps(Number(data?.referralApplications) || 0);
     } catch (err) {
-      if (isAbortError(err)) return; // superseded by a newer client — ignore
+      if (emailLogsClientRef.current !== key) return;
       if (err.status === 401) handleAuthFailure();
       setEmailLogsError('Failed to load email logs');
       setEmailLogs([]);
     } finally {
-      if (!signal?.aborted) setEmailLogsLoading(false);
+      if (emailLogsClientRef.current === key) setEmailLogsLoading(false);
     }
   }, []);
 
@@ -242,7 +262,7 @@ const JobDetailModal = React.memo(({
       setPaymentEmailDraft(saved);
       setEditingPaymentEmail(false);
       toastUtils.success('Payment email saved');
-      fetchEmailLogs(clientEmail);
+      fetchEmailLogs(clientEmail, { force: true });
     } catch {
       toastUtils.error('Failed to save');
     } finally {
@@ -284,7 +304,7 @@ const JobDetailModal = React.memo(({
       } else {
         toastUtils.error(data?.error || 'Did not send');
       }
-      fetchEmailLogs(clientEmail);
+      fetchEmailLogs(clientEmail, { force: true });
     } catch {
       toastUtils.error('Send failed');
     } finally {
@@ -327,7 +347,7 @@ const JobDetailModal = React.memo(({
       } else {
         toastUtils.error(data?.error || 'Did not send');
       }
-      fetchEmailLogs(clientEmail);
+      fetchEmailLogs(clientEmail, { force: true });
     } catch {
       toastUtils.error('Resend failed');
     } finally {
@@ -340,31 +360,35 @@ const JobDetailModal = React.memo(({
       setEmailLogs([]); setPaymentEmailValue(''); setPaymentEmailDraft(''); setMilestoneSchedule([]); setMilestonePlanCap(0); setMilestonePlanType('');
       return;
     }
-    const ac = new AbortController();
-    fetchEmailLogs(selectedJob.clientEmail, ac.signal);
-    return () => ac.abort();
+    fetchEmailLogs(selectedJob.clientEmail);
   }, [selectedJob?.clientEmail, fetchEmailLogs]);
 
-  // Fetch operator managed users
-  const fetchOperatorManagedUsers = useCallback(async (operatorEmail, signal) => {
+  // Fetch operator managed users — TTL-cached per operator.
+  const managedOpRef = useRef('');
+  const fetchOperatorManagedUsers = useCallback(async (operatorEmail, { force = false } = {}) => {
     if (!operatorEmail?.trim()) { setOperatorManagedUsers([]); return; }
+    const key = operatorEmail.trim().toLowerCase();
+    managedOpRef.current = key;
     setLoadingOperatorManagedUsers(true);
     try {
-      const data = await apiFetch(`/api/operations/${encodeURIComponent(operatorEmail.trim())}/managed-users`, { signal });
+      const data = await getCached(
+        `managedUsers:${key}`,
+        () => apiFetch(`/api/operations/${encodeURIComponent(operatorEmail.trim())}/managed-users`),
+        { ttl: 120_000, force }
+      );
+      if (managedOpRef.current !== key) return; // superseded by a newer operator
       setOperatorManagedUsers(data.managedUsers || []);
-    } catch (err) {
-      if (isAbortError(err)) return;
+    } catch {
+      if (managedOpRef.current !== key) return;
       setOperatorManagedUsers([]);
     } finally {
-      if (!signal?.aborted) setLoadingOperatorManagedUsers(false);
+      if (managedOpRef.current === key) setLoadingOperatorManagedUsers(false);
     }
   }, []);
 
   useEffect(() => {
     if (!selectedJob?.operatorEmail) { setOperatorManagedUsers([]); return; }
-    const ac = new AbortController();
-    fetchOperatorManagedUsers(selectedJob.operatorEmail, ac.signal);
-    return () => ac.abort();
+    fetchOperatorManagedUsers(selectedJob.operatorEmail);
   }, [selectedJob?.operatorEmail, fetchOperatorManagedUsers]);
 
   // Job analysis for card. Routed through the shared analysis cache so opening a
@@ -465,9 +489,15 @@ const JobDetailModal = React.memo(({
       });
   }, []);
 
-  const onFetchProfileForSelectedJob = useCallback(() => {
-    if (selectedJob?.clientEmail) fetchClientProfile(selectedJob.clientEmail, selectedJob._id);
-  }, [selectedJob?.clientEmail, selectedJob?._id, fetchClientProfile]);
+  // The profile section's open state lives in the persisted modal UI store,
+  // so whenever it is open ensure the current job's profile is loaded.
+  // fetchClientProfile is cache-guarded — repeat runs for a cached profile
+  // cost nothing.
+  useEffect(() => {
+    if (profileOpen && selectedJob?.clientEmail) {
+      fetchClientProfile(selectedJob.clientEmail, selectedJob._id);
+    }
+  }, [profileOpen, selectedJob?.clientEmail, selectedJob?._id, fetchClientProfile]);
 
   // Operator options
   const operatorOptions = useMemo(() => {
@@ -528,7 +558,7 @@ const JobDetailModal = React.memo(({
       const data = await res.json();
       onUpdateJob(data.job);
       setOperatorManagedUsers([]);
-      if (selectedJob.clientEmail && canViewOperations) fetchOperationsForClient(selectedJob.clientEmail);
+      if (selectedJob.clientEmail && canViewOperations) fetchOperationsForClient(selectedJob.clientEmail, { force: true });
       toastUtils.success('Operations Intern assigned');
     } catch (e) { toastUtils.error(e.message || 'Failed'); }
     finally { setAssigningOperator(false); }
@@ -674,7 +704,7 @@ const JobDetailModal = React.memo(({
       }
       toastUtils.success('Operations intern added');
       setShowAddOperatorModal(false);
-      fetchOperationsForClient(clientEmail);
+      fetchOperationsForClient(clientEmail, { force: true });
     } catch (e) { toastUtils.error(e.message || 'Failed'); }
     finally { setAddingOperatorToClient(false); }
   }, [selectedJob?.clientEmail, fetchOperationsForClient]);
@@ -687,7 +717,7 @@ const JobDetailModal = React.memo(({
       const res = await fetch(`${API_BASE}/api/operations/${encodeURIComponent(operatorEmail.trim())}/managed-users/${encodeURIComponent(clientIdForOperations)}`, { method: 'DELETE', headers: AUTH_HEADERS() });
       if (!res.ok) throw new Error('Failed');
       toastUtils.success('Operations intern removed');
-      fetchOperationsForClient(clientEmail);
+      fetchOperationsForClient(clientEmail, { force: true });
       if (selectedJob?.operatorEmail?.toLowerCase() === operatorEmail.toLowerCase()) {
         const res2 = await fetch(`${API_BASE}/api/onboarding/jobs/${selectedJob._id}`, { method: 'PATCH', headers: AUTH_HEADERS(), body: JSON.stringify({ operatorEmail: '', operatorName: '' }) });
         if (res2.ok) { const data = await res2.json(); onUpdateJob(data.job); }
@@ -710,7 +740,7 @@ const JobDetailModal = React.memo(({
       }
       toastUtils.success('Client added');
       setShowAddManagedUserModal(false);
-      fetchOperatorManagedUsers(operatorEmail);
+      fetchOperatorManagedUsers(operatorEmail, { force: true });
     } catch (e) { toastUtils.error(e.message || 'Failed'); }
     finally { setAddingClientToOperator(false); }
   }, [selectedJob?.operatorEmail, fetchOperatorManagedUsers]);
@@ -723,7 +753,7 @@ const JobDetailModal = React.memo(({
       const res = await fetch(`${API_BASE}/api/operations/${encodeURIComponent(operatorEmail.trim())}/managed-users/${encodeURIComponent(userID)}`, { method: 'DELETE', headers: AUTH_HEADERS() });
       if (!res.ok) throw new Error('Failed');
       toastUtils.success('User removed');
-      fetchOperatorManagedUsers(operatorEmail);
+      fetchOperatorManagedUsers(operatorEmail, { force: true });
     } catch (e) { toastUtils.error(e.message || 'Failed'); }
     finally { setRemovingManagedUser(null); }
   }, [selectedJob?.operatorEmail, fetchOperatorManagedUsers]);
@@ -744,7 +774,6 @@ const JobDetailModal = React.memo(({
   const handleCloseModal = useCallback((e) => {
     if (e) { e.preventDefault(); e.stopPropagation(); }
     setClientProfileData(null);
-    setShowClientProfile(false);
     setEditingClientNameJobId(null);
     setEditingClientNameValue('');
     setCardAnalysisDate('');
@@ -759,15 +788,17 @@ const JobDetailModal = React.memo(({
   if (!selectedJob) return null;
 
   return (
-    <div
-      key={selectedJob._id}
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+    <Motion.div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 p-4"
       onClick={(e) => { if (e.target === e.currentTarget) handleCloseModal(e); }}
+      {...OVERLAY_FADE}
     >
-      <div
+      <Motion.div
+        key={selectedJob._id}
         className="bg-[#FAFAFA] rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] overflow-hidden flex flex-col ring-1 ring-white/20"
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
+        {...PANEL_RISE}
       >
         {loadingJobDetails && (
           <div className="h-0.5 w-full bg-orange-100 overflow-hidden">
@@ -796,21 +827,39 @@ const JobDetailModal = React.memo(({
               <span className="text-sm text-gray-500">{selectedJob.planType || 'Professional'} Plan</span>
             </div>
           </div>
-          <button onClick={handleCloseModal} className="p-2 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer z-20 relative" type="button" aria-label="Close modal">
-            <X className="w-6 h-6" />
-          </button>
+          <div className="flex items-center gap-1 z-20 relative">
+            <button
+              type="button"
+              onClick={() => useChatStore.getState().shareTicket({
+                jobId: selectedJob._id,
+                jobNumber: selectedJob.jobNumber,
+                clientName: selectedJob.clientName || '',
+                clientNumber: selectedJob.clientNumber ?? null
+              })}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-medium text-gray-500 hover:text-primary hover:bg-orange-50 transition-colors"
+              title="Share this ticket in a chat message"
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span className="hidden sm:inline">Discuss in chat</span>
+            </button>
+            <button onClick={handleCloseModal} className="p-2 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors cursor-pointer" type="button" aria-label="Close modal">
+              <X className="w-6 h-6" />
+            </button>
+          </div>
         </div>
 
         {/* Modal Body */}
         <div className="flex flex-1 overflow-hidden min-h-0">
           {/* Left Column: Details */}
           <div className="w-[55%] overflow-y-auto p-6 border-r border-gray-200 bg-white">
-            <div className="grid grid-cols-2 gap-6 mb-6">
+            <div className="grid grid-cols-2 gap-4 mb-6 items-start">
               {/* Team Section */}
-              <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
-                <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                  <User className="w-3 h-3" /> Team
-                </h3>
+              <CollapsibleSection
+                id="team"
+                icon={User}
+                title="Team"
+                summary={[selectedJob.csmName, selectedJob.resumeMakerName, selectedJob.operatorName].filter(Boolean).join(' · ') || 'Unassigned'}
+              >
                 <div className="space-y-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1.5">Client Success Manager</label>
@@ -890,11 +939,15 @@ const JobDetailModal = React.memo(({
                     </div>
                   )}
                 </div>
-              </div>
+              </CollapsibleSection>
 
               {/* Client Info Section */}
-              <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
-                <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Briefcase className="w-3 h-3" /> Info</h3>
+              <CollapsibleSection
+                id="info"
+                icon={Briefcase}
+                title="Info"
+                summary={selectedJob.dashboardManagerName || selectedJob.clientEmail}
+              >
                 <div className="space-y-4">
                   <div>
                     <span className="block text-xs font-semibold text-gray-700 mb-1">Dashboard Manager</span>
@@ -1006,11 +1059,15 @@ const JobDetailModal = React.memo(({
                     <p className="text-[10px] text-gray-500 mt-1">Recipient for resume-ready, applications-started, and 30/50/75/100% milestone emails.</p>
                   </div>
                 </div>
-              </div>
+              </CollapsibleSection>
 
               {/* Gmail Credentials */}
-              <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
-                <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Briefcase className="w-3 h-3" /> Gmail Credentials</h3>
+              <CollapsibleSection
+                id="gmail"
+                icon={Briefcase}
+                title="Gmail Credentials"
+                summary={selectedJob?.gmailCredentials?.username || 'Not set'}
+              >
                 <div className="space-y-4">
                   {selectedJob?.gmailCredentials && !isEditingGmailCredentials ? (
                     <>
@@ -1053,12 +1110,16 @@ const JobDetailModal = React.memo(({
                     </div>
                   )}
                 </div>
-              </div>
+              </CollapsibleSection>
 
               {/* Job Analysis */}
               {(selectedJob.status === 'applications_in_progress' || selectedJob.status === 'completed') && (
-                <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
-                  <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2"><Briefcase className="w-3 h-3" /> Job Analysis</h3>
+                <CollapsibleSection
+                  id="analysis"
+                  icon={Briefcase}
+                  title="Job Analysis"
+                  summary={cardJobAnalysis ? `${cardJobAnalysis.applied ?? 0} applied · ${cardJobAnalysis.interviewing ?? 0} interview` : 'No data'}
+                >
                   <div className="mb-4">
                     <label className="block text-xs font-semibold text-gray-700 mb-2">Filter by Date:</label>
                     <div className="flex items-center gap-2">
@@ -1091,15 +1152,19 @@ const JobDetailModal = React.memo(({
                       )}
                     </div>
                   ) : (<div className="text-sm text-gray-500 py-4 text-center">No data available</div>)}
-                </div>
+                </CollapsibleSection>
               )}
 
               {/* Milestone Timeline — visible all stages */}
               {milestoneSchedule.length > 0 && (
-                <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
+                <CollapsibleSection
+                  id="milestones"
+                  icon={History}
+                  title="Milestone Timeline"
+                  summary={`${milestoneSchedule.filter((m) => m.sent).length}/${milestoneSchedule.length} sent`}
+                >
                   <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
-                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center gap-2 flex-wrap">
-                      <History className="w-3 h-3" /> Milestone Timeline
+                    <div className="flex items-center gap-2 flex-wrap">
                       {milestonePlanType && (
                         <span
                           className="ml-1 text-[10px] text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full uppercase tracking-wider"
@@ -1126,7 +1191,7 @@ const JobDetailModal = React.memo(({
                           ✉ no payment email
                         </span>
                       )}
-                    </h3>
+                    </div>
                     {isAdmin && milestoneSchedule.some((m) => !m.sent) && (() => {
                       const noPaymentEmail = !paymentEmailValue || !paymentEmailValue.trim();
                       return (
@@ -1198,15 +1263,19 @@ const JobDetailModal = React.memo(({
                       );
                     })}
                   </ol>
-                </div>
+                </CollapsibleSection>
               )}
 
               {/* Email Activity (milestone notifications + move history) */}
               {(selectedJob.status === 'applications_in_progress' || selectedJob.status === 'completed') && (
-                <div className="bg-gray-50 rounded-xl p-5 border border-gray-100">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-xs font-extrabold text-gray-400 uppercase tracking-wider flex items-center gap-2"><Mail className="w-3 h-3" /> Email Activity</h3>
-                    <button type="button" onClick={() => fetchEmailLogs(selectedJob.clientEmail)} className="text-[10px] text-gray-500 hover:text-orange-600 font-medium">Refresh</button>
+                <CollapsibleSection
+                  id="emails"
+                  icon={Mail}
+                  title="Email Activity"
+                  summary={emailLogsLoading ? 'Loading…' : `${emailLogs.length} sent`}
+                >
+                  <div className="flex items-center justify-end mb-3">
+                    <button type="button" onClick={() => fetchEmailLogs(selectedJob.clientEmail, { force: true })} className="text-[10px] text-gray-500 hover:text-orange-600 font-medium">Refresh</button>
                   </div>
 
                   {emailLogsLoading ? (
@@ -1350,23 +1419,24 @@ const JobDetailModal = React.memo(({
                       </div>
                     </div>
                   )}
-                </div>
+                </CollapsibleSection>
               )}
             </div>
 
             {/* Client Profile */}
-            <ClientProfileSection expanded={showClientProfile} onToggle={setShowClientProfile} profileData={clientProfileData} loading={profileLoading} error={profileError} hasClientEmail={!!selectedJob?.clientEmail} onFetchProfile={onFetchProfileForSelectedJob} />
+            <ClientProfileSection profileData={clientProfileData} loading={profileLoading} error={profileError} />
 
             {/* Attachments */}
             <div className="mb-6">
-              <button onClick={() => setShowAttachments(!showAttachments)} className="w-full flex items-center justify-between py-3 px-4 text-left rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 hover:border-slate-300 transition-colors shadow-sm">
-                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 flex-1 min-w-0">
-                  <Paperclip className="w-4 h-4 text-slate-500 flex-shrink-0" /><span className="flex-1 min-w-0">Attachments</span>
-                  {(selectedJob.attachments || []).length > 0 && (<span className="text-xs text-gray-500 bg-slate-200 px-2 py-0.5 rounded-full flex-shrink-0">{(selectedJob.attachments || []).length}</span>)}
-                </h3>
-                <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform duration-200 flex-shrink-0 ml-2 ${showAttachments ? 'rotate-90' : ''}`} />
-              </button>
-              {showAttachments && (
+              <CollapsibleSection
+                id="attachments"
+                icon={Paperclip}
+                title="Attachments"
+                badge={(selectedJob.attachments || []).length > 0 ? (
+                  <span className="text-xs text-gray-500 bg-slate-200 px-2 py-0.5 rounded-full flex-shrink-0">{(selectedJob.attachments || []).length}</span>
+                ) : null}
+                summary={(selectedJob.attachments || []).length > 0 ? undefined : 'None yet'}
+              >
                 <>
                   <div className="mb-3 p-3 rounded-lg bg-slate-50 border border-slate-100">
                     <p className="text-xs font-semibold text-slate-600 mb-2">By plan</p>
@@ -1429,20 +1499,19 @@ const JobDetailModal = React.memo(({
                     {uploadingAttachment ? 'Uploading...' : 'Add Attachment'}
                   </button>
                 </>
-              )}
+              </CollapsibleSection>
             </div>
 
             {/* Move History */}
-            <div className="rounded-xl border border-slate-200 overflow-hidden">
-              <button onClick={() => setShowMoveHistory(!showMoveHistory)} className="w-full flex items-center justify-between py-3 px-4 text-left bg-slate-50/80 hover:bg-slate-100/80 transition-colors">
-                <div className="flex items-center gap-2 flex-1 min-w-0">
-                  <History className="w-4 h-4 text-slate-500 flex-shrink-0" /><h3 className="text-sm font-bold text-slate-800 flex-1 min-w-0">Move History</h3>
-                  {(selectedJob.moveHistory || []).length > 0 && (<span className="text-xs text-gray-500 bg-slate-200 px-2 py-0.5 rounded-full flex-shrink-0">{(selectedJob.moveHistory || []).length}</span>)}
-                </div>
-                <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform duration-200 flex-shrink-0 ml-2 ${showMoveHistory ? 'rotate-90' : ''}`} />
-              </button>
-              {showMoveHistory && (
-                <div className="space-y-3 max-h-[300px] overflow-y-auto px-4 py-3 bg-white border-t border-slate-100">
+            <CollapsibleSection
+              id="history"
+              icon={History}
+              title="Move History"
+              badge={(selectedJob.moveHistory || []).length > 0 ? (
+                <span className="text-xs text-gray-500 bg-slate-200 px-2 py-0.5 rounded-full flex-shrink-0">{(selectedJob.moveHistory || []).length}</span>
+              ) : null}
+            >
+                <div className="space-y-3 max-h-[300px] overflow-y-auto">
                   {(selectedJob.moveHistory || []).length === 0 ? (<p className="text-xs text-gray-400 italic py-2 text-center">No move history</p>) : (
                     (selectedJob.moveHistory || []).map((move, i) => {
                       const actionType = move.actionType || 'status_change';
@@ -1480,8 +1549,7 @@ const JobDetailModal = React.memo(({
                     })
                   )}
                 </div>
-              )}
-            </div>
+            </CollapsibleSection>
           </div>
 
           {/* Right Column: Comments */}
@@ -1498,12 +1566,12 @@ const JobDetailModal = React.memo(({
             onFetchNonResolvedIssues={onFetchNonResolvedIssues}
           />
         </div>
-      </div>
+      </Motion.div>
 
       {/* Sub-modals rendered inside the detail modal portal */}
       {/* Add Attachment Modal */}
       {showAddAttachmentModal && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget && !uploadingAttachment) { setShowAddAttachmentModal(false); setAttachmentNameInput(''); setAttachmentFilePending(null); } }}>
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50" onClick={(e) => { if (e.target === e.currentTarget && !uploadingAttachment) { setShowAddAttachmentModal(false); setAttachmentNameInput(''); setAttachmentFilePending(null); } }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()} onPaste={(e) => {
             const items = e.clipboardData?.items;
             if (!items) return;
@@ -1529,7 +1597,7 @@ const JobDetailModal = React.memo(({
 
       {/* Edit Attachment Modal */}
       {editingAttachmentIndex != null && selectedJob.attachments?.[editingAttachmentIndex] && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !savingAttachmentEdit && (setEditingAttachmentIndex(null), setEditingAttachmentName(''), setAttachmentReplaceFilePending(null))}>
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50" onClick={() => !savingAttachmentEdit && (setEditingAttachmentIndex(null), setEditingAttachmentName(''), setAttachmentReplaceFilePending(null))}>
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between"><h3 className="text-lg font-semibold text-gray-900">Edit attachment</h3><button type="button" onClick={() => { setEditingAttachmentIndex(null); setEditingAttachmentName(''); setAttachmentReplaceFilePending(null); }} disabled={savingAttachmentEdit} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg disabled:opacity-50"><X className="w-5 h-5" /></button></div>
             <div className="p-5 space-y-4">
@@ -1547,7 +1615,7 @@ const JobDetailModal = React.memo(({
 
       {/* Edit Client Details Modal — only close via Cancel or X, not backdrop */}
       {showEditClientNumberModal && editingClientNumberEmail && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="edit-client-details-title">
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50" role="dialog" aria-modal="true" aria-labelledby="edit-client-details-title">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
             <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between"><h2 id="edit-client-details-title" className="text-lg font-bold text-gray-900">Edit Client Details</h2><button type="button" onClick={() => { setShowEditClientNumberModal(false); setEditingClientNumberEmail(null); setEditingClientNumberValue(''); setEditingClientNameJobId(null); setEditingClientNameValue(''); }} disabled={savingClientNumber || savingClientName} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 disabled:opacity-50"><X className="w-5 h-5" /></button></div>
             <div className="p-6 space-y-4">
@@ -1564,7 +1632,7 @@ const JobDetailModal = React.memo(({
 
       {/* Add Operations Intern Modal */}
       {showAddOperatorModal && selectedJob?.clientEmail && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !addingOperatorToClient && setShowAddOperatorModal(false)}>
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50" onClick={() => !addingOperatorToClient && setShowAddOperatorModal(false)}>
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between"><h3 className="text-lg font-semibold text-gray-900">Add operations intern to client</h3><button type="button" onClick={() => !addingOperatorToClient && setShowAddOperatorModal(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg"><X className="w-5 h-5" /></button></div>
             <div className="p-5">
@@ -1581,7 +1649,7 @@ const JobDetailModal = React.memo(({
 
       {/* Add Managed User Modal */}
       {showAddManagedUserModal && selectedJob?.operatorEmail && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !addingClientToOperator && setShowAddManagedUserModal(false)}>
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50" onClick={() => !addingClientToOperator && setShowAddManagedUserModal(false)}>
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between"><h3 className="text-lg font-semibold text-gray-900">Add user to operator</h3><button type="button" onClick={() => !addingClientToOperator && setShowAddManagedUserModal(false)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg"><X className="w-5 h-5" /></button></div>
             <div className="p-5">
@@ -1592,7 +1660,7 @@ const JobDetailModal = React.memo(({
           </div>
         </div>
       )}
-    </div>
+    </Motion.div>
   );
 });
 

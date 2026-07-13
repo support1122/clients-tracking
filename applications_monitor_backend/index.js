@@ -59,6 +59,18 @@ import {
   invalidateJobListCache,
   runHighAppliedJobsNotifications
 } from './controllers/onboardingController.js';
+import {
+  chatStream,
+  listChatUsers,
+  listConversations,
+  openConversation,
+  getMessages as getChatMessages,
+  postMessage as postChatMessage,
+  markConversationRead,
+  getPresence,
+  typingPing
+} from './controllers/chatController.js';
+import { runChatEscalationSweep, runAdminDailyDigest } from './utils/chatCrons.js';
 import { ClientCounterModel } from './ClientCounterModel.js';
 import { OnboardingJobModel } from './OnboardingJobModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
@@ -1739,9 +1751,47 @@ const login = async (req, res) => {
         roles: user.roles || []
       },
       JWT_SECRET,
-      { expiresIn: '24h' }
+      { expiresIn: '30d' }
     );
 
+    res.status(200).json({
+      token,
+      user: {
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        onboardingSubRole: user.onboardingSubRole,
+        roles: user.roles || []
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Sliding session: exchange a still-valid token for a fresh 30-day one.
+// Claims are re-read from the DB so role changes and deactivation take effect
+// on the next refresh instead of living for the full token lifetime.
+const refreshToken = async (req, res) => {
+  try {
+    const user = await UserModel.findOne({ email: (req.user?.email || '').toLowerCase() })
+      .select('email role name onboardingSubRole roles isActive')
+      .lean();
+    if (!user || user.isActive === false) {
+      return res.status(401).json({ error: 'Account is disabled or no longer exists.' });
+    }
+    const token = jwt.sign(
+      {
+        userId: user._id,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        onboardingSubRole: user.onboardingSubRole,
+        roles: user.roles || []
+      },
+      JWT_SECRET,
+      { expiresIn: '30d' }
+    );
     res.status(200).json({
       token,
       user: {
@@ -2614,6 +2664,7 @@ const deleteClient = async (req, res) => {
 // Authentication routes
 app.post('/api/auth/verify-credentials', verifyCredentials);
 app.post('/api/auth/login', login);
+app.post('/api/auth/refresh', verifyToken, refreshToken);
 app.post('/api/auth/request-otp', requestOtp);
 app.post('/api/auth/verify-otp', verifyOtp);
 app.post('/api/auth/validate-otp-trust', validateOtpTrust);
@@ -5005,6 +5056,33 @@ app.get('/api/clients/:email/email-logs', verifyToken, async (req, res) => {
   }
 });
 app.get('/api/managers/names', getDashboardManagerNames);
+
+// ── Team chat (widget) ──
+app.post('/api/upload/chat-attachment', verifyToken, fileUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+    const result = await uploadFile(req.file.buffer, {
+      folder: 'chat-assets',
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+      fileType: null,
+    });
+    if (!result.success) return res.status(500).json({ success: false, message: result.error || 'Upload failed' });
+    res.status(200).json({ success: true, url: result.url, filename: req.file.originalname, contentType: req.file.mimetype });
+  } catch (e) {
+    console.error('Chat attachment upload error:', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to upload' });
+  }
+});
+app.get('/api/chat/stream', chatStream); // token via ?token= (EventSource cannot set headers)
+app.get('/api/chat/users', verifyToken, listChatUsers);
+app.get('/api/chat/conversations', verifyToken, listConversations);
+app.post('/api/chat/conversations', verifyToken, openConversation);
+app.get('/api/chat/conversations/:id/messages', verifyToken, getChatMessages);
+app.post('/api/chat/conversations/:id/messages', verifyToken, postChatMessage);
+app.post('/api/chat/conversations/:id/read', verifyToken, markConversationRead);
+app.get('/api/chat/presence', verifyToken, getPresence);
+app.post('/api/chat/conversations/:id/typing', verifyToken, typingPing);
 
 app.get('/api/onboarding/jobs', verifyToken, listOnboardingJobs);
 app.get('/api/onboarding/jobs/roles', verifyToken, getOnboardingRoles);
@@ -8618,6 +8696,21 @@ if (DISCORD_ZERO_SAVED_WEBHOOK) {
       setTimeout(() => {
         runClientMilestoneCron({ trigger: 'boot' }).catch((e) => console.error('[Client Milestones] boot run failed:', e));
       }, 15_000);
+
+      // Chat: escalation sweep every 10 min (email tags unread 30m, admin ping 3h)
+      try {
+        cron.schedule('*/10 * * * *', runChatEscalationSweep, { timezone: 'Asia/Kolkata' });
+        console.log('📬 [Chat Escalation] Cron scheduled every 10 minutes');
+      } catch (e) {
+        console.error('❌ [Chat Escalation] cron registration failed:', e?.message || e);
+      }
+      // Chat: admin daily digest at 9:00 AM IST
+      try {
+        cron.schedule('0 9 * * *', runAdminDailyDigest, { timezone: 'Asia/Kolkata' });
+        console.log('📬 [Admin Digest] Cron scheduled daily 9:00 AM IST');
+      } catch (e) {
+        console.error('❌ [Admin Digest] cron registration failed:', e?.message || e);
+      }
     });
   })
   .catch((err) => {

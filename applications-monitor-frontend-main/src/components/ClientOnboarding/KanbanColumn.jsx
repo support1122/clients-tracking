@@ -58,6 +58,7 @@ const KanbanColumn = React.memo(({
                 onHoverEnd={onHoverEnd}
                 showJobAnalysis={true}
                 jobAnalysis={analysis}
+                jobAnalysisLoading={clientJobAnalysisLoading}
               />
             </div>
           );

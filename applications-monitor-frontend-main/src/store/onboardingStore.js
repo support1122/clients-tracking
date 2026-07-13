@@ -83,6 +83,10 @@ export const useOnboardingStore = create((set, get) => ({
   jobs: [],
   selectedJob: null,
   loading: false,
+  // Detail-modal fetch progress lives here (not in page state) so opening a
+  // ticket never re-renders the kanban board — only the modal host subscribes.
+  loadingJobDetails: false,
+  loadingComments: false,
   roles: { csms: [], resumeMakers: [] },
   setJobs: (jobsOrUpdater) =>
     set((state) => {
@@ -100,9 +104,11 @@ export const useOnboardingStore = create((set, get) => ({
           : jobOrUpdater
     })),
   setLoading: (loading) => set({ loading }),
+  setLoadingJobDetails: (loadingJobDetails) => set({ loadingJobDetails }),
+  setLoadingComments: (loadingComments) => set({ loadingComments }),
   setRoles: (roles) => set({ roles }),
   getJobsByStatus: (status) => get().jobs.filter((j) => j.status === status),
-  clearSelected: () => set({ selectedJob: null })
+  clearSelected: () => set({ selectedJob: null, loadingJobDetails: false, loadingComments: false })
 }));
 
 // ── Per-field selectors (prevent unnecessary re-renders) ──
@@ -116,6 +122,47 @@ export const useSetSelectedJob = () => useOnboardingStore((s) => s.setSelectedJo
 export const useSetLoading = () => useOnboardingStore((s) => s.setLoading);
 export const useSetRoles = () => useOnboardingStore((s) => s.setRoles);
 export const useClearSelected = () => useOnboardingStore((s) => s.clearSelected);
+
+// ── Detail-modal UI store (persisted) ──
+// Progressive disclosure: every section starts collapsed — the header summary
+// carries the key fact. The user's open/closed choices persist across jobs
+// and sessions, so the modal opens the way they last left it.
+export const MODAL_SECTION_DEFAULTS = {
+  team: false,
+  info: false,
+  gmail: false,
+  analysis: false,
+  milestones: false,
+  emails: false,
+  profile: false,
+  attachments: false,
+  history: false
+};
+
+export const useModalUiStore = create(
+  persist(
+    (set) => ({
+      expandedSections: {},
+      toggleSection: (key) =>
+        set((state) => ({
+          expandedSections: {
+            ...state.expandedSections,
+            [key]: !(state.expandedSections[key] ?? MODAL_SECTION_DEFAULTS[key] ?? false)
+          }
+        })),
+      setSection: (key, open) =>
+        set((state) => ({
+          expandedSections: { ...state.expandedSections, [key]: !!open }
+        }))
+    }),
+    { name: 'onboarding-modal-ui', version: 1 }
+  )
+);
+
+// Subscribe to a single section's open state — a toggle elsewhere doesn't
+// re-render this section's header.
+export const useSectionOpen = (key) =>
+  useModalUiStore((s) => s.expandedSections[key] ?? MODAL_SECTION_DEFAULTS[key] ?? false);
 
 // ── Persistent client profile store (localStorage) ──
 // Single source of truth for profile data. Profiles rarely change, so we persist

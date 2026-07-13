@@ -1,8 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Search, X, Pencil, Loader2, CheckCircle } from 'lucide-react';
 import { clientDisplayName, getSortingNumber } from './helpers';
-import { API_BASE, AUTH_HEADERS } from './constants';
-import { toastUtils } from '../../utils/toastUtils';
 
 const ClientSidebar = React.memo(({
   jobs,

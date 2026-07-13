@@ -1,49 +1,31 @@
 import React from 'react';
-import { User, ChevronRight, Loader2 } from 'lucide-react';
+import { User, Loader2 } from 'lucide-react';
 import { ProfileField } from './ProfileField';
 import { fmtDate } from './utils';
+import CollapsibleSection from '../ClientOnboarding/CollapsibleSection';
 
-/** Memoized Client Profile section - only re-renders when profile data/loading/expanded changes */
+/**
+ * Memoized Client Profile section. Open state lives in the persisted modal UI
+ * store under the 'profile' key (via CollapsibleSection); the modal fetches the
+ * profile whenever that section is open, so this component is display-only.
+ */
 export const ClientProfileSection = React.memo(function ClientProfileSection({
-  expanded,
-  onToggle,
   profileData,
   loading,
-  error,
-  hasClientEmail,
-  onFetchProfile
+  error
 }) {
-  const handleClick = React.useCallback(() => {
-    const willShow = !expanded;
-    onToggle(willShow);
-    if (willShow && hasClientEmail) onFetchProfile?.();
-  }, [expanded, onToggle, hasClientEmail, onFetchProfile]);
-
   const hasProfile = profileData && (profileData.firstName || profileData.lastName || profileData.email);
 
   return (
     <div className="mb-6">
-      <button
-        type="button"
-        onClick={handleClick}
-        className="w-full flex items-center justify-between py-3 px-4 text-left rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-slate-100/80 hover:border-slate-300 transition-colors shadow-sm"
+      <CollapsibleSection
+        id="profile"
+        icon={User}
+        title="Client Profile"
+        badge={loading ? <Loader2 className="w-3 h-3 animate-spin text-primary flex-shrink-0" /> : null}
+        summary={hasProfile ? 'Available' : loading ? 'Loading…' : '—'}
       >
-        <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 flex-1 min-w-0">
-          <User className="w-4 h-4 text-primary flex-shrink-0" />
-          <span className="flex-1 min-w-0">Client Profile</span>
-          {hasProfile && (
-            <span className="text-[10px] font-medium text-slate-500 bg-slate-200 px-2 py-0.5 rounded-md flex-shrink-0">
-              Available
-            </span>
-          )}
-          {loading && (
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-primary flex-shrink-0" />
-          )}
-        </h3>
-        <ChevronRight className={`w-4 h-4 text-slate-400 transition-transform duration-200 flex-shrink-0 ml-2 ${expanded ? 'rotate-90' : ''}`} />
-      </button>
-      {expanded && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden mt-2">
+        <div className="bg-white rounded-xl border border-slate-200/80 overflow-hidden">
           {loading ? (
             <div className="p-12 flex flex-col items-center justify-center gap-3">
               <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -61,7 +43,7 @@ export const ClientProfileSection = React.memo(function ClientProfileSection({
             <ClientProfileContent data={profileData} />
           )}
         </div>
-      )}
+      </CollapsibleSection>
     </div>
   );
 });

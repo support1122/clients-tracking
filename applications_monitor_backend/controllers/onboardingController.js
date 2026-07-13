@@ -8,7 +8,7 @@ import { ClientModel } from '../ClientModel.js';
 import { ManagerModel } from '../ManagerModel.js';
 import OperationsModel from '../OperationsModel.js';
 import { NewUserModel } from '../schema_models/UserModel.js';
-import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
+import { sendChatMessageInternal, emitToUsers } from './chatController.js';
 import { sendMilestoneEmail } from '../utils/clientMilestoneEmails.js';
 import { getPlanCap, MIN_JOBS_FOR_EMAIL } from '../utils/planCaps.js';
 import { clearAnalysisCache } from '../utils/analysisCache.js';
@@ -233,18 +233,30 @@ export async function runHighAppliedJobsNotifications(rows) {
         authorName: 'System',
         read: false
       });
-      const taggedUser = await UserModel.findOne({ email: dmEmail }).select('email otpEmail name').lean();
-      const toEmail = (taggedUser?.otpEmail || '').trim() || dmEmail;
-      sendTagNotificationEmail({
-        toEmail,
-        recipientName: dmName,
-        authorName: 'System',
-        commentSnippet,
+      // Chat DM (source 'tag' → the escalation sweep emails only if still
+      // unread after 30 min, replacing the previous immediate email).
+      sendChatMessageInternal({
+        fromEmail: SYSTEM_AUTO_COMMENT_AUTHOR_EMAIL,
+        fromName: 'System',
+        toEmail: dmEmail,
+        toName: dmName,
+        text: body,
+        ticket: {
+          jobId: updated._id,
+          jobNumber: updated.jobNumber,
+          clientName: updated.clientName || '',
+          clientNumber: updated.clientNumber ?? null
+        },
+        source: 'tag'
+      });
+      emitToUsers([dmEmail], 'notify', {
+        kind: 'tag',
+        jobId: String(updated._id),
         jobNumber: updated.jobNumber,
-        clientName: updated.clientName || '',
-        clientNumber: updated.clientNumber ?? null,
-        jobId: String(updated._id)
-      }).catch(() => {});
+        clientName: updated.clientName || 'Client',
+        authorName: 'System',
+        commentSnippet
+      });
     } catch (e) {
       console.error('[runHighAppliedJobsNotifications] notify error:', e?.message || e);
     }
@@ -857,37 +869,40 @@ export async function patchOnboardingJob(req, res) {
         }));
         if (notifications.length) {
           await OnboardingNotificationModel.insertMany(notifications).catch(err => console.error('OnboardingNotification insert:', err));
+          // Instant push over the chat SSE stream — replaces waiting for the
+          // 2-minute notification poll on the onboarding board.
+          notifications.forEach((n) => {
+            emitToUsers([n.userEmail], 'notify', {
+              kind: 'tag',
+              jobId: String(n.jobId),
+              jobNumber: n.jobNumber,
+              clientName: n.clientName,
+              authorName: n.authorName,
+              commentSnippet: n.commentSnippet
+            });
+          });
         }
 
-        // Batch lookup all tagged users' otpEmails in a single query
-        const taggedUsersData = await UserModel.find({ email: { $in: cleanTaggedEmails } })
-          .select('email otpEmail name')
-          .lean();
-        const taggedUserMap = new Map(taggedUsersData.map(u => [u.email.toLowerCase(), u]));
-
-        // Send email notifications to tagged users (fire-and-forget)
+        // Chat widget: DM each tagged user from the comment author, carrying a
+        // ticket reference so the widget can deep-link back to this job.
+        // The tag notification EMAIL is no longer sent immediately — the
+        // escalation sweep (utils/chatCrons.js) emails only if this chat
+        // message is still unread after 30 minutes.
         cleanTaggedEmails.forEach((userEmail, i) => {
-          const taggedUser = taggedUserMap.get(userEmail);
-          if (!taggedUser) {
-            console.warn(`[Tagged] User ${userEmail} not found in tracking_portal_users — sending to primary email`);
-          }
-          const toEmail = (taggedUser?.otpEmail || '').trim() || userEmail;
-          const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) ? comment.taggedNames[i] : null;
-          const emailType = taggedUser?.otpEmail ? 'otpEmail' : 'primary';
-          console.log(`[Tagged] ${authorName} tagged ${userEmail} in job #${job.jobNumber} -> sending to ${toEmail} (${emailType})`);
-          sendTagNotificationEmail({
-            toEmail,
-            recipientName: recipientName || taggedUser?.name,
-            authorName,
-            commentSnippet,
-            jobNumber: job.jobNumber,
-            clientName: job.clientName || '',
-            clientNumber: job.clientNumber ?? null,
-            jobId: String(job._id)
-          }).then(() => {
-            console.log(`[Tag Email] Sent successfully to ${toEmail} for tagged user ${userEmail}`);
-          }).catch(err => {
-            console.error(`[Tag Email] Failed to send to ${toEmail} for tagged user ${userEmail}:`, err?.message || err);
+          const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) || userEmail;
+          sendChatMessageInternal({
+            fromEmail: authorEmail,
+            fromName: authorName,
+            toEmail: userEmail,
+            toName: recipientName,
+            text: commentBody || '(image)',
+            ticket: {
+              jobId: job._id,
+              jobNumber: job.jobNumber,
+              clientName: job.clientName || '',
+              clientNumber: job.clientNumber ?? null
+            },
+            source: 'tag'
           });
         });
       }
