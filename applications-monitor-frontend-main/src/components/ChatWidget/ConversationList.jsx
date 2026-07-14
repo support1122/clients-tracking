@@ -11,7 +11,7 @@ const ConversationRow = React.memo(function ConversationRow({ convo, meEmail, on
     <button
       type="button"
       onClick={() => onOpen(convo._id)}
-      className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+      className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[#f6f5f4] transition-colors"
     >
       <Avatar name={convo.otherName} email={convo.otherEmail} online={online} />
       <span className="flex-1 min-w-0">
@@ -78,7 +78,7 @@ export default function ConversationList({ meEmail }) {
   if (picking) {
     return (
       <div className="flex-1 flex flex-col min-h-0">
-        <div className="px-4 py-2 border-b border-gray-100">
+        <div className="px-4 py-2 border-b border-[#efedeb]">
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
             <input
@@ -87,7 +87,7 @@ export default function ConversationList({ meEmail }) {
               placeholder="Search teammates..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary"
+              className="w-full pl-8 pr-3 py-2 text-sm border border-[#e6e4e1] rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary"
             />
           </div>
         </div>
@@ -103,7 +103,7 @@ export default function ConversationList({ meEmail }) {
                 type="button"
                 onClick={() => handleStartDm(u.email)}
                 disabled={!!starting}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-50 transition-colors disabled:opacity-60"
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-[#f6f5f4] transition-colors disabled:opacity-60"
               >
                 <Avatar name={u.name} email={u.email} size="sm" />
                 <span className="flex-1 min-w-0">
@@ -115,7 +115,7 @@ export default function ConversationList({ meEmail }) {
             ))
           )}
         </div>
-        <div className="p-3 border-t border-gray-100">
+        <div className="p-3 border-t border-[#efedeb]">
           <button
             type="button"
             onClick={backToList}
@@ -153,11 +153,11 @@ export default function ConversationList({ meEmail }) {
           ))
         )}
       </div>
-      <div className="p-3 border-t border-gray-100">
+      <div className="p-3 border-t border-[#efedeb]">
         <button
           type="button"
           onClick={showNewMessage}
-          className="w-full flex items-center justify-center gap-2 py-2.5 bg-primary text-white text-sm font-semibold rounded-xl hover:bg-primary-hover transition-colors"
+          className="w-full flex items-center justify-center gap-2 py-2.5 bg-primary text-white text-sm font-semibold rounded-full hover:bg-primary-hover transition-colors"
         >
           <SquarePen className="w-4 h-4" /> Send a message
         </button>

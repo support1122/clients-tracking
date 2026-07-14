@@ -25,7 +25,7 @@ export const ClientProfileSection = React.memo(function ClientProfileSection({
         badge={loading ? <Loader2 className="w-3 h-3 animate-spin text-primary flex-shrink-0" /> : null}
         summary={hasProfile ? 'Available' : loading ? 'Loading…' : '—'}
       >
-        <div className="bg-white rounded-xl border border-slate-200/80 overflow-hidden">
+        <div className="bg-white rounded-xl border border-[#e6e4e1] overflow-hidden">
           {loading ? (
             <div className="p-12 flex flex-col items-center justify-center gap-3">
               <Loader2 className="w-8 h-8 animate-spin text-primary" />

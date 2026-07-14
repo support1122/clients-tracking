@@ -6,11 +6,13 @@ const SIZES = {
   md: 'w-10 h-10 text-sm'
 };
 
+// Name-first color hash — matches the board's DM chips, so the same person
+// carries the same color on every surface.
 const Avatar = React.memo(function Avatar({ name, email, size = 'md', online }) {
   return (
     <span className="relative inline-flex flex-shrink-0">
       <span
-        className={`${SIZES[size] || SIZES.md} ${avatarColor(email)} rounded-full flex items-center justify-center font-bold select-none`}
+        className={`${SIZES[size] || SIZES.md} ${avatarColor((name || email || '').toLowerCase())} rounded-full flex items-center justify-center font-bold select-none`}
         title={email}
       >
         {initials(name)}

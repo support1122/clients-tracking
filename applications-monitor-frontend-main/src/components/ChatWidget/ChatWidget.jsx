@@ -84,11 +84,11 @@ export default function ChatWidget({ user }) {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.98 }}
             transition={{ duration: 0.2, ease: SECTION_EASE }}
-            className="fixed bottom-24 right-6 z-[115] w-[380px] max-w-[calc(100vw-32px)] h-[min(600px,calc(100vh-130px))] bg-white rounded-2xl shadow-2xl ring-1 ring-black/5 border border-gray-100 flex flex-col overflow-hidden"
+            className="fixed bottom-24 right-6 z-[115] w-[380px] max-w-[calc(100vw-32px)] h-[min(600px,calc(100vh-130px))] bg-white rounded-2xl shadow-2xl ring-1 ring-black/5 border border-[#efedeb] flex flex-col overflow-hidden"
           >
             {/* Panel header (list + new views; the thread renders its own) */}
             {view !== 'chat' && (
-              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-[#efedeb]">
                 <h2 className="text-base font-bold text-gray-900">
                   {view === 'new' ? 'New message' : 'Messages'}
                 </h2>

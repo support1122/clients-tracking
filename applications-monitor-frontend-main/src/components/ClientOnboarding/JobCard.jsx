@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import {
-  User,
-  MoreHorizontal,
-  ArrowUpDown,
-  ChevronDown,
-  ChevronRight,
-  AlertCircle,
-  CheckCircle
-} from 'lucide-react';
+import { ArrowUpDown, CheckCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import { STATUS_LABELS, useClientProfileStore } from '../../store/onboardingStore';
-import { getAllowedStatusesForPlan, clientDisplayName } from './helpers';
+import { getAllowedStatusesForPlan } from './helpers';
+import { initials, avatarColor } from '../../utils/chatFormat';
+
+// Next-step wording for the single readiness line (replaces 4 stacked chips)
+const PENDING_LABELS = {
+  dashboard: 'Dashboard pending',
+  resume: 'Resume pending',
+  coverLinkedIn: 'Cover + LinkedIn pending',
+  portfolio: 'Portfolio pending'
+};
 
 const JobCard = React.memo(({
   job,
@@ -60,18 +61,30 @@ const JobCard = React.memo(({
   const hasCoverLetter = attachmentNames.some((n) => /cover\s*letter/i.test(n));
   const hasPortfolio = attachmentNames.some((n) => /portfolio/i.test(n));
   const steps = [
-    { key: 'dashboard', label: dashboardUnchecked ? 'Dashboard checking…' : 'Dashboard details', labelDone: 'Dashboard details', done: hasDashboard, unchecked: dashboardUnchecked },
-    { key: 'resume', label: 'Resume not sent', labelDone: 'Resume sent', done: hasResume },
-    ...(hasLinkedInCoverLetter ? [{ key: 'coverLinkedIn', label: 'Cover and LinkedIn Pending', labelDone: 'Cover and LinkedIn', done: hasCoverLetter }] : []),
-    ...(isExecutive ? [{ key: 'portfolio', label: 'Portfolio Pending', labelDone: 'Portfolio', done: hasPortfolio }] : [])
+    { key: 'dashboard', done: hasDashboard, unchecked: dashboardUnchecked },
+    { key: 'resume', done: hasResume },
+    ...(hasLinkedInCoverLetter ? [{ key: 'coverLinkedIn', done: hasCoverLetter }] : []),
+    ...(isExecutive ? [{ key: 'portfolio', done: hasPortfolio }] : [])
   ];
   const firstIncompleteIndex = steps.findIndex((s) => !s.done && !s.unchecked);
+  const allDone = firstIncompleteIndex === -1 && !steps.some((s) => s.unchecked);
 
-  const getCardBackgroundColor = () => {
-    if (job.clientStatus === 'inactive') return 'bg-red-50 border-red-200';
-    if (job.clientIsPaused) return 'bg-yellow-50 border-yellow-200';
-    return 'bg-white border-transparent';
-  };
+  // "5761 · Macon Moring" — number in accent, name in ink
+  const num = job.clientNumber;
+  let displayName = (job.clientName || '').trim();
+  if (num != null && displayName.startsWith(`${num} - `)) displayName = displayName.slice(`${num} - `.length).trim();
+
+  const isPaused = !!job.clientIsPaused;
+  const isInactive = job.clientStatus === 'inactive';
+  const railClass = isInactive
+    ? 'border-l-[3px] border-l-rose-300'
+    : isPaused
+      ? 'border-l-[3px] border-l-amber-400'
+      : '';
+
+  const lastApplied = jobAnalysis?.lastAppliedOperatorName
+    ? jobAnalysis.lastAppliedOperatorName.charAt(0).toUpperCase() + jobAnalysis.lastAppliedOperatorName.slice(1).toLowerCase()
+    : '';
 
   return (
     <div
@@ -86,175 +99,120 @@ const JobCard = React.memo(({
       onTouchEnd={onLongPressEnd}
       onTouchCancel={onLongPressEnd}
       onClick={() => onCardClick(job)}
-      className={`group ${getCardBackgroundColor()} rounded-xl p-4 border shadow-sm hover:shadow-md hover:border-orange-100 transition-[transform,opacity,box-shadow,border-color] duration-200 ease-out cursor-grab active:cursor-grabbing relative ${isDragging ? 'opacity-50 scale-[0.98] shadow-lg ring-2 ring-primary/20 rotate-1' : 'hover:scale-[1.01]'}`}
+      className={`group bg-white rounded-[10px] px-3.5 py-3 border border-[#e6e4e1] ${railClass} shadow-[0_1px_2px_rgba(0,0,0,0.02)] hover:shadow-[0_2px_8px_rgba(0,0,0,0.06)] hover:border-[#d9d5d0] transition-[box-shadow,border-color,opacity,transform] duration-150 ease-out cursor-grab active:cursor-grabbing relative ${isDragging ? 'opacity-50 scale-[0.98] ring-2 ring-primary/20' : ''}`}
     >
-      <div className="flex items-start justify-between mb-2">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] font-bold tracking-wider text-gray-400 uppercase bg-gray-50 px-2 py-0.5 rounded-md border border-gray-100">
-            {job.jobNumber}
-            {job.daysInPipeline != null && (
-              <span className="ml-1 font-normal text-gray-500 normal-case" title="Days since profile completed">
-                · {job.daysInPipeline}d
-              </span>
-            )}
+      {/* Row 1: number · name — age */}
+      <div className="flex items-baseline gap-1.5">
+        <h4 className="font-bold text-gray-900 text-sm leading-snug truncate min-w-0">
+          {num != null && <span className="text-primary tabular-nums">{num}</span>}
+          {num != null && <span className="text-gray-300 font-normal"> · </span>}
+          {displayName || '—'}
+        </h4>
+        {isAdmin && job.adminUnreadCount > 0 && (
+          <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none flex-shrink-0">
+            {job.adminUnreadCount > 99 ? '99+' : job.adminUnreadCount}
           </span>
-          {job.clientIsPaused && job.clientPausedDays != null && (
-            <span
-              className="text-[10px] font-semibold text-yellow-900 bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200 normal-case"
-              title="Days since client was set to Paused (Client Job Analysis)"
-            >
-              Paused · {job.clientPausedDays}d
-            </span>
-          )}
-          {isAdmin && job.adminUnreadCount > 0 && (
-            <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none">
-              {job.adminUnreadCount > 99 ? '99+' : job.adminUnreadCount}
-            </span>
-          )}
-          {job.pendingMoveRequest?.active && (
-            <span className="flex items-center gap-0.5 px-1.5 h-[18px] rounded-full bg-amber-100 text-amber-700 text-[9px] font-bold leading-none" title={`Pending move to ${STATUS_LABELS[job.pendingMoveRequest.targetStatus] || ''}`}>
-              <ArrowUpDown className="w-2.5 h-2.5" /> Move
-            </span>
-          )}
-        </div>
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-          <button type="button" className="text-gray-400 hover:text-primary"><MoreHorizontal className="w-4 h-4" /></button>
-        </div>
+        )}
+        {job.pendingMoveRequest?.active && (
+          <span className="flex items-center gap-0.5 px-1.5 h-[18px] rounded-full bg-amber-100 text-amber-700 text-[9px] font-bold leading-none flex-shrink-0" title={`Pending move to ${STATUS_LABELS[job.pendingMoveRequest.targetStatus] || ''}`}>
+            <ArrowUpDown className="w-2.5 h-2.5" /> Move
+          </span>
+        )}
+        {job.daysInPipeline != null && (
+          <span className="ml-auto text-[11px] text-gray-400 tabular-nums whitespace-nowrap flex-shrink-0" title="Days since profile completed">
+            {job.daysInPipeline}d
+          </span>
+        )}
       </div>
-      <div className="flex flex-wrap gap-1 mb-2">
-        {steps.map((step, idx) => {
-          const isFirstIncomplete = firstIncompleteIndex === idx;
-          const isDone = step.done;
-          const label = isDone ? step.labelDone : step.label;
-          if (isDone) {
-            return (
-              <span key={step.key} className="inline-flex items-center gap-0.5 text-[10px] font-medium text-green-700 bg-green-50 px-1.5 py-0.5 rounded border border-green-200">
-                <CheckCircle className="w-2.5 h-2.5 flex-shrink-0" />
-                {label}
-              </span>
-            );
-          }
-          if (step.unchecked) {
-            return (
-              <span key={step.key} className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
-                {label}
-              </span>
-            );
-          }
-          if (isFirstIncomplete) {
-            return (
-              <span key={step.key} className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-red-700 bg-red-50 px-1.5 py-0.5 rounded border border-red-200">
-                <AlertCircle className="w-2.5 h-2.5 flex-shrink-0" />
-                {label}
-              </span>
-            );
-          }
-          return (
-            <span key={step.key} className="inline-flex items-center gap-0.5 text-[10px] font-medium text-gray-500 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200">
-              {label}
-            </span>
-          );
-        })}
-      </div>
-      <h4 className="font-bold text-gray-900 text-sm leading-snug mb-1 cursor-default">
-        {clientDisplayName(job)}
-      </h4>
-      <p className="text-xs text-gray-500 mb-3 font-medium">{job.planType || 'Professional'}</p>
 
-      {showJobAnalysis && (
-        <div className="mb-3 pb-3 border-b border-gray-100 bg-gray-50/50 rounded-lg px-2 py-2">
-          {job.clientIsPaused && (
-            <div className="mb-2 pb-2 border-b border-amber-100/90 flex flex-col items-center gap-1">
-              <span className="text-[10px] font-semibold text-amber-900 bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200">
-                Paused
-              </span>
-              {jobAnalysisLoading && job.clientPausedDays == null ? (
-                <div className="h-3 w-9 rounded bg-amber-200/80 animate-pulse" title="Loading pause details" />
-              ) : (
-                <span className="text-[10px] font-medium text-amber-800">
-                  {job.clientPausedDays != null ? `${job.clientPausedDays}d` : '—'}
-                </span>
-              )}
-            </div>
+      {/* Row 2: plan + state pills */}
+      <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
+        <span className="truncate">{job.planType || 'Professional'}</span>
+        {isPaused && (
+          <span className="text-[10.5px] font-semibold text-amber-700 bg-amber-50 rounded-full px-2 py-px flex-shrink-0" title="Days since client was set to Paused">
+            Paused{job.clientPausedDays != null ? ` · ${job.clientPausedDays}d` : ''}
+          </span>
+        )}
+        {isInactive && (
+          <span className="text-[10.5px] font-semibold text-rose-700 bg-rose-50 rounded-full px-2 py-px flex-shrink-0">Inactive</span>
+        )}
+      </div>
+
+      {/* Row 3: readiness dots + the one actionable next step */}
+      <div className="flex items-center gap-1.5 mt-2.5 text-[11.5px]">
+        {steps.map((s, idx) => (
+          <span
+            key={s.key}
+            className={`rounded-full flex-shrink-0 ${
+              s.done
+                ? 'w-[7px] h-[7px] bg-green-500'
+                : s.unchecked
+                  ? 'w-[7px] h-[7px] bg-sky-300 animate-pulse'
+                  : idx === firstIncompleteIndex
+                    ? 'w-2 h-2 border-2 border-primary bg-transparent'
+                    : 'w-[7px] h-[7px] bg-gray-300'
+            }`}
+          />
+        ))}
+        <span className="ml-1 min-w-0 truncate">
+          {allDone ? (
+            <span className="inline-flex items-center gap-1 text-green-700 font-semibold"><CheckCircle className="w-3 h-3" /> All steps done</span>
+          ) : firstIncompleteIndex !== -1 ? (
+            <span className="font-semibold text-gray-800">{PENDING_LABELS[steps[firstIncompleteIndex].key]}</span>
+          ) : (
+            <span className="text-gray-400">Dashboard checking…</span>
           )}
-          <div className="grid grid-cols-3 gap-2 mb-2">
-            {jobAnalysisLoading ? (
-              Array.from({ length: 6 }).map((_, si) => (
-                <div key={`sk-${si}`} className="text-center space-y-1">
-                  <div className="h-2.5 bg-gray-200 rounded animate-pulse w-12 mx-auto" />
-                  <div className="h-3.5 bg-gray-200/90 rounded animate-pulse w-7 mx-auto" />
-                </div>
-              ))
-            ) : (
-              <>
-                <div className="text-center">
-                  <div className="text-[10px] text-gray-500 font-medium">Saved</div>
-                  <div className="text-xs font-semibold text-gray-700">{jobAnalysis?.saved ?? 0}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[10px] text-gray-500 font-medium">Applied</div>
-                  <div className="text-xs font-semibold text-green-600">{jobAnalysis?.applied ?? 0}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[10px] text-gray-500 font-medium">Interview</div>
-                  <div className="text-xs font-semibold text-yellow-600">{jobAnalysis?.interviewing ?? 0}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[10px] text-gray-500 font-medium">Offer</div>
-                  <div className="text-xs font-semibold text-purple-600">{jobAnalysis?.offer ?? 0}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[10px] text-gray-500 font-medium">Rejected</div>
-                  <div className="text-xs font-semibold text-red-600">{jobAnalysis?.rejected ?? 0}</div>
-                </div>
-                <div className="text-center">
-                  <div className="text-[10px] text-gray-500 font-medium">Removed</div>
-                  <div className="text-xs font-semibold text-gray-600">{jobAnalysis?.removed ?? 0}</div>
-                </div>
-              </>
-            )}
-          </div>
-          <div className="mt-2 pt-2 border-t border-gray-200">
-            <div className="text-[10px] text-gray-500 font-medium">Last applied by</div>
-            {jobAnalysisLoading ? (
-              <div className="h-3.5 mt-1 bg-gray-200 rounded animate-pulse w-24 max-w-full" />
-            ) : (
-              <div className="text-xs font-semibold text-gray-700 mt-0.5">
-                {jobAnalysis?.lastAppliedOperatorName ? (
-                  jobAnalysis.lastAppliedOperatorName.charAt(0).toUpperCase() + jobAnalysis.lastAppliedOperatorName.slice(1).toLowerCase()
-                ) : (
-                  <span className="italic text-red-700">Not started yet</span>
-                )}
-              </div>
-            )}
-          </div>
+        </span>
+      </div>
+
+      {/* Row 4: one quiet metrics line */}
+      {showJobAnalysis && (
+        <div className="flex items-center gap-3.5 mt-2.5 pt-2 border-t border-[#efedeb] text-[11.5px] text-gray-500 tabular-nums">
+          {jobAnalysisLoading && !jobAnalysis ? (
+            <span className="h-3 w-40 rounded bg-gray-100 animate-pulse" />
+          ) : (
+            <>
+              <span><b className="font-semibold text-gray-900">{(jobAnalysis?.applied ?? 0).toLocaleString()}</b> applied</span>
+              <span><b className="font-semibold text-gray-900">{jobAnalysis?.interviewing ?? 0}</b> interviews</span>
+              <span><b className={`font-semibold ${jobAnalysis?.removed ? 'text-amber-700' : 'text-gray-900'}`}>{jobAnalysis?.removed ?? 0}</b> removed</span>
+            </>
+          )}
         </div>
       )}
 
-      <div className="flex items-center gap-2 mt-auto pt-3 border-t border-gray-50 flex-wrap">
+      {/* Row 5: owner + move */}
+      <div className="flex items-center gap-2 mt-2.5">
         {job.dashboardManagerName ? (
-          <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 px-2 py-1 rounded-full border border-gray-100" title="Dashboard Manager">
-            <User className="w-3 h-3 text-primary" />
-            <span className="font-medium truncate max-w-[100px]">{job.dashboardManagerName}</span>
-          </div>
+          <span className="inline-flex items-center gap-1.5 text-[11.5px] text-gray-500 min-w-0" title={`Dashboard Manager: ${job.dashboardManagerName}`}>
+            <span className="text-[8px] font-bold uppercase tracking-[0.08em] text-gray-400 flex-shrink-0">DM</span>
+            <span className={`w-[18px] h-[18px] rounded-full text-[8.5px] font-bold grid place-items-center flex-shrink-0 ${avatarColor(job.dashboardManagerName.toLowerCase())}`}>
+              {initials(job.dashboardManagerName)}
+            </span>
+            <span className="truncate">
+              <span className="font-semibold text-gray-700">{job.dashboardManagerName}</span>
+              {showJobAnalysis && !jobAnalysisLoading && (
+                lastApplied
+                  ? <span className="text-gray-400"> · last by {lastApplied}</span>
+                  : <span className="text-rose-500"> · not started</span>
+              )}
+              {job.linkedInMemberName && <span className="text-gray-400"> · {job.linkedInMemberName}</span>}
+            </span>
+          </span>
         ) : (
-          <span className="text-[10px] text-gray-400 italic">Unassigned DM</span>
-        )}
-        {job.linkedInMemberName && (
-          <div className="flex items-center gap-1.5 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded-full border border-purple-100" title="LinkedIn Member">
-            <User className="w-3 h-3 text-purple-500" />
-            <span className="font-medium truncate max-w-[100px]">{job.linkedInMemberName}</span>
-          </div>
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-400" title="No Dashboard Manager assigned">
+            <span className="text-[8px] font-bold uppercase tracking-[0.08em]">DM</span>
+            <span className="w-[18px] h-[18px] rounded-full border border-dashed border-gray-300 flex-shrink-0" />
+            <em className="not-italic">unassigned</em>
+          </span>
         )}
         {isAdmin && onMoveTo && moveToOptions.length > 0 && (
-          <div className="relative ml-auto" ref={moveDropdownRef}>
+          <div className="relative ml-auto flex-shrink-0" ref={moveDropdownRef}>
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); e.preventDefault(); setMoveDropdownOpen((v) => !v); }}
-              className="flex items-center gap-1 text-xs font-medium text-primary bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-full px-2.5 py-1 transition-colors"
+              className="flex items-center gap-1 text-[11.5px] font-semibold text-gray-500 bg-white hover:text-primary border border-[#e6e4e1] hover:border-orange-200 rounded-lg px-2.5 py-1 transition-colors"
             >
-              <ArrowUpDown className="w-3 h-3" />
-              <span>Move to</span>
+              Move
               <ChevronDown className={`w-3 h-3 transition-transform ${moveDropdownOpen ? 'rotate-180' : ''}`} />
             </button>
             {moveDropdownOpen && (

@@ -11,6 +11,7 @@ import { NewUserModel } from '../schema_models/UserModel.js';
 import { sendChatMessageInternal, emitToUsers } from './chatController.js';
 import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
 import { sendTagDiscordPing } from '../utils/tagDiscordNotify.js';
+import { TagReminderModel } from '../TagReminderModel.js';
 import { sendMilestoneEmail } from '../utils/clientMilestoneEmails.js';
 import { getPlanCap, MIN_JOBS_FOR_EMAIL } from '../utils/planCaps.js';
 import { clearAnalysisCache } from '../utils/analysisCache.js';
@@ -1270,6 +1271,136 @@ export async function resolveOnboardingComment(req, res) {
   } catch (e) {
     console.error('resolveOnboardingComment:', e);
     res.status(500).json({ error: e.message || 'Failed to mark as resolved' });
+  }
+}
+
+/**
+ * POST /api/onboarding/jobs/:id/comments/:commentId/replies
+ * Add a thread reply to a comment. Notifies the parent comment's participants
+ * (author + tagged users, excluding the replier) via bell + instant SSE.
+ */
+export async function addCommentReply(req, res) {
+  try {
+    const { id: jobId, commentId } = req.params;
+    const userEmail = (req.user?.email || '').toLowerCase().trim();
+    if (!userEmail) return res.status(401).json({ error: 'Unauthorized' });
+    const body = (req.body?.body || '').trim();
+    if (!body) return res.status(400).json({ error: 'Reply text required' });
+
+    const job = await OnboardingJobModel.findById(jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const comment = (job.comments || []).find((c) => String(c._id) === String(commentId));
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+
+    if (!comment.replies) comment.replies = [];
+    comment.replies.push({
+      body: body.slice(0, 4000),
+      authorEmail: userEmail,
+      authorName: req.user?.name || userEmail,
+      createdAt: new Date()
+    });
+    job.updatedAt = new Date();
+    job.markModified('comments');
+    await job.save();
+    jobListCache.clear();
+    jobDetailCache.del(`job:${jobId}`);
+
+    // Notify thread participants: parent author + tagged users + earlier
+    // repliers, minus the person replying now.
+    const participants = new Set(
+      [
+        comment.authorEmail,
+        ...(comment.taggedUserIds || []),
+        ...(comment.replies || []).map((r) => r.authorEmail)
+      ]
+        .map((e) => (e || '').toLowerCase().trim())
+        .filter((e) => e && e !== userEmail && !e.includes('.internal'))
+    );
+    if (participants.size > 0) {
+      const snippet = body.slice(0, 120);
+      const notifications = [...participants].map((email) => ({
+        userEmail: email,
+        jobId: job._id,
+        jobNumber: job.jobNumber,
+        clientNumber: job.clientNumber ?? null,
+        clientName: job.clientName || '',
+        commentSnippet: `↩ ${snippet}`,
+        authorEmail: userEmail,
+        authorName: req.user?.name || userEmail,
+        read: false
+      }));
+      OnboardingNotificationModel.insertMany(notifications).catch((err) =>
+        console.error('reply notifications insert:', err)
+      );
+      for (const email of participants) {
+        emitToUsers([email], 'notify', {
+          kind: 'thread_reply',
+          jobId: String(job._id),
+          jobNumber: job.jobNumber,
+          clientName: job.clientName || '',
+          authorName: req.user?.name || userEmail,
+          commentSnippet: snippet
+        });
+      }
+    }
+
+    res.status(200).json({ job: job.toObject() });
+  } catch (e) {
+    console.error('addCommentReply:', e);
+    res.status(500).json({ error: e.message || 'Failed to add reply' });
+  }
+}
+
+/**
+ * PATCH /api/onboarding/jobs/:id/comments/:commentId/reopen
+ * Clear a comment's resolutions (admin, comment author, or a tagged user).
+ * Discord tag reminders restart because the reminder log is reset.
+ */
+export async function reopenComment(req, res) {
+  try {
+    const { id: jobId, commentId } = req.params;
+    const userEmail = (req.user?.email || '').toLowerCase().trim();
+    if (!userEmail) return res.status(401).json({ error: 'Unauthorized' });
+    const isAdmin = req.user?.role === 'admin';
+
+    const job = await OnboardingJobModel.findById(jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const comment = (job.comments || []).find((c) => String(c._id) === String(commentId));
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+
+    const taggedEmails = (comment.taggedUserIds || []).map((e) => (e || '').toLowerCase().trim());
+    const isAuthor = (comment.authorEmail || '').toLowerCase().trim() === userEmail;
+    if (!isAdmin && !isAuthor && !taggedEmails.includes(userEmail)) {
+      return res.status(403).json({ error: 'Only an admin, the author, or a tagged user can reopen this' });
+    }
+    if (!(comment.resolvedByTagged || []).length) {
+      return res.status(400).json({ error: 'Comment is not resolved' });
+    }
+
+    comment.resolvedByTagged = [];
+    if (!job.moveHistory) job.moveHistory = [];
+    job.moveHistory.push({
+      actionType: 'comment_reopened',
+      movedBy: userEmail,
+      movedByName: req.user?.name || '',
+      movedAt: new Date(),
+      commentId: String(comment._id),
+      commentSnippet: (comment.body || '').slice(0, 120)
+    });
+    job.updatedAt = new Date();
+    job.markModified('comments');
+    job.markModified('moveHistory');
+    await job.save();
+    jobListCache.clear();
+    jobDetailCache.del(`job:${jobId}`);
+
+    // Reset Discord reminder counters so the re-opened tag gets chased again.
+    TagReminderModel.deleteMany({ jobId: job._id, commentId: String(comment._id) }).catch(() => {});
+
+    res.status(200).json({ job: job.toObject() });
+  } catch (e) {
+    console.error('reopenComment:', e);
+    res.status(500).json({ error: e.message || 'Failed to reopen' });
   }
 }
 

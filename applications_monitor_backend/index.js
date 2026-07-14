@@ -51,6 +51,8 @@ import {
   patchOnboardingJobAttachment,
   getOnboardingNotifications,
   markOnboardingNotificationRead,
+  addCommentReply,
+  reopenComment,
   markAdminRead,
   getNonResolvedIssues,
   requestMove,
@@ -5102,6 +5104,8 @@ app.post('/api/onboarding/jobs', verifyToken, postOnboardingJob);
 app.get('/api/onboarding/jobs/:id', verifyToken, getOnboardingJobById);
 app.get('/api/onboarding/jobs/:id/comments', verifyToken, getOnboardingJobComments);
 app.patch('/api/onboarding/jobs/:id/comments/:commentId/resolve', verifyToken, resolveOnboardingComment);
+app.post('/api/onboarding/jobs/:id/comments/:commentId/replies', verifyToken, addCommentReply);
+app.patch('/api/onboarding/jobs/:id/comments/:commentId/reopen', verifyToken, reopenComment);
 app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
 app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
 app.patch('/api/onboarding/jobs/:id/attachments/:index', verifyToken, patchOnboardingJobAttachment);

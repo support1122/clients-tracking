@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { motion as Motion } from 'framer-motion';
+import { motion as Motion, AnimatePresence } from 'framer-motion';
 import {
   X,
   Loader2,
@@ -15,6 +15,7 @@ import {
   CheckCircle,
   Mail,
   MessageSquare,
+  PanelLeft,
   RefreshCw,
   AlertTriangle
 } from 'lucide-react';
@@ -27,6 +28,7 @@ import {
   ONBOARDING_STATUSES
 } from '../../store/onboardingStore';
 import CollapsibleSection from './CollapsibleSection';
+import PersonChip from './PersonChip';
 import { OVERLAY_FADE, PANEL_RISE } from './animation';
 import { API_BASE, AUTH_HEADERS, LOG } from './constants';
 import { getStatusColor, clientDisplayName, convertToDMY } from './helpers';
@@ -58,6 +60,8 @@ const JobDetailModal = React.memo(({
   // Section open/closed state lives in the persisted modal UI store
   // (useSectionOpen / useModalUiStore), not here.
   const profileOpen = useSectionOpen('profile');
+  // Chat-first layout: the details column lives in a slide-in drawer
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [clientProfileData, setClientProfileData] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState(null);
@@ -795,7 +799,7 @@ const JobDetailModal = React.memo(({
     >
       <Motion.div
         key={selectedJob._id}
-        className="bg-[#FAFAFA] rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] overflow-hidden flex flex-col ring-1 ring-white/20"
+        className="bg-[#f6f5f4] rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] overflow-hidden flex flex-col ring-1 ring-white/20"
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
         {...PANEL_RISE}
@@ -806,7 +810,7 @@ const JobDetailModal = React.memo(({
           </div>
         )}
         {/* Modal Header */}
-        <div className="bg-white border-b border-gray-200 px-6 py-4 flex items-start justify-between sticky top-0 z-10">
+        <div className="bg-white border-b border-[#e6e4e1] px-6 py-4 flex items-start justify-between sticky top-0 z-10">
           <div>
             <div className="flex items-center gap-3 mb-1">
               <div className="flex items-center gap-2">
@@ -819,15 +823,40 @@ const JobDetailModal = React.memo(({
               </div>
               <span className="text-sm font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-md border border-gray-200">#{selectedJob.jobNumber}</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedJob.status)}`}>
                 {STATUS_LABELS[selectedJob.status]}
               </span>
               <span className="text-gray-300 text-sm">|</span>
               <span className="text-sm text-gray-500">{selectedJob.planType || 'Professional'} Plan</span>
+              {/* Vital signs — the facts people glance at mid-conversation.
+                  Person chips carry a stable per-person color, so owners are
+                  recognizable without reading. */}
+              <span className="hidden md:inline-flex items-center gap-1.5 ml-1">
+                <PersonChip role="DM" name={selectedJob.dashboardManagerName} title={`Dashboard Manager: ${selectedJob.dashboardManagerName}`} />
+                <PersonChip role="CSM" name={selectedJob.csmName} title={`Client Success Manager: ${selectedJob.csmName}`} />
+                {cardJobAnalysis != null && (
+                  <span className="inline-flex items-center text-[11px] text-gray-500 bg-white border border-[#e6e4e1] rounded-full px-2.5 py-1">
+                    <b className="font-semibold text-gray-800 tabular-nums mr-1">{(cardJobAnalysis.applied ?? 0).toLocaleString()}</b> applied
+                  </span>
+                )}
+              </span>
             </div>
           </div>
           <div className="flex items-center gap-1 z-20 relative">
+            <button
+              type="button"
+              onClick={() => setDetailsOpen((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                detailsOpen
+                  ? 'border-orange-200 text-primary bg-orange-50'
+                  : 'border-[#e6e4e1] text-gray-600 hover:border-[#d9d5d0] bg-white'
+              }`}
+              title="Open ticket details (team, info, credentials, analysis…)"
+            >
+              <PanelLeft className="w-4 h-4" />
+              <span className="hidden sm:inline">Details</span>
+            </button>
             <button
               type="button"
               onClick={() => useChatStore.getState().shareTicket({
@@ -848,11 +877,42 @@ const JobDetailModal = React.memo(({
           </div>
         </div>
 
-        {/* Modal Body */}
-        <div className="flex flex-1 overflow-hidden min-h-0">
-          {/* Left Column: Details */}
-          <div className="w-[55%] overflow-y-auto p-6 border-r border-gray-200 bg-white">
-            <div className="grid grid-cols-2 gap-4 mb-6 items-start">
+        {/* Modal Body — chat-first: conversation full-width, details in a drawer */}
+        <div className="flex flex-1 overflow-hidden min-h-0 relative">
+          <AnimatePresence>
+          {detailsOpen && (
+            <React.Fragment key="details-drawer">
+            <Motion.div
+              key="dim"
+              className="absolute inset-0 bg-black/15 z-10"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              onClick={() => setDetailsOpen(false)}
+            />
+            <Motion.div
+              key="drawer"
+              className="absolute left-0 top-0 bottom-0 w-[470px] max-w-[88%] bg-[#f6f5f4] border-r border-[#e6e4e1] z-20 flex flex-col shadow-[12px_0_40px_rgba(0,0,0,0.12)]"
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+            >
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-[#e6e4e1] bg-white flex-none">
+              <h3 className="text-sm font-bold text-gray-900">Ticket details</h3>
+              <span className="text-xs text-gray-400">#{selectedJob.jobNumber}</span>
+              <button
+                type="button"
+                onClick={() => setDetailsOpen(false)}
+                className="ml-auto p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-[#f6f5f4]"
+                aria-label="Close details"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex flex-col gap-3 mb-4">
               {/* Team Section */}
               <CollapsibleSection
                 id="team"
@@ -1550,9 +1610,13 @@ const JobDetailModal = React.memo(({
                   )}
                 </div>
             </CollapsibleSection>
-          </div>
+            </div>
+            </Motion.div>
+            </React.Fragment>
+          )}
+          </AnimatePresence>
 
-          {/* Right Column: Comments */}
+          {/* Conversation — full width */}
           <CommentsSection
             selectedJob={selectedJob}
             user={user}

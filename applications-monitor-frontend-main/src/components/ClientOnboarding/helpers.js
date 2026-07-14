@@ -48,6 +48,18 @@ export function getStatusColor(status) {
   return 'bg-gray-50 text-gray-700 border-gray-100';
 }
 
+// Column identity dot (redesign): sticker-palette colors as decoration only —
+// an 8px dot beside the title instead of a heavy colored top border.
+export function getColumnDot(status) {
+  if (!status) return 'bg-gray-300';
+  if (status.includes('resume')) return 'bg-[#62aef0]';
+  if (status.includes('linkedin')) return 'bg-[#b98be0]';
+  if (status.includes('cover_letter')) return 'bg-[#8f8be0]';
+  if (status.includes('applications')) return 'bg-[#2a9d99]';
+  if (status === 'completed') return 'bg-[#1aae39]';
+  return 'bg-gray-300';
+}
+
 export function getColumnAccent(status) {
   if (!status) return 'border-t-4 border-t-gray-300';
   if (status.includes('resume')) return 'border-t-4 border-t-blue-500';

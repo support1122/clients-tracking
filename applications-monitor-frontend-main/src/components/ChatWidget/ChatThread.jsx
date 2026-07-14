@@ -45,7 +45,7 @@ const TicketCard = React.memo(function TicketCard({ ticket, mine, onGo }) {
       className={`mt-2 w-full flex items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors ${
         mine
           ? 'border-white/30 bg-white/10 hover:bg-white/20'
-          : 'border-gray-200 bg-white hover:bg-orange-50 hover:border-orange-200'
+          : 'border-[#e6e4e1] bg-white hover:bg-orange-50 hover:border-orange-200'
       }`}
     >
       <span className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${mine ? 'bg-white/20' : 'bg-orange-100'}`}>
@@ -97,7 +97,7 @@ const AttachmentBlock = React.memo(function AttachmentBlock({ attachments, mine,
           className={`flex items-center gap-2 rounded-lg px-2.5 py-2 border transition-colors ${
             mine
               ? 'border-white/30 bg-white/10 hover:bg-white/20 text-white'
-              : 'border-gray-200 bg-white hover:bg-gray-50 text-gray-800'
+              : 'border-[#e6e4e1] bg-white hover:bg-[#f6f5f4] text-gray-800'
           }`}
         >
           <FileText className={`w-4 h-4 flex-shrink-0 ${mine ? 'text-white/90' : 'text-gray-400'}`} />
@@ -152,7 +152,7 @@ const MessageBubble = React.memo(function MessageBubble({
           className={`px-3.5 py-2.5 text-sm whitespace-pre-wrap break-words rounded-2xl transition-shadow ${
             mine
               ? 'bg-primary text-white rounded-br-md'
-              : 'bg-gray-100 text-gray-900 rounded-bl-md'
+              : 'bg-[#f1efec] text-gray-900 rounded-bl-md'
           } ${highlighted ? 'ring-2 ring-orange-400 ring-offset-2' : ''}`}
         >
           {hasQuote && <QuoteBlock replyTo={message.replyTo} mine={mine} onJump={onJump} />}
@@ -355,7 +355,7 @@ export default function ChatThread({ meEmail }) {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* Thread header */}
-      <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-gray-100">
+      <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-[#efedeb]">
         <button
           type="button"
           onClick={backToList}
@@ -384,7 +384,7 @@ export default function ChatThread({ meEmail }) {
                 <button
                   type="button"
                   onClick={() => loadOlderMessages(activeConversationId)}
-                  className="text-xs text-gray-500 hover:text-primary font-medium px-3 py-1 rounded-full bg-gray-50 border border-gray-200"
+                  className="text-xs text-gray-500 hover:text-primary font-medium px-3 py-1 rounded-full bg-gray-50 border border-[#e6e4e1]"
                 >
                   Load earlier messages
                 </button>
@@ -413,7 +413,7 @@ export default function ChatThread({ meEmail }) {
       </div>
 
       {/* Composer */}
-      <div className="p-3 border-t border-gray-100 space-y-2">
+      <div className="p-3 border-t border-[#efedeb] space-y-2">
         {/* Ticket share chip (from "Discuss in chat" on a ticket) */}
         {pendingTicketShare && (
           <div className="flex items-center gap-2 rounded-lg bg-orange-50 border border-orange-100 px-3 py-1.5">
@@ -465,9 +465,9 @@ export default function ChatThread({ meEmail }) {
             {pendingFiles.map((p) => (
               <span key={p.id} className="relative group/att">
                 {p.isImage ? (
-                  <img src={p.previewUrl} alt={p.filename} className="w-14 h-14 object-cover rounded-lg border border-gray-200" />
+                  <img src={p.previewUrl} alt={p.filename} className="w-14 h-14 object-cover rounded-lg border border-[#e6e4e1]" />
                 ) : (
-                  <span className="w-14 h-14 rounded-lg border border-gray-200 bg-gray-50 flex flex-col items-center justify-center gap-0.5 px-1">
+                  <span className="w-14 h-14 rounded-lg border border-[#e6e4e1] bg-gray-50 flex flex-col items-center justify-center gap-0.5 px-1">
                     <FileText className="w-4 h-4 text-gray-400" />
                     <span className="text-[8px] text-gray-500 truncate w-full text-center">{p.filename}</span>
                   </span>
@@ -485,7 +485,7 @@ export default function ChatThread({ meEmail }) {
           </div>
         )}
 
-        <div className="flex items-end gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15 transition-shadow">
+        <div className="flex items-end gap-2 rounded-xl border border-[#e6e4e1] bg-white px-3 py-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15 transition-shadow">
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}

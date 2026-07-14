@@ -53,6 +53,7 @@ import {
 } from './ClientOnboarding/helpers';
 import { API_BASE, AUTH_HEADERS, LOG, LONG_PRESS_MS } from './ClientOnboarding/constants';
 import { OVERLAY_FADE, SECTION_EASE } from './ClientOnboarding/animation';
+import { initials, avatarColor } from '../utils/chatFormat';
 import { apiFetch, getCached, invalidateCache, promisePool } from '../utils/apiClient';
 import { fetchDashboardManagerFullNames } from '../utils/fetchDashboardManagerCatalog.js';
 
@@ -155,6 +156,7 @@ export default function ClientOnboarding() {
 
   // ── Misc ──
   const [moveToJob, setMoveToJob] = useState(null);
+  const [showToolsMenu, setShowToolsMenu] = useState(false);
   const [showAdminTicketSummary, setShowAdminTicketSummary] = useState(true);
   const [savingClientNumber, setSavingClientNumber] = useState(false);
   const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
@@ -1340,9 +1342,9 @@ export default function ClientOnboarding() {
   //  JSX
   // ══════════════════════════════════════════════════════════════════
   return (
-    <div className="min-h-screen bg-[#F8FAFC] pb-10">
+    <div className="min-h-screen bg-[#f6f5f4] pb-10">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm backdrop-blur-md bg-white/90">
+      <div className="bg-white border-b border-[#e6e4e1] sticky top-0 z-30 shadow-sm">
         <div className="max-w-[1920px] mx-auto px-6 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Client Onboarding</h1>
@@ -1352,7 +1354,7 @@ export default function ClientOnboarding() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             {/* Search */}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -1361,46 +1363,68 @@ export default function ClientOnboarding() {
                 placeholder="Search by client name, email, or number..."
                 value={searchInput}
                 onChange={(e) => handleSearchChange(e.target.value)}
-                className="pl-10 pr-4 py-2 w-72 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white shadow-sm text-sm"
+                className="pl-10 pr-4 py-2 w-72 border border-[#e6e4e1] rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white text-sm placeholder:text-gray-400"
               />
             </div>
 
-            {/* Import Payment Emails */}
-            <button
-              type="button"
-              onClick={() => setShowPaymentImportModal(true)}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-gray-200 bg-white hover:bg-orange-50 hover:border-orange-300 text-sm font-medium text-gray-700 hover:text-orange-700 shadow-sm transition-colors"
-              title="Bulk import Payment Emails (CSV)"
-            >
-              <Upload className="w-4 h-4" />
-              <span className="hidden sm:inline">Import Payment Emails</span>
-            </button>
-
-            {/* Export Logs (admin only) */}
-            {isAdmin && (
+            {/* Tools — occasional admin actions folded into one utility menu */}
+            <div className="relative">
               <button
                 type="button"
-                onClick={() => { setShowExportModal(true); fetchExportRows({}); }}
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-gray-200 bg-white hover:bg-orange-50 hover:border-orange-300 text-sm font-medium text-gray-700 hover:text-orange-700 shadow-sm transition-colors"
-                title="Export milestone email logs (admin)"
+                onClick={() => setShowToolsMenu((v) => !v)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[#e6e4e1] bg-white hover:border-[#d9d5d0] text-sm font-medium text-gray-700 transition-colors"
               >
-                <Download className="w-4 h-4" />
-                <span className="hidden sm:inline">Export Logs</span>
+                Tools <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${showToolsMenu ? 'rotate-180' : ''}`} />
               </button>
-            )}
-
-            {/* Send to Previous Clients (admin only) */}
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => setShowSendPrevModal(true)}
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-orange-300 bg-orange-50 hover:bg-orange-100 text-sm font-semibold text-orange-700 shadow-sm transition-colors"
-                title="Send stuck milestone emails — checks all active clients with paymentEmail set, sends any milestones that were reached but not yet emailed (admin)"
-              >
-                <Send className="w-4 h-4" />
-                <span className="hidden sm:inline">Send Stuck Payment Emails</span>
-              </button>
-            )}
+              {showToolsMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowToolsMenu(false)} aria-hidden="true" />
+                  <div className="absolute left-0 top-full z-50 mt-1.5 w-64 rounded-xl bg-white border border-[#e6e4e1] shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.10)] p-1.5 text-sm">
+                    <button
+                      type="button"
+                      onClick={() => { setShowToolsMenu(false); setShowPaymentImportModal(true); }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-gray-700 hover:bg-[#f6f5f4] text-left"
+                      title="Bulk import Payment Emails (CSV)"
+                    >
+                      <Upload className="w-4 h-4 text-gray-400" /> Import payment emails
+                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => { setShowToolsMenu(false); setShowExportModal(true); fetchExportRows({}); }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-gray-700 hover:bg-[#f6f5f4] text-left"
+                        title="Export milestone email logs (admin)"
+                      >
+                        <Download className="w-4 h-4 text-gray-400" /> Export logs
+                      </button>
+                    )}
+                    {(isAdmin || isTeamLead) && (
+                      <button
+                        type="button"
+                        onClick={() => { setShowToolsMenu(false); setShowImportModal(true); }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-gray-700 hover:bg-[#f6f5f4] text-left"
+                        title="Create onboarding tickets for all clients that don't have one"
+                      >
+                        <Briefcase className="w-4 h-4 text-gray-400" /> Import all clients
+                      </button>
+                    )}
+                    {isAdmin && (
+                      <>
+                        <div className="my-1 border-t border-[#efedeb]" />
+                        <button
+                          type="button"
+                          onClick={() => { setShowToolsMenu(false); setShowSendPrevModal(true); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-orange-700 hover:bg-orange-50 text-left font-medium"
+                          title="Send stuck milestone emails — checks all active clients with paymentEmail set, sends any milestones that were reached but not yet emailed (admin)"
+                        >
+                          <Send className="w-4 h-4" /> Send stuck payment emails
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
 
             {/* Notification Bell */}
             <div className="relative">
@@ -1421,7 +1445,7 @@ export default function ClientOnboarding() {
               {showNotificationPanel && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowNotificationPanel(false)} aria-hidden="true" />
-                  <div className="absolute right-0 top-full z-50 mt-4 w-96 rounded-2xl bg-white border border-gray-100 shadow-2xl ring-1 ring-black/5 max-h-[70vh] overflow-hidden flex flex-col">
+                  <div className="absolute right-0 top-full z-50 mt-4 w-96 rounded-2xl bg-white border border-[#e6e4e1] shadow-2xl ring-1 ring-black/5 max-h-[70vh] overflow-hidden flex flex-col">
                     <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
                       <h3 className="font-semibold text-gray-900">Notifications</h3>
                       <button type="button" onClick={() => setShowNotificationPanel(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -1477,13 +1501,13 @@ export default function ClientOnboarding() {
               <button
                 type="button"
                 onClick={() => setShowIssuesPanel((v) => !v)}
-                className="relative flex items-center gap-2 px-3 py-2.5 rounded-xl text-gray-600 hover:bg-gray-100 hover:text-gray-900 border border-gray-200 bg-white text-sm font-medium transition-all focus:outline-none"
+                className="relative flex items-center gap-1.5 px-3.5 py-2 rounded-full text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-[13px] font-medium transition-colors focus:outline-none"
                 title={isAdmin ? 'Unresolved tagged issues across all clients' : 'My unresolved tagged issues'}
               >
-                <AlertCircle className="w-5 h-5 text-amber-500" />
+                <AlertCircle className="w-4 h-4 text-amber-600" />
                 <span className="hidden sm:inline">Unresolved</span>
                 {(nonResolvedIssues.count + (nonResolvedIssues.pendingMoves?.length || 0)) > 0 && (
-                  <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold px-1.5">
+                  <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-amber-600 text-white text-[11px] font-bold px-1.5 tabular-nums">
                     {(() => { const total = nonResolvedIssues.count + (nonResolvedIssues.pendingMoves?.length || 0); return total > 99 ? '99+' : total; })()}
                   </span>
                 )}
@@ -1492,7 +1516,7 @@ export default function ClientOnboarding() {
               {showIssuesPanel && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => { setShowIssuesPanel(false); setIssuesFilterUser(null); }} aria-hidden="true" />
-                  <div className="absolute right-0 top-full z-50 mt-4 w-[420px] rounded-2xl bg-white border border-gray-100 shadow-2xl ring-1 ring-black/5 max-h-[70vh] overflow-hidden flex flex-col">
+                  <div className="absolute right-0 top-full z-50 mt-4 w-[420px] rounded-2xl bg-white border border-[#e6e4e1] shadow-2xl ring-1 ring-black/5 max-h-[70vh] overflow-hidden flex flex-col">
                     <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
                       <h3 className="font-semibold text-gray-900">
                         {isAdmin ? 'Unresolved tagged issues' : 'My unresolved issues'}
@@ -1749,26 +1773,16 @@ export default function ClientOnboarding() {
               )}
             </div>
 
-            {/* Add Client / Import Buttons */}
+            {/* Add Client — the single primary CTA; Import All lives in Tools */}
             {(isAdmin || isTeamLead) && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setShowImportModal(true)}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-white text-gray-700 border-2 border-gray-200 rounded-xl hover:bg-gray-50 hover:border-gray-300 text-sm font-semibold shadow-sm transition-all active:scale-95"
-                >
-                  <Briefcase className="w-4 h-4" />
-                  <span className="tracking-wide">Import All Clients</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={openAddModal}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl hover:bg-primary-hover text-sm font-semibold shadow-lg shadow-orange-500/20 transition-all active:scale-95"
-                >
-                  <Plus className="w-4 h-4 stroke-[3px]" />
-                  <span className="tracking-wide">Add Client</span>
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={openAddModal}
+                className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-full hover:bg-primary-hover text-sm font-semibold shadow-[0_1px_2px_rgba(214,79,39,0.3)] transition-all active:scale-95"
+              >
+                <Plus className="w-4 h-4 stroke-[3px]" />
+                <span>Add client</span>
+              </button>
             )}
           </div>
         </div>
@@ -1785,14 +1799,14 @@ export default function ClientOnboarding() {
             Team Lead Assignment Summary
           </button>
           {showAdminTicketSummary && (
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-2 items-center">
               {adminTicketSummary.map(m => (
-                <div key={m.name} className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-sm min-w-[180px]">
-                  <div className="flex items-center justify-between gap-3 mb-1.5">
-                    <span className="text-sm font-semibold text-slate-800 truncate max-w-[140px]">{m.name}</span>
-                    <span className="bg-orange-100 text-orange-700 text-xs font-bold px-2 py-0.5 rounded-full">{m.total}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
+                <div key={m.name} className="inline-flex items-center gap-2 bg-white border border-[#e6e4e1] rounded-full pl-1.5 pr-1.5 py-1 text-[13px]">
+                  <span className={`w-6 h-6 rounded-full grid place-items-center text-[9px] font-bold flex-shrink-0 ${avatarColor(m.name.toLowerCase())}`}>
+                    {initials(m.name)}
+                  </span>
+                  <span className="font-semibold text-gray-800 truncate max-w-[140px]">{m.name}</span>
+                  <span className="flex gap-1">
                     {ONBOARDING_STATUSES.filter(s => s !== 'completed').map(s => {
                       const count = m.byStatus[s] || 0;
                       if (count === 0) return null;
@@ -1809,12 +1823,13 @@ export default function ClientOnboarding() {
                         applications_in_progress: 'App IP'
                       };
                       return (
-                        <span key={s} className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium" title={STATUS_LABELS[s]}>
-                          {shortLabels[s] || s}: {count}
+                        <span key={s} className="text-[11px] text-gray-500 bg-[#f6f5f4] rounded-full px-2 py-0.5 tabular-nums" title={STATUS_LABELS[s]}>
+                          {shortLabels[s] || s} {count}
                         </span>
                       );
                     })}
-                  </div>
+                  </span>
+                  <span className="bg-orange-100 text-orange-700 text-xs font-bold px-2.5 py-0.5 rounded-full tabular-nums">{m.total}</span>
                 </div>
               ))}
             </div>
@@ -1839,16 +1854,16 @@ export default function ClientOnboarding() {
         {/* Main Content / Kanban */}
         <div
           ref={boardRef}
-          className={`flex-1 overflow-x-auto overflow-y-hidden pb-6 scroll-smooth ${isAdmin ? '' : 'h-full'}`}
+          className={`flex-1 overflow-x-auto overflow-y-hidden pb-6 ${isAdmin ? '' : 'h-full'}`}
           onDragOver={handleDragOverBoard}
-          style={{ WebkitOverflowScrolling: 'touch', scrollPaddingLeft: 16, scrollPaddingRight: 16 }}
+          style={{ WebkitOverflowScrolling: 'touch', scrollPaddingLeft: 16, scrollPaddingRight: 16, overscrollBehaviorX: 'contain' }}
         >
           {loading ? (
             <div className="flex h-full w-full items-center justify-center">
               <Loader2 className="w-10 h-10 animate-spin text-primary" />
             </div>
           ) : (
-            <div className="flex gap-6 p-6 min-w-max h-full">
+            <div className="flex gap-4 p-5 min-w-max h-full">
               {visibleColumns.map((status) => {
                 const columnJobs = jobsByColumn[status] || [];
                 return (

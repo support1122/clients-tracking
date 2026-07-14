@@ -26,12 +26,12 @@ const CollapsibleSection = React.memo(function CollapsibleSection({
   const reduceMotion = useReducedMotion();
 
   return (
-    <section className="rounded-xl border border-gray-200/90 bg-gray-50/80 overflow-hidden">
+    <section className="rounded-xl border border-[#e6e4e1] bg-white overflow-hidden">
       <button
         type="button"
         onClick={() => toggleSection(id)}
         aria-expanded={open}
-        className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-gray-100/70 transition-colors"
+        className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-[#faf9f8] transition-colors"
       >
         <Motion.span
           animate={{ rotate: open ? 90 : 0 }}
