@@ -20,6 +20,9 @@ export const UserSchema = new mongoose.Schema({
   },
   name: { type: String, trim: true, default: "" },
   otpEmail: { type: String, trim: true, lowercase: true, default: "" },
+  // Personal Discord channel webhook — tag notifications + unresolved-comment
+  // reminders are posted here when set.
+  discordWebhookUrl: { type: String, trim: true, default: "" },
   linkedDashboardManagerName: { type: String, trim: true, default: "" },
   onboardingSubRole: {
     type: String,

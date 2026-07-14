@@ -9,6 +9,8 @@ import { ManagerModel } from '../ManagerModel.js';
 import OperationsModel from '../OperationsModel.js';
 import { NewUserModel } from '../schema_models/UserModel.js';
 import { sendChatMessageInternal, emitToUsers } from './chatController.js';
+import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
+import { sendTagDiscordPing } from '../utils/tagDiscordNotify.js';
 import { sendMilestoneEmail } from '../utils/clientMilestoneEmails.js';
 import { getPlanCap, MIN_JOBS_FOR_EMAIL } from '../utils/planCaps.js';
 import { clearAnalysisCache } from '../utils/analysisCache.js';
@@ -233,8 +235,8 @@ export async function runHighAppliedJobsNotifications(rows) {
         authorName: 'System',
         read: false
       });
-      // Chat DM (source 'tag' → the escalation sweep emails only if still
-      // unread after 30 min, replacing the previous immediate email).
+      // Chat DM + immediate email to OTP mail + Discord ping (same fan-out as
+      // a user tag; repeating reminders handled by the tag-reminder cron).
       sendChatMessageInternal({
         fromEmail: SYSTEM_AUTO_COMMENT_AUTHOR_EMAIL,
         fromName: 'System',
@@ -247,8 +249,33 @@ export async function runHighAppliedJobsNotifications(rows) {
           clientName: updated.clientName || '',
           clientNumber: updated.clientNumber ?? null
         },
-        source: 'tag'
+        source: 'tag',
+        emailHandled: true
       });
+      const dmUser = await UserModel.findOne({ email: dmEmail })
+        .select('email otpEmail name discordWebhookUrl')
+        .lean();
+      sendTagNotificationEmail({
+        toEmail: (dmUser?.otpEmail || '').trim() || dmEmail,
+        recipientName: dmName,
+        authorName: 'System',
+        commentSnippet,
+        jobNumber: updated.jobNumber,
+        clientName: updated.clientName || '',
+        clientNumber: updated.clientNumber ?? null,
+        jobId: String(updated._id)
+      }).catch(() => {});
+      if (dmUser?.discordWebhookUrl) {
+        sendTagDiscordPing({
+          webhookUrl: dmUser.discordWebhookUrl,
+          recipientName: dmName,
+          authorName: 'System',
+          snippet: commentSnippet,
+          clientName: updated.clientName || '',
+          clientNumber: updated.clientNumber ?? null,
+          jobNumber: updated.jobNumber
+        }).catch(() => {});
+      }
       emitToUsers([dmEmail], 'notify', {
         kind: 'tag',
         jobId: String(updated._id),
@@ -883,27 +910,62 @@ export async function patchOnboardingJob(req, res) {
           });
         }
 
-        // Chat widget: DM each tagged user from the comment author, carrying a
-        // ticket reference so the widget can deep-link back to this job.
-        // The tag notification EMAIL is no longer sent immediately — the
-        // escalation sweep (utils/chatCrons.js) emails only if this chat
-        // message is still unread after 30 minutes.
+        // Per-user notification fan-out: chat DM + immediate email to the
+        // user's OTP mail + Discord ping to their personal webhook channel.
+        // Repeating Discord reminders (utils/chatCrons.js) then fire until the
+        // tagged user resolves the comment.
+        const taggedUsersData = await UserModel.find({ email: { $in: cleanTaggedEmails } })
+          .select('email otpEmail name discordWebhookUrl')
+          .lean();
+        const taggedUserMap = new Map(taggedUsersData.map(u => [u.email.toLowerCase(), u]));
+        const ticketRef = {
+          jobId: job._id,
+          jobNumber: job.jobNumber,
+          clientName: job.clientName || '',
+          clientNumber: job.clientNumber ?? null
+        };
         cleanTaggedEmails.forEach((userEmail, i) => {
-          const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) || userEmail;
+          const taggedUser = taggedUserMap.get(userEmail);
+          const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) || taggedUser?.name || userEmail;
+
+          // 1. Chat widget DM (emailHandled: the email below is sent right away,
+          //    so the 30-min escalation sweep must not duplicate it)
           sendChatMessageInternal({
             fromEmail: authorEmail,
             fromName: authorName,
             toEmail: userEmail,
             toName: recipientName,
             text: commentBody || '(image)',
-            ticket: {
-              jobId: job._id,
-              jobNumber: job.jobNumber,
-              clientName: job.clientName || '',
-              clientNumber: job.clientNumber ?? null
-            },
-            source: 'tag'
+            ticket: ticketRef,
+            source: 'tag',
+            emailHandled: true
           });
+
+          // 2. Email to the user's OTP mail (falls back to login email)
+          const toEmail = (taggedUser?.otpEmail || '').trim() || userEmail;
+          sendTagNotificationEmail({
+            toEmail,
+            recipientName,
+            authorName,
+            commentSnippet,
+            jobNumber: job.jobNumber,
+            clientName: job.clientName || '',
+            clientNumber: job.clientNumber ?? null,
+            jobId: String(job._id)
+          }).catch(err => console.error(`[Tag Email] failed to ${toEmail}:`, err?.message || err));
+
+          // 3. Discord ping to their personal channel (if configured)
+          if (taggedUser?.discordWebhookUrl) {
+            sendTagDiscordPing({
+              webhookUrl: taggedUser.discordWebhookUrl,
+              recipientName,
+              authorName,
+              snippet: commentSnippet,
+              clientName: job.clientName || '',
+              clientNumber: job.clientNumber ?? null,
+              jobNumber: job.jobNumber
+            }).catch(() => {});
+          }
         });
       }
     } else {

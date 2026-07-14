@@ -144,7 +144,7 @@ function serializeConversation(convo, meEmail, unreadCount = 0) {
   };
 }
 
-async function createMessageAndNotify({ conversation, senderEmail, senderName, text, ticket, attachments, replyTo, source = 'user' }) {
+async function createMessageAndNotify({ conversation, senderEmail, senderName, text, ticket, attachments, replyTo, source = 'user', emailHandled = false }) {
   const sender = senderEmail.toLowerCase().trim();
   const cleanAttachments = (Array.isArray(attachments) ? attachments : [])
     .filter((a) => a && typeof a.url === 'string' && a.url)
@@ -168,6 +168,9 @@ async function createMessageAndNotify({ conversation, senderEmail, senderName, t
     attachments: cleanAttachments,
     replyTo: replyTo || { messageId: null, senderEmail: '', senderName: '', text: '', hasAttachment: false },
     source,
+    // When the tag email was already sent immediately (current behavior), the
+    // 30-min escalation sweep must not send a duplicate.
+    escalation: { emailSentAt: emailHandled ? new Date() : null, adminNotifiedAt: null },
     readBy: [sender]
   });
 
@@ -203,7 +206,7 @@ async function createMessageAndNotify({ conversation, senderEmail, senderName, t
  * Internal API for other controllers (ticket tag → chat DM).
  * Fire-and-forget safe: never throws.
  */
-export async function sendChatMessageInternal({ fromEmail, fromName, toEmail, toName, text, ticket, source = 'tag' }) {
+export async function sendChatMessageInternal({ fromEmail, fromName, toEmail, toName, text, ticket, source = 'tag', emailHandled = false }) {
   try {
     if (!fromEmail || !toEmail) return;
     if (fromEmail.toLowerCase().trim() === toEmail.toLowerCase().trim()) return;
@@ -214,7 +217,8 @@ export async function sendChatMessageInternal({ fromEmail, fromName, toEmail, to
       senderName: fromName,
       text,
       ticket,
-      source
+      source,
+      emailHandled
     });
   } catch (e) {
     console.error('[chat] sendChatMessageInternal failed:', e?.message || e);

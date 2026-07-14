@@ -70,7 +70,7 @@ import {
   getPresence,
   typingPing
 } from './controllers/chatController.js';
-import { runChatEscalationSweep, runAdminDailyDigest } from './utils/chatCrons.js';
+import { runChatEscalationSweep, runAdminDailyDigest, runTagDiscordReminders } from './utils/chatCrons.js';
 import { ClientCounterModel } from './ClientCounterModel.js';
 import { OnboardingJobModel } from './OnboardingJobModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
@@ -2291,7 +2291,7 @@ const resetPasswordByEmail = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { email, otpEmail, name, linkedDashboardManagerName } = req.body;
+    const { email, otpEmail, name, linkedDashboardManagerName, discordWebhookUrl } = req.body;
 
     const user = await UserModel.findById(userId);
     if (!user) {
@@ -2319,6 +2319,13 @@ const updateUser = async (req, res) => {
     if (linkedDashboardManagerName !== undefined && typeof linkedDashboardManagerName === 'string') {
       user.linkedDashboardManagerName = linkedDashboardManagerName.trim();
     }
+    if (discordWebhookUrl !== undefined) {
+      const val = discordWebhookUrl === null ? '' : String(discordWebhookUrl).trim();
+      if (val && !/^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(val)) {
+        return res.status(400).json({ error: 'Invalid Discord webhook URL (must be https://discord.com/api/webhooks/...)' });
+      }
+      user.discordWebhookUrl = val;
+    }
 
     user.updatedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
     await user.save();
@@ -2330,6 +2337,7 @@ const updateUser = async (req, res) => {
         name: user.name,
         otpEmail: user.otpEmail || '',
         linkedDashboardManagerName: user.linkedDashboardManagerName || '',
+        discordWebhookUrl: user.discordWebhookUrl || '',
         role: user.role,
         onboardingSubRole: user.onboardingSubRole,
         roles: user.roles
@@ -8710,6 +8718,13 @@ if (DISCORD_ZERO_SAVED_WEBHOOK) {
         console.log('📬 [Admin Digest] Cron scheduled daily 9:00 AM IST');
       } catch (e) {
         console.error('❌ [Admin Digest] cron registration failed:', e?.message || e);
+      }
+      // Discord tag reminders: re-ping unresolved tags every 3h (sweep every 30 min)
+      try {
+        cron.schedule('*/30 * * * *', runTagDiscordReminders, { timezone: 'Asia/Kolkata' });
+        console.log('📬 [Tag Reminders] Cron scheduled every 30 minutes');
+      } catch (e) {
+        console.error('❌ [Tag Reminders] cron registration failed:', e?.message || e);
       }
     });
   })

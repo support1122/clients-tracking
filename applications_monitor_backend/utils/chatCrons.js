@@ -1,7 +1,9 @@
 import { ChatMessageModel, ChatConversationModel } from '../ChatModels.js';
 import { OnboardingJobModel } from '../OnboardingJobModel.js';
 import { UserModel } from '../UserModel.js';
+import { TagReminderModel } from '../TagReminderModel.js';
 import { sendTagNotificationEmail } from './sendTagNotificationEmail.js';
+import { sendTagDiscordPing } from './tagDiscordNotify.js';
 import { sendChatMessageInternal } from '../controllers/chatController.js';
 
 const SYSTEM_EMAIL = 'system-auto@flashfire-clients-tracking.internal';
@@ -125,6 +127,121 @@ async function runSweepOnce() {
     }
   } catch (e) {
     console.error('[Chat Escalation] stage-2 sweep error:', e?.message || e);
+  }
+}
+
+// ── Discord tag reminders ────────────────────────────────────────────────────
+const FIRST_REMINDER_AFTER_MS = 2 * 60 * 60 * 1000; // first reminder 2h after the tag
+const REMINDER_INTERVAL_MS = 3 * 60 * 60 * 1000; // then every 3h
+const MAX_REMINDERS = 8; // hard stop — resolving the comment is the real off-switch
+
+let remindersRunning = false;
+
+/**
+ * Repeating Discord reminders (every 30 min sweep) for tagged comments that
+ * are still unresolved. The immediate ping fires at tag time; this re-pings
+ * the user's personal webhook until they resolve the comment on the ticket
+ * (which removes them from the unresolved set) or MAX_REMINDERS is hit.
+ */
+export async function runTagDiscordReminders() {
+  if (remindersRunning) return;
+  remindersRunning = true;
+  try {
+    const now = Date.now();
+    const rows = await OnboardingJobModel.aggregate([
+      { $match: { 'comments.0': { $exists: true } } },
+      { $unwind: '$comments' },
+      { $match: { $expr: { $gt: [{ $size: { $ifNull: ['$comments.taggedUserIds', []] } }, 0] } } },
+      { $match: { 'comments.createdAt': { $lt: new Date(now - FIRST_REMINDER_AFTER_MS) } } },
+      {
+        $addFields: {
+          resolvedEmails: {
+            $map: {
+              input: { $ifNull: ['$comments.resolvedByTagged', []] },
+              as: 'r',
+              in: { $toLower: { $trim: { input: { $ifNull: ['$$r.email', ''] } } } }
+            }
+          },
+          taggedEmails: {
+            $map: {
+              input: { $ifNull: ['$comments.taggedUserIds', []] },
+              as: 't',
+              in: { $toLower: { $trim: { input: { $ifNull: ['$$t', ''] } } } }
+            }
+          }
+        }
+      },
+      {
+        $addFields: {
+          unresolvedTagged: {
+            $filter: {
+              input: '$taggedEmails',
+              as: 'e',
+              cond: { $and: [{ $ne: ['$$e', ''] }, { $not: { $in: ['$$e', '$resolvedEmails'] } }] }
+            }
+          }
+        }
+      },
+      { $match: { $expr: { $gt: [{ $size: '$unresolvedTagged' }, 0] } } },
+      {
+        $project: {
+          jobNumber: 1,
+          clientName: 1,
+          clientNumber: 1,
+          commentId: '$comments._id',
+          commentBody: '$comments.body',
+          commentAuthorName: '$comments.authorName',
+          unresolvedTagged: 1
+        }
+      },
+      { $limit: 500 }
+    ]);
+    if (!rows.length) return;
+
+    // One user lookup for the whole sweep — only users with a webhook matter.
+    const allEmails = [...new Set(rows.flatMap((r) => r.unresolvedTagged))];
+    const users = await UserModel.find({
+      email: { $in: allEmails },
+      discordWebhookUrl: { $nin: [null, ''] }
+    }).select('email name discordWebhookUrl').lean();
+    const userMap = new Map(users.map((u) => [u.email.toLowerCase(), u]));
+    if (!userMap.size) return;
+
+    let sent = 0;
+    for (const row of rows) {
+      for (const email of row.unresolvedTagged) {
+        const user = userMap.get(email);
+        if (!user) continue;
+        const key = { jobId: row._id, commentId: String(row.commentId), userEmail: email };
+        const log = await TagReminderModel.findOne(key).lean();
+        if (log?.count >= MAX_REMINDERS) continue;
+        if (log?.lastSentAt && now - new Date(log.lastSentAt).getTime() < REMINDER_INTERVAL_MS) continue;
+
+        const ok = await sendTagDiscordPing({
+          webhookUrl: user.discordWebhookUrl,
+          recipientName: user.name || email,
+          authorName: row.commentAuthorName || 'Someone',
+          snippet: (row.commentBody || '(image)').slice(0, 300),
+          clientName: row.clientName || '',
+          clientNumber: row.clientNumber ?? null,
+          jobNumber: row.jobNumber,
+          reminderNumber: (log?.count || 0) + 1
+        });
+        // Record the attempt either way so a dead webhook can't spam retries
+        // every sweep — it still respects the 3h interval and the cap.
+        await TagReminderModel.updateOne(
+          key,
+          { $inc: { count: 1 }, $set: { lastSentAt: new Date() }, $setOnInsert: { createdAt: new Date() } },
+          { upsert: true }
+        );
+        if (ok) sent++;
+      }
+    }
+    if (sent) console.log(`[Tag Reminders] sent ${sent} Discord reminder(s)`);
+  } catch (e) {
+    console.error('[Tag Reminders] sweep error:', e?.message || e);
+  } finally {
+    remindersRunning = false;
   }
 }
 

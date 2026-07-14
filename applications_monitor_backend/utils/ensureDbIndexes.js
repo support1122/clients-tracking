@@ -9,6 +9,7 @@ import { ManagerModel } from '../ManagerModel.js';
 import { CallLogModel } from '../CallLogModel.js';
 import { OnboardingJobModel } from '../OnboardingJobModel.js';
 import { ChatConversationModel, ChatMessageModel } from '../ChatModels.js';
+import { TagReminderModel } from '../TagReminderModel.js';
 
 export async function ensureDbIndexes() {
   await Promise.all([
@@ -67,6 +68,7 @@ export async function ensureDbIndexes() {
     ChatConversationModel.collection.createIndex({ participants: 1, lastMessageAt: -1 }),
     ChatMessageModel.collection.createIndex({ conversationId: 1, createdAt: -1 }),
     ChatMessageModel.collection.createIndex({ source: 1, 'escalation.emailSentAt': 1, createdAt: 1 }),
-    ChatMessageModel.collection.createIndex({ source: 1, 'escalation.adminNotifiedAt': 1, createdAt: 1 })
+    ChatMessageModel.collection.createIndex({ source: 1, 'escalation.adminNotifiedAt': 1, createdAt: 1 }),
+    TagReminderModel.collection.createIndex({ jobId: 1, commentId: 1, userEmail: 1 }, { unique: true })
   ]);
 }
