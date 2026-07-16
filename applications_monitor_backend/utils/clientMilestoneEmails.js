@@ -1,7 +1,7 @@
 import { sendGmailEmail } from "./gmailSender.js";
 import { getPlanLabel } from "./planCaps.js";
 
-const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "support@flashfirehq.com";
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "support@flashfirejobs.com";
 const WEBSITE_URL   = process.env.WEBSITE_URL   || "https://www.flashfirejobs.com";
 const DASHBOARD_URL = process.env.DASHBOARD_URL || "https://portal.flashfirejobs.com/";
 
