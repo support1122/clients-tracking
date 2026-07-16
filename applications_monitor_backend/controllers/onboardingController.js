@@ -968,6 +968,74 @@ export async function patchOnboardingJob(req, res) {
             }).catch(() => {});
           }
         });
+
+        // Keep the ticket's Dashboard Manager in the loop — an FYI, not a tag:
+        // no resolve duty, no escalation, no reminder chasing. Skipped when the
+        // DM wrote the comment or is already among the tagged users.
+        (async () => {
+          try {
+            const dmName = (job.dashboardManagerName || '').trim();
+            if (!dmName) return;
+            const manager = await ManagerModel.findOne({ fullName: dmName, isActive: true }).select('email').lean();
+            const dmEmail = (manager?.email || '').toLowerCase().trim();
+            if (!dmEmail) return;
+            if (dmEmail === (authorEmail || '').toLowerCase().trim()) return; // DM is the author
+            if (cleanTaggedEmails.includes(dmEmail)) return; // DM is tagged — already fully notified
+            const taggedLabel = (comment.taggedNames || []).filter(Boolean).join(', ') || cleanTaggedEmails.join(', ');
+
+            OnboardingNotificationModel.create({
+              userEmail: dmEmail,
+              jobId: job._id,
+              jobNumber: job.jobNumber,
+              clientNumber: job.clientNumber ?? null,
+              clientName: job.clientName || '',
+              commentSnippet: `👀 ${authorName} tagged ${taggedLabel}: ${commentSnippet}`.slice(0, 120),
+              authorEmail,
+              authorName,
+              read: false
+            }).catch((err) => console.error('DM loop-in notification:', err));
+            emitToUsers([dmEmail], 'notify', {
+              kind: 'dm_fyi',
+              jobId: String(job._id),
+              jobNumber: job.jobNumber,
+              clientName: job.clientName || '',
+              authorName,
+              commentSnippet
+            });
+            // Chat DM as source 'user': visible in the widget, but never enters
+            // the escalation sweep — the tagged person owns the resolution.
+            sendChatMessageInternal({
+              fromEmail: authorEmail,
+              fromName: authorName,
+              toEmail: dmEmail,
+              toName: dmName,
+              text: `FYI — tagged ${taggedLabel} on your client:\n${commentBody || '(image)'}`,
+              ticket: {
+                jobId: job._id,
+                jobNumber: job.jobNumber,
+                clientName: job.clientName || '',
+                clientNumber: job.clientNumber ?? null
+              },
+              source: 'user'
+            });
+            const dmUser = await UserModel.findOne({ email: dmEmail }).select('discordWebhookUrl name').lean();
+            if (dmUser?.discordWebhookUrl) {
+              sendTagDiscordPing({
+                webhookUrl: dmUser.discordWebhookUrl,
+                recipientName: dmUser.name || dmName,
+                authorName,
+                snippet: commentSnippet,
+                clientName: job.clientName || '',
+                clientNumber: job.clientNumber ?? null,
+                jobNumber: job.jobNumber,
+                fyi: true,
+                taggedLabel
+              }).catch(() => {});
+            }
+          } catch (e) {
+            console.error('[Tag] DM loop-in failed:', e?.message || e);
+          }
+        })();
       }
     } else {
       job.updatedAt = new Date();

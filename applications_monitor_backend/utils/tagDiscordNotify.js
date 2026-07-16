@@ -24,6 +24,9 @@ export function isValidDiscordWebhook(url) {
  * @param {number|null} p.clientNumber
  * @param {number|null} p.jobNumber
  * @param {number} [p.reminderNumber]  0/undefined = first notification; >0 = Nth reminder.
+ * @param {boolean} [p.fyi]  FYI loop-in (e.g. the client's Dashboard Manager) —
+ *                           informational wording, no "please resolve".
+ * @param {string} [p.taggedLabel]  Who was tagged (used in FYI wording).
  * @returns {Promise<boolean>} true if Discord accepted the message.
  */
 export async function sendTagDiscordPing({
@@ -34,26 +37,42 @@ export async function sendTagDiscordPing({
   clientName,
   clientNumber,
   jobNumber,
-  reminderNumber = 0
+  reminderNumber = 0,
+  fyi = false,
+  taggedLabel = ''
 }) {
   if (!isValidDiscordWebhook(webhookUrl)) return false;
   const clientLabel = `${clientNumber != null ? `${clientNumber} – ` : ''}${clientName || 'a client'}`;
   const isReminder = reminderNumber > 0;
-  const embed = {
-    title: isReminder
-      ? `⏰ Reminder #${reminderNumber} — unresolved tag on ${clientLabel}`
-      : `📌 You got tagged on ${clientLabel}`,
-    description: [
-      `**${authorName || 'Someone'}** tagged ${recipientName ? `**${recipientName}**` : 'you'} in ticket **#${jobNumber ?? '—'}** (${clientLabel}):`,
-      '',
-      snippet ? `> ${String(snippet).slice(0, 500)}` : '> (image)',
-      '',
-      '**Please resolve this.**'
-    ].join('\n'),
-    color: isReminder ? 0xf59e0b : 0xdf5830, // amber for reminders, brand orange for the first ping
-    timestamp: new Date().toISOString(),
-    footer: { text: 'FlashFire Client Tracking · resolve the tag on the ticket to stop reminders' }
-  };
+  const embed = fyi
+    ? {
+        title: `👀 FYI — activity on ${clientLabel}`,
+        description: [
+          `**${authorName || 'Someone'}** tagged ${taggedLabel ? `**${taggedLabel}**` : 'someone'} in ticket **#${jobNumber ?? '—'}** (${clientLabel}):`,
+          '',
+          snippet ? `> ${String(snippet).slice(0, 500)}` : '> (image)',
+          '',
+          `You are looped in as this client's Dashboard Manager.`
+        ].join('\n'),
+        color: 0x8a8582, // neutral — informational, not actionable
+        timestamp: new Date().toISOString(),
+        footer: { text: 'FlashFire Client Tracking · no action required from you' }
+      }
+    : {
+        title: isReminder
+          ? `⏰ Reminder #${reminderNumber} — unresolved tag on ${clientLabel}`
+          : `📌 You got tagged on ${clientLabel}`,
+        description: [
+          `**${authorName || 'Someone'}** tagged ${recipientName ? `**${recipientName}**` : 'you'} in ticket **#${jobNumber ?? '—'}** (${clientLabel}):`,
+          '',
+          snippet ? `> ${String(snippet).slice(0, 500)}` : '> (image)',
+          '',
+          '**Please resolve this.**'
+        ].join('\n'),
+        color: isReminder ? 0xf59e0b : 0xdf5830, // amber for reminders, brand orange for the first ping
+        timestamp: new Date().toISOString(),
+        footer: { text: 'FlashFire Client Tracking · resolve the tag on the ticket to stop reminders' }
+      };
   try {
     const res = await fetch(webhookUrl, {
       method: 'POST',
