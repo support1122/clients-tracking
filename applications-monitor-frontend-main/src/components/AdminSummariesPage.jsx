@@ -540,6 +540,10 @@ function ClientDetailPane({ row, onProfileChanged }) {
     const [sourcesDraft, setSourcesDraft] = useState(['jobright']);
     const [savedSources, setSavedSources] = useState(['jobright']);
     const [savingSources, setSavingSources] = useState(false);
+    // "Last removal reason" panel on the Candidate Summary card — shows the
+    // newest reason the client gave when removing a job, or an explicit
+    // "nothing to show" empty state.
+    const [showRemovalReason, setShowRemovalReason] = useState(false);
     // "See AI reasons to remove" modal — lists AI-removed jobs (top 5/page).
     const [showAiRemoved, setShowAiRemoved] = useState(false);
     const [aiRemoved, setAiRemoved] = useState({ jobs: [], total: 0, totalPages: 1, page: 1 });
@@ -686,6 +690,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
         loadProfile();
         loadHistory();
         loadNotes();
+        setShowRemovalReason(false);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [row.email]);
 
@@ -1169,9 +1174,13 @@ function ClientDetailPane({ row, onProfileChanged }) {
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-100 text-sky-800 border border-sky-300" title="Onboarding profile is always included">
                                     👤 Profile
                                 </span>
-                                {meta.builtInputs?.removalFeedback && (
+                                {meta.builtInputs?.removalFeedback ? (
                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-800 border border-rose-300" title="The client's job-removal reasons were included as high-priority context — the summary steers future picks away from removed patterns">
-                                        🗑 Removal feedback
+                                        🗑 Removals
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-400 border border-slate-200" title="No client removal feedback on file at build time — this summary was not tuned by removal reasons">
+                                        🗑 Removals <span className="opacity-60">·none</span>
                                     </span>
                                 )}
                             </div>
@@ -1179,6 +1188,13 @@ function ClientDetailPane({ row, onProfileChanged }) {
                     </div>
                     {!editing && (
                         <div className="flex gap-2 flex-shrink-0">
+                            <button
+                                onClick={() => setShowRemovalReason(true)}
+                                className="px-3 py-1.5 rounded-lg text-sm font-medium border bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 transition"
+                                title="Latest reason the client gave when removing a job card"
+                            >
+                                🗑 Last removal reason
+                            </button>
                             <button
                                 onClick={buildSummary}
                                 disabled={building}
@@ -1197,6 +1213,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                         </div>
                     )}
                 </div>
+
 
                 <div className="p-5">
                     {loading && !profile && <div className="text-slate-400 text-sm">Loading…</div>}
@@ -1231,6 +1248,84 @@ function ClientDetailPane({ row, onProfileChanged }) {
             {/* Per-client OpenAI key card removed — single global key now lives
                 in the page header. Extension falls back to that global key
                 whenever a client profile doesn't carry its own. */}
+
+            {/* Last removal reason modal — the newest reason the client gave
+                when removing a job card, with the job card info and a portal
+                deep link. Explicit empty state when the client has none. */}
+            {showRemovalReason && (
+                <div
+                    className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+                    onClick={() => setShowRemovalReason(false)}
+                >
+                    <div
+                        className="bg-white rounded-2xl shadow-2xl max-w-xl w-full max-h-[85vh] flex flex-col overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="px-6 py-4 border-b border-slate-200 bg-rose-50 flex items-center justify-between">
+                            <div>
+                                <h3 className="text-lg font-bold text-rose-800">🗑 Last removal reason</h3>
+                                <p className="text-xs text-slate-600 mt-0.5">
+                                    {row.name} · {row.email}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setShowRemovalReason(false)}
+                                className="text-slate-400 hover:text-slate-700 text-xl leading-none"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="p-5 overflow-y-auto">
+                            {row.latestRemoval?.reason ? (
+                                <div className="border border-slate-200 rounded-xl p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="font-semibold text-slate-900 truncate">{row.latestRemoval.jobTitle || '(untitled job)'}</div>
+                                            <div className="text-xs text-slate-500 truncate">{row.latestRemoval.companyName || '(company unknown)'}</div>
+                                        </div>
+                                        {row.latestRemoval.jobID ? (
+                                            <a
+                                                href={`${PORTAL_BASE}/?tab=jobtracker&jobId=${encodeURIComponent(row.latestRemoval.jobID)}`}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                                            >
+                                                Open card ↗
+                                            </a>
+                                        ) : null}
+                                    </div>
+                                    <p className="mt-3 text-sm text-rose-800 bg-rose-50 border-l-4 border-rose-300 rounded-r px-3 py-2 whitespace-pre-wrap">
+                                        "{row.latestRemoval.reason}"
+                                    </p>
+                                    <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-slate-400">
+                                        <span>
+                                            Removed by {row.latestRemoval.removedBy || 'user'}
+                                            {row.latestRemoval.removedAt ? ` · ${new Date(row.latestRemoval.removedAt).toLocaleString()}` : ''}
+                                        </span>
+                                        {row.summaryFromRemoval ? (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold bg-emerald-100 text-emerald-700 border border-emerald-300">
+                                                ✓ reflected in the AI summary
+                                            </span>
+                                        ) : (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold bg-amber-100 text-amber-700 border border-amber-300">
+                                                summary rebuild pending
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-center text-slate-500 py-8 text-sm">
+                                    Nothing to show — this client hasn't removed any job with a reason yet.
+                                    <div className="text-xs text-slate-400 mt-1">
+                                        When they do, the reason lands here and the AI summary rebuilds automatically.
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* AI removal reasons modal — top 5 per page, deep-links to portal */}
             {showAiRemoved && (
