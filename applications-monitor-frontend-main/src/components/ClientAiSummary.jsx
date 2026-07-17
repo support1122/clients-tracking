@@ -57,6 +57,10 @@ const PROV_STYLE = {
 function summarySourceLabel(rawSource) {
     if (!rawSource) return { icon: '❓', label: 'unknown source', color: 'slate' };
     const s = String(rawSource);
+    // Removal-triggered rebuilds first: the [auto:job-removal] tag rides on
+    // top of the base source ("profile+resume+openai [auto:job-removal]"),
+    // and the trigger is the interesting part for operators.
+    if (s.includes('[auto:job-removal]')) return { icon: '🗑', label: 'Auto-rebuilt from client removal feedback', color: 'rose' };
     if (s.includes('profile+resume')) return { icon: '📄', label: 'Built from Resume + Profile', color: 'emerald' };
     if (s.includes('profile-only')) return { icon: '👤', label: 'Built from Profile only (no resume)', color: 'amber' };
     if (s.startsWith('admin-clients-tracking') || s.includes('manual-edit')) return { icon: '✎', label: 'Manually edited', color: 'blue' };
@@ -314,6 +318,12 @@ export default function ClientAiSummary({ clientEmail }) {
     const summary = profile?.aiSummary || '';
     const meta = profile?.aiSummaryMeta || {};
     const builtAt = meta.builtAt ? new Date(meta.builtAt).toLocaleString() : null;
+    // Newest client removal reason — /get-profile returns the full
+    // removalFeedback history (newest first, written by the dashboard's
+    // UpdateChanges on every reasoned removal).
+    const latestRemoval = Array.isArray(profile?.removalFeedback)
+        ? profile.removalFeedback.find((i) => i?.reason && String(i.reason).trim()) || null
+        : null;
     const sourceTag = useMemo(() => summarySourceLabel(meta.source), [meta.source]);
     const sections = useMemo(() => parseSummarySections(summary), [summary]);
     const lockedSet = useMemo(
@@ -335,6 +345,7 @@ export default function ClientAiSummary({ clientEmail }) {
         amber: 'bg-amber-100 text-amber-800 border-amber-300',
         blue: 'bg-blue-100 text-blue-800 border-blue-300',
         slate: 'bg-slate-100 text-slate-700 border-slate-300',
+        rose: 'bg-rose-100 text-rose-800 border-rose-300',
     };
     const sourcePill = sourceColorMap[sourceTag.color] || sourceColorMap.slate;
 
@@ -356,6 +367,14 @@ export default function ClientAiSummary({ clientEmail }) {
                 ) : (
                     <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700 border border-amber-300">
                         ⚠ not built yet
+                    </span>
+                )}
+                {meta.builtInputs?.removalFeedback && (
+                    <span
+                        className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-rose-100 text-rose-700 border border-rose-300"
+                        title="This summary was built with the client's own job-removal reasons as high-priority context — future picks steer away from those patterns"
+                    >
+                        🗑 tuned by removal feedback
                     </span>
                 )}
                 {meta.source && (
@@ -400,6 +419,24 @@ export default function ClientAiSummary({ clientEmail }) {
                     </span>
                 )}
             </div>
+
+            {latestRemoval && (
+                <div className="bg-rose-50 border-l-4 border-rose-400 p-4 rounded-r-xl">
+                    <div className="flex items-baseline justify-between gap-3">
+                        <h4 className="text-sm font-bold text-rose-900">🗑 Latest removal reason from client</h4>
+                        {latestRemoval.removedAt && (
+                            <span className="text-xs text-rose-600 flex-shrink-0">
+                                {new Date(latestRemoval.removedAt).toLocaleString()}
+                            </span>
+                        )}
+                    </div>
+                    <p className="text-sm text-rose-800 mt-1">"{latestRemoval.reason}"</p>
+                    <p className="text-xs text-rose-600 mt-0.5">
+                        {[latestRemoval.jobTitle, latestRemoval.companyName].filter(Boolean).join(' @ ') || 'job details unavailable'}
+                        {latestRemoval.removedBy ? ` · removed by ${latestRemoval.removedBy}` : ''}
+                    </p>
+                </div>
+            )}
 
             {message && (
                 <div className={`px-4 py-3 rounded-lg ${
