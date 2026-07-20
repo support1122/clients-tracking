@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import Login from './components/Login';
-import AdminDashboard from './components/AdminDashboard';
-import Monitor from './components/Monitor';
 import ConnectGmailButton from './components/ConnectGmailButton.jsx';
-import { Link, Outlet, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { startTokenRefresh, stopTokenRefresh } from './utils/tokenRefresh';
+
+// Lazy so the chat bundle (framer-motion etc.) never blocks first paint
+const ChatWidget = React.lazy(() => import('./components/ChatWidget/ChatWidget.jsx'));
 
 function App() {
   const [user, setUser] = useState(() => {
@@ -12,7 +14,6 @@ function App() {
     return saved ? JSON.parse(saved) : null;
   });
   const [loading, setLoading] = useState(true);
-  const [currentView, setCurrentView] = useState('portal'); // 'portal' or 'admin'
   const location = useLocation();
   const navigate = useNavigate();
 // console.log(user)
@@ -26,8 +27,6 @@ function App() {
         const userData = JSON.parse(savedUser);
         setUser(userData);
 
-        setCurrentView(userData.role === 'admin' ? 'admin' : 'portal');
-        
         // Only redirect from root path - run once on mount
         if (location.pathname === '/') {
           if (userData.role === 'admin') {
@@ -85,10 +84,16 @@ function App() {
 // }, [user, navigate, location.pathname]);
 
   // }, []); // Remove location.pathname and navigate from dependencies 
+  // Sliding session: rotate the 30-day token daily while the user is active.
+  useEffect(() => {
+    if (!user) return;
+    startTokenRefresh();
+    return () => stopTokenRefresh();
+  }, [user]);
+
   const handleLogin = (userData) => {
     setUser(userData);
-    setCurrentView(userData.role === 'admin' ? 'admin' : 'portal');
-    
+
     // Navigate based on user role
     if (userData.role === 'admin') {
       navigate('/admin-dashboard');
@@ -107,7 +112,6 @@ function App() {
 
   const handleLogout = () => {
     setUser(null);
-    setCurrentView('portal');
     localStorage.removeItem('user');
     localStorage.removeItem('authToken');
     navigate('/', { replace: true });
@@ -184,6 +188,9 @@ function App() {
           </div>
         </div>
         <Outlet context={{ user, userRole: user?.role }} />
+        <Suspense fallback={null}>
+          <ChatWidget user={user} />
+        </Suspense>
       </div>
     );
   }
@@ -277,6 +284,9 @@ function App() {
         </div>
       </div>
       <Outlet context={{ user, userRole: user?.role }} />
+      <Suspense fallback={null}>
+        <ChatWidget user={user} />
+      </Suspense>
     </div>
   );
 }

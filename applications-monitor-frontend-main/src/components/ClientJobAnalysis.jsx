@@ -811,8 +811,15 @@ export default function ClientJobAnalysis() {
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Offer</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Rejected</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Removed</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-amber-700" title="Jobs the AI removed TODAY (since midnight IST). A subset of 'AI removed'.">AI removed today</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-amber-700" title="Jobs the AI moved to Removed, all time: closed/expired postings caught by second-stage screening, plus client exclusion-list matches. A subset of 'Removed'. Jobs the AI merely FLAGGED (e.g. a location mismatch) are NOT counted here — they stay in place until an operator decides, and are reviewed under 'See AI flags' on the summaries page.">AI removed</th>
+                <th
+                  className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-amber-700"
+                  title="Jobs the AI moved to Removed: expired postings caught by second-stage screening, plus client exclusion-list matches. Follows the date picker — with no date selected it shows TODAY; pick a date and it shows that day. A subset of 'Removed'. Jobs the AI merely FLAGGED (e.g. a location mismatch) are NOT counted — they stay in place until an operator decides, under 'See AI flags' on the summaries page."
+                >
+                  Removed by AI
+                  <span className="block font-normal normal-case text-[10px] text-slate-500">
+                    {date ? convertToDMY(date) : 'today'}
+                  </span>
+                </th>
                 {isAdmin && (
                   <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700" title="Admin: trigger internal JR scraper for this client. Completion + errors post to Discord.">
                     Scrape
@@ -854,9 +861,8 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
-                    {/* AI removed today + AI removed. The skeleton was already one
-                        cell short of the header row before these two columns existed. */}
-                    <td className="px-2 py-2"><div className="h-3.5 bg-amber-200/80 rounded animate-pulse w-8 ml-auto" /></td>
+                    {/* Removed by AI. The skeleton was already one cell short of the
+                        header row before this column existed. */}
                     <td className="px-2 py-2"><div className="h-3.5 bg-amber-200/80 rounded animate-pulse w-8 ml-auto" /></td>
                     {isAdmin && (
                       <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-20" /></td>
@@ -866,7 +872,7 @@ export default function ClientJobAnalysis() {
                 ))
               ) : processedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdmin ? 19 : 18} className="px-2 py-8 text-center text-gray-500 text-sm">
+                  <td colSpan={isAdmin ? 18 : 17} className="px-2 py-8 text-center text-gray-500 text-sm">
                     {searchQuery.trim() ? `No clients match "${searchQuery}"` : lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
                   </td>
                 </tr>
@@ -1073,10 +1079,7 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1 text-right">{r.rejected}</td>
                     <td className="px-2 py-1 text-right">{r.removed}</td>
                     <td className="px-2 py-1 text-right font-semibold text-amber-700">
-                      {r.aiRemovedToday || 0}
-                    </td>
-                    <td className="px-2 py-1 text-right font-semibold text-amber-700">
-                      {r.aiRemoved || 0}
+                      {r.removedByAI || 0}
                     </td>
                     {isAdmin && (
                       <td className="px-2 py-1">
@@ -1137,7 +1140,7 @@ export default function ClientJobAnalysis() {
               {/* Sentinel: when scrolled near, mount the next chunk of rows. */}
               {visibleRows.length < processedRows.length && (
                 <tr ref={loadMoreRef}>
-                  <td colSpan={isAdmin ? 19 : 18} className="px-2 py-3 text-center text-[11px] text-gray-400">
+                  <td colSpan={isAdmin ? 18 : 17} className="px-2 py-3 text-center text-[11px] text-gray-400">
                     Loading more… ({visibleRows.length}/{processedRows.length})
                   </td>
                 </tr>

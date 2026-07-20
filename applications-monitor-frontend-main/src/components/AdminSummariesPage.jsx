@@ -57,7 +57,6 @@ export default function AdminSummariesPage() {
 
     useEffect(() => {
         loadOverview();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [refreshKey]);
 
     async function loadOverview() {
@@ -78,7 +77,7 @@ export default function AdminSummariesPage() {
         }
     }
 
-    const rows = overview?.rows || [];
+    const rows = useMemo(() => overview?.rows || [], [overview]);
     const filtered = useMemo(() => {
         const q = search.trim().toLowerCase();
         return rows.filter((r) => {
@@ -456,14 +455,27 @@ function ClientRow({ row, selected, onClick }) {
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                         <span className="font-semibold text-slate-900 text-sm truncate">{row.name}</span>
-                        {row.hasSummary
-                            ? (row.summaryStale
-                                ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-700 flex-shrink-0" title="Profile changed since last summary build — rebuild recommended.">↻ CHANGED</span>
-                                : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 flex-shrink-0">✓ BUILT</span>)
-                            : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 flex-shrink-0">⚠ MISSING</span>}
+                        <span className="flex items-center gap-1 flex-shrink-0">
+                            {row.summaryFromRemoval && row.hasSummary && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700" title="AI summary includes this client's job-removal feedback — future picks steer away from removed patterns.">🗑 FEEDBACK</span>
+                            )}
+                            {row.hasSummary
+                                ? (row.summaryStale
+                                    ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-orange-100 text-orange-700" title="Profile changed since last summary build — rebuild recommended.">↻ CHANGED</span>
+                                    : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">✓ BUILT</span>)
+                                : <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700">⚠ MISSING</span>}
+                        </span>
                     </div>
                     <div className="text-xs text-slate-500 truncate">{row.email}</div>
                     {row.planType && <div className="text-[10px] text-slate-400 uppercase tracking-wide mt-0.5">{row.planType}</div>}
+                    {row.latestRemoval?.reason && (
+                        <div
+                            className="mt-1.5 text-[11px] text-rose-700 bg-rose-50 border border-rose-100 rounded-md px-2 py-1 truncate"
+                            title={`Latest removal reason: "${row.latestRemoval.reason}"${row.latestRemoval.jobTitle ? ` (${row.latestRemoval.jobTitle}${row.latestRemoval.companyName ? ` @ ${row.latestRemoval.companyName}` : ''})` : ''}`}
+                        >
+                            🗑 "{row.latestRemoval.reason}"
+                        </div>
+                    )}
                     <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-600">
                         <span>📤 {ops}</span>
                         {cap != null ? (
@@ -528,6 +540,10 @@ function ClientDetailPane({ row, onProfileChanged }) {
     const [sourcesDraft, setSourcesDraft] = useState(['jobright']);
     const [savedSources, setSavedSources] = useState(['jobright']);
     const [savingSources, setSavingSources] = useState(false);
+    // "Last removal reason" panel on the Candidate Summary card — shows the
+    // newest reason the client gave when removing a job, or an explicit
+    // "nothing to show" empty state.
+    const [showRemovalReason, setShowRemovalReason] = useState(false);
     // "See AI reasons to remove" modal — lists AI-removed jobs (top 5/page).
     const [showAiRemoved, setShowAiRemoved] = useState(false);
     const [aiRemoved, setAiRemoved] = useState({ jobs: [], total: 0, totalPages: 1, page: 1 });
@@ -674,6 +690,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
         loadProfile();
         loadHistory();
         loadNotes();
+        setShowRemovalReason(false);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [row.email]);
 
@@ -944,6 +961,26 @@ function ClientDetailPane({ row, onProfileChanged }) {
                         AI flagged <span className="font-semibold text-amber-700">{row.flaggedByAI ?? 0}</span>
                     </div>
                 </div>
+                {/* Latest client removal reason — written by the dashboard's
+                    removal flow, fed into the AI summary as high-priority
+                    context on the auto rebuild it triggers. */}
+                {row.latestRemoval?.reason && (
+                    <div className="mt-3 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2.5">
+                        <div className="flex items-baseline justify-between gap-3">
+                            <div className="text-[10px] uppercase tracking-wide font-bold text-rose-500">🗑 Latest removal reason from client</div>
+                            {row.latestRemoval.removedAt && (
+                                <span className="text-[11px] text-rose-500 flex-shrink-0">
+                                    {new Date(row.latestRemoval.removedAt).toLocaleString()}
+                                </span>
+                            )}
+                        </div>
+                        <div className="text-sm text-rose-900 mt-1">"{row.latestRemoval.reason}"</div>
+                        <div className="text-[11px] text-rose-600 mt-0.5">
+                            {[row.latestRemoval.jobTitle, row.latestRemoval.companyName].filter(Boolean).join(' @ ') || 'job details unavailable'}
+                            {row.summaryFromRemoval ? ' · ✓ reflected in the AI summary' : ' · summary rebuild pending'}
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Target cap */}
@@ -1137,11 +1174,27 @@ function ClientDetailPane({ row, onProfileChanged }) {
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-100 text-sky-800 border border-sky-300" title="Onboarding profile is always included">
                                     👤 Profile
                                 </span>
+                                {meta.builtInputs?.removalFeedback ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-800 border border-rose-300" title="The client's job-removal reasons were included as high-priority context — the summary steers future picks away from removed patterns">
+                                        🗑 Removals
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-400 border border-slate-200" title="No client removal feedback on file at build time — this summary was not tuned by removal reasons">
+                                        🗑 Removals <span className="opacity-60">·none</span>
+                                    </span>
+                                )}
                             </div>
                         )}
                     </div>
                     {!editing && (
                         <div className="flex gap-2 flex-shrink-0">
+                            <button
+                                onClick={() => setShowRemovalReason(true)}
+                                className="px-3 py-1.5 rounded-lg text-sm font-medium border bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 transition"
+                                title="Latest reason the client gave when removing a job card"
+                            >
+                                🗑 Last removal reason
+                            </button>
                             <button
                                 onClick={buildSummary}
                                 disabled={building}
@@ -1160,6 +1213,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                         </div>
                     )}
                 </div>
+
 
                 <div className="p-5">
                     {loading && !profile && <div className="text-slate-400 text-sm">Loading…</div>}
@@ -1194,6 +1248,84 @@ function ClientDetailPane({ row, onProfileChanged }) {
             {/* Per-client OpenAI key card removed — single global key now lives
                 in the page header. Extension falls back to that global key
                 whenever a client profile doesn't carry its own. */}
+
+            {/* Last removal reason modal — the newest reason the client gave
+                when removing a job card, with the job card info and a portal
+                deep link. Explicit empty state when the client has none. */}
+            {showRemovalReason && (
+                <div
+                    className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+                    onClick={() => setShowRemovalReason(false)}
+                >
+                    <div
+                        className="bg-white rounded-2xl shadow-2xl max-w-xl w-full max-h-[85vh] flex flex-col overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="px-6 py-4 border-b border-slate-200 bg-rose-50 flex items-center justify-between">
+                            <div>
+                                <h3 className="text-lg font-bold text-rose-800">🗑 Last removal reason</h3>
+                                <p className="text-xs text-slate-600 mt-0.5">
+                                    {row.name} · {row.email}
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setShowRemovalReason(false)}
+                                className="text-slate-400 hover:text-slate-700 text-xl leading-none"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="p-5 overflow-y-auto">
+                            {row.latestRemoval?.reason ? (
+                                <div className="border border-slate-200 rounded-xl p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="font-semibold text-slate-900 truncate">{row.latestRemoval.jobTitle || '(untitled job)'}</div>
+                                            <div className="text-xs text-slate-500 truncate">{row.latestRemoval.companyName || '(company unknown)'}</div>
+                                        </div>
+                                        {row.latestRemoval.jobID ? (
+                                            <a
+                                                href={`${PORTAL_BASE}/?tab=jobtracker&jobId=${encodeURIComponent(row.latestRemoval.jobID)}`}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
+                                            >
+                                                Open card ↗
+                                            </a>
+                                        ) : null}
+                                    </div>
+                                    <p className="mt-3 text-sm text-rose-800 bg-rose-50 border-l-4 border-rose-300 rounded-r px-3 py-2 whitespace-pre-wrap">
+                                        "{row.latestRemoval.reason}"
+                                    </p>
+                                    <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-slate-400">
+                                        <span>
+                                            Removed by {row.latestRemoval.removedBy || 'user'}
+                                            {row.latestRemoval.removedAt ? ` · ${new Date(row.latestRemoval.removedAt).toLocaleString()}` : ''}
+                                        </span>
+                                        {row.summaryFromRemoval ? (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold bg-emerald-100 text-emerald-700 border border-emerald-300">
+                                                ✓ reflected in the AI summary
+                                            </span>
+                                        ) : (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold bg-amber-100 text-amber-700 border border-amber-300">
+                                                summary rebuild pending
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-center text-slate-500 py-8 text-sm">
+                                    Nothing to show — this client hasn't removed any job with a reason yet.
+                                    <div className="text-xs text-slate-400 mt-1">
+                                        When they do, the reason lands here and the AI summary rebuilds automatically.
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* AI removal reasons modal — top 5 per page, deep-links to portal */}
             {showAiRemoved && (
@@ -1445,7 +1577,7 @@ function PricingCard() {
         } catch (e) { setErr(e.message); }
         finally { setLoading(false); }
     };
-    useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+    useEffect(() => { load();   }, []);
 
     const m = data?.openai;
     const fx = data?.fx;
@@ -1601,7 +1733,10 @@ function OperatorActivityTable() {
             setErr(e.message);
         } finally { setLoading(false); }
     }
-    useEffect(() => { load(days); /* eslint-disable-next-line */ }, [days]);
+    useEffect(() => {
+        load(days);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [days]);
 
     // Group rows by extension code so we can render code → days collapsed.
     const byCode = useMemo(() => {
@@ -1677,7 +1812,7 @@ function OperatorActivityTable() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {byCode.map((g, gi) => (
+                                {byCode.map((g) => (
                                     g.days.map((r, ri) => (
                                         <tr key={`${g.code}-${r.date}`} className={`border-b border-slate-100 hover:bg-slate-50/60 ${ri === 0 ? 'border-t-2 border-t-slate-200' : ''}`}>
                                             <td className="px-3 py-1.5">
@@ -1713,25 +1848,6 @@ function OperatorActivityTable() {
             )}
         </div>
     );
-}
-
-// -------------------------------------------------------------------------
-// OperatorBreakdownCard: per-client list of which operator pushed how many,
-// captured how many, rejected how many, and saved how many. Each operator
-// row carries an English breakdown sentence plus structured chips.
-// -------------------------------------------------------------------------
-function fmtRelative(date) {
-    if (!date) return '';
-    const d = new Date(date);
-    const diffMs = Date.now() - d.getTime();
-    const min = Math.round(diffMs / 60000);
-    if (min < 1) return 'just now';
-    if (min < 60) return `${min}m ago`;
-    const hr = Math.round(min / 60);
-    if (hr < 24) return `${hr}h ago`;
-    const day = Math.round(hr / 24);
-    if (day < 30) return `${day}d ago`;
-    return d.toLocaleDateString();
 }
 
 // Today-only summary card. Shows the three numbers operators actually need

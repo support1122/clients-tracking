@@ -8,7 +8,10 @@ import { ClientModel } from '../ClientModel.js';
 import { ManagerModel } from '../ManagerModel.js';
 import OperationsModel from '../OperationsModel.js';
 import { NewUserModel } from '../schema_models/UserModel.js';
+import { sendChatMessageInternal, emitToUsers } from './chatController.js';
 import { sendTagNotificationEmail } from '../utils/sendTagNotificationEmail.js';
+import { sendTagDiscordPing } from '../utils/tagDiscordNotify.js';
+import { TagReminderModel } from '../TagReminderModel.js';
 import { sendMilestoneEmail } from '../utils/clientMilestoneEmails.js';
 import { getPlanCap, MIN_JOBS_FOR_EMAIL } from '../utils/planCaps.js';
 import { clearAnalysisCache } from '../utils/analysisCache.js';
@@ -233,10 +236,28 @@ export async function runHighAppliedJobsNotifications(rows) {
         authorName: 'System',
         read: false
       });
-      const taggedUser = await UserModel.findOne({ email: dmEmail }).select('email otpEmail name').lean();
-      const toEmail = (taggedUser?.otpEmail || '').trim() || dmEmail;
+      // Chat DM + immediate email to OTP mail + Discord ping (same fan-out as
+      // a user tag; repeating reminders handled by the tag-reminder cron).
+      sendChatMessageInternal({
+        fromEmail: SYSTEM_AUTO_COMMENT_AUTHOR_EMAIL,
+        fromName: 'System',
+        toEmail: dmEmail,
+        toName: dmName,
+        text: body,
+        ticket: {
+          jobId: updated._id,
+          jobNumber: updated.jobNumber,
+          clientName: updated.clientName || '',
+          clientNumber: updated.clientNumber ?? null
+        },
+        source: 'tag',
+        emailHandled: true
+      });
+      const dmUser = await UserModel.findOne({ email: dmEmail })
+        .select('email otpEmail name discordWebhookUrl')
+        .lean();
       sendTagNotificationEmail({
-        toEmail,
+        toEmail: (dmUser?.otpEmail || '').trim() || dmEmail,
         recipientName: dmName,
         authorName: 'System',
         commentSnippet,
@@ -245,6 +266,25 @@ export async function runHighAppliedJobsNotifications(rows) {
         clientNumber: updated.clientNumber ?? null,
         jobId: String(updated._id)
       }).catch(() => {});
+      if (dmUser?.discordWebhookUrl) {
+        sendTagDiscordPing({
+          webhookUrl: dmUser.discordWebhookUrl,
+          recipientName: dmName,
+          authorName: 'System',
+          snippet: commentSnippet,
+          clientName: updated.clientName || '',
+          clientNumber: updated.clientNumber ?? null,
+          jobNumber: updated.jobNumber
+        }).catch(() => {});
+      }
+      emitToUsers([dmEmail], 'notify', {
+        kind: 'tag',
+        jobId: String(updated._id),
+        jobNumber: updated.jobNumber,
+        clientName: updated.clientName || 'Client',
+        authorName: 'System',
+        commentSnippet
+      });
     } catch (e) {
       console.error('[runHighAppliedJobsNotifications] notify error:', e?.message || e);
     }
@@ -857,39 +897,145 @@ export async function patchOnboardingJob(req, res) {
         }));
         if (notifications.length) {
           await OnboardingNotificationModel.insertMany(notifications).catch(err => console.error('OnboardingNotification insert:', err));
+          // Instant push over the chat SSE stream — replaces waiting for the
+          // 2-minute notification poll on the onboarding board.
+          notifications.forEach((n) => {
+            emitToUsers([n.userEmail], 'notify', {
+              kind: 'tag',
+              jobId: String(n.jobId),
+              jobNumber: n.jobNumber,
+              clientName: n.clientName,
+              authorName: n.authorName,
+              commentSnippet: n.commentSnippet
+            });
+          });
         }
 
-        // Batch lookup all tagged users' otpEmails in a single query
+        // Per-user notification fan-out: chat DM + immediate email to the
+        // user's OTP mail + Discord ping to their personal webhook channel.
+        // Repeating Discord reminders (utils/chatCrons.js) then fire until the
+        // tagged user resolves the comment.
         const taggedUsersData = await UserModel.find({ email: { $in: cleanTaggedEmails } })
-          .select('email otpEmail name')
+          .select('email otpEmail name discordWebhookUrl')
           .lean();
         const taggedUserMap = new Map(taggedUsersData.map(u => [u.email.toLowerCase(), u]));
-
-        // Send email notifications to tagged users (fire-and-forget)
+        const ticketRef = {
+          jobId: job._id,
+          jobNumber: job.jobNumber,
+          clientName: job.clientName || '',
+          clientNumber: job.clientNumber ?? null
+        };
         cleanTaggedEmails.forEach((userEmail, i) => {
           const taggedUser = taggedUserMap.get(userEmail);
-          if (!taggedUser) {
-            console.warn(`[Tagged] User ${userEmail} not found in tracking_portal_users — sending to primary email`);
-          }
+          const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) || taggedUser?.name || userEmail;
+
+          // 1. Chat widget DM (emailHandled: the email below is sent right away,
+          //    so the 30-min escalation sweep must not duplicate it)
+          sendChatMessageInternal({
+            fromEmail: authorEmail,
+            fromName: authorName,
+            toEmail: userEmail,
+            toName: recipientName,
+            text: commentBody || '(image)',
+            ticket: ticketRef,
+            source: 'tag',
+            emailHandled: true
+          });
+
+          // 2. Email to the user's OTP mail (falls back to login email)
           const toEmail = (taggedUser?.otpEmail || '').trim() || userEmail;
-          const recipientName = (Array.isArray(comment.taggedNames) && comment.taggedNames[i]) ? comment.taggedNames[i] : null;
-          const emailType = taggedUser?.otpEmail ? 'otpEmail' : 'primary';
-          console.log(`[Tagged] ${authorName} tagged ${userEmail} in job #${job.jobNumber} -> sending to ${toEmail} (${emailType})`);
           sendTagNotificationEmail({
             toEmail,
-            recipientName: recipientName || taggedUser?.name,
+            recipientName,
             authorName,
             commentSnippet,
             jobNumber: job.jobNumber,
             clientName: job.clientName || '',
             clientNumber: job.clientNumber ?? null,
             jobId: String(job._id)
-          }).then(() => {
-            console.log(`[Tag Email] Sent successfully to ${toEmail} for tagged user ${userEmail}`);
-          }).catch(err => {
-            console.error(`[Tag Email] Failed to send to ${toEmail} for tagged user ${userEmail}:`, err?.message || err);
-          });
+          }).catch(err => console.error(`[Tag Email] failed to ${toEmail}:`, err?.message || err));
+
+          // 3. Discord ping to their personal channel (if configured)
+          if (taggedUser?.discordWebhookUrl) {
+            sendTagDiscordPing({
+              webhookUrl: taggedUser.discordWebhookUrl,
+              recipientName,
+              authorName,
+              snippet: commentSnippet,
+              clientName: job.clientName || '',
+              clientNumber: job.clientNumber ?? null,
+              jobNumber: job.jobNumber
+            }).catch(() => {});
+          }
         });
+
+        // Keep the ticket's Dashboard Manager in the loop — an FYI, not a tag:
+        // no resolve duty, no escalation, no reminder chasing. Skipped when the
+        // DM wrote the comment or is already among the tagged users.
+        (async () => {
+          try {
+            const dmName = (job.dashboardManagerName || '').trim();
+            if (!dmName) return;
+            const manager = await ManagerModel.findOne({ fullName: dmName, isActive: true }).select('email').lean();
+            const dmEmail = (manager?.email || '').toLowerCase().trim();
+            if (!dmEmail) return;
+            if (dmEmail === (authorEmail || '').toLowerCase().trim()) return; // DM is the author
+            if (cleanTaggedEmails.includes(dmEmail)) return; // DM is tagged — already fully notified
+            const taggedLabel = (comment.taggedNames || []).filter(Boolean).join(', ') || cleanTaggedEmails.join(', ');
+
+            OnboardingNotificationModel.create({
+              userEmail: dmEmail,
+              jobId: job._id,
+              jobNumber: job.jobNumber,
+              clientNumber: job.clientNumber ?? null,
+              clientName: job.clientName || '',
+              commentSnippet: `👀 ${authorName} tagged ${taggedLabel}: ${commentSnippet}`.slice(0, 120),
+              authorEmail,
+              authorName,
+              read: false
+            }).catch((err) => console.error('DM loop-in notification:', err));
+            emitToUsers([dmEmail], 'notify', {
+              kind: 'dm_fyi',
+              jobId: String(job._id),
+              jobNumber: job.jobNumber,
+              clientName: job.clientName || '',
+              authorName,
+              commentSnippet
+            });
+            // Chat DM as source 'user': visible in the widget, but never enters
+            // the escalation sweep — the tagged person owns the resolution.
+            sendChatMessageInternal({
+              fromEmail: authorEmail,
+              fromName: authorName,
+              toEmail: dmEmail,
+              toName: dmName,
+              text: `FYI — tagged ${taggedLabel} on your client:\n${commentBody || '(image)'}`,
+              ticket: {
+                jobId: job._id,
+                jobNumber: job.jobNumber,
+                clientName: job.clientName || '',
+                clientNumber: job.clientNumber ?? null
+              },
+              source: 'user'
+            });
+            const dmUser = await UserModel.findOne({ email: dmEmail }).select('discordWebhookUrl name').lean();
+            if (dmUser?.discordWebhookUrl) {
+              sendTagDiscordPing({
+                webhookUrl: dmUser.discordWebhookUrl,
+                recipientName: dmUser.name || dmName,
+                authorName,
+                snippet: commentSnippet,
+                clientName: job.clientName || '',
+                clientNumber: job.clientNumber ?? null,
+                jobNumber: job.jobNumber,
+                fyi: true,
+                taggedLabel
+              }).catch(() => {});
+            }
+          } catch (e) {
+            console.error('[Tag] DM loop-in failed:', e?.message || e);
+          }
+        })();
       }
     } else {
       job.updatedAt = new Date();
@@ -1193,6 +1339,136 @@ export async function resolveOnboardingComment(req, res) {
   } catch (e) {
     console.error('resolveOnboardingComment:', e);
     res.status(500).json({ error: e.message || 'Failed to mark as resolved' });
+  }
+}
+
+/**
+ * POST /api/onboarding/jobs/:id/comments/:commentId/replies
+ * Add a thread reply to a comment. Notifies the parent comment's participants
+ * (author + tagged users, excluding the replier) via bell + instant SSE.
+ */
+export async function addCommentReply(req, res) {
+  try {
+    const { id: jobId, commentId } = req.params;
+    const userEmail = (req.user?.email || '').toLowerCase().trim();
+    if (!userEmail) return res.status(401).json({ error: 'Unauthorized' });
+    const body = (req.body?.body || '').trim();
+    if (!body) return res.status(400).json({ error: 'Reply text required' });
+
+    const job = await OnboardingJobModel.findById(jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const comment = (job.comments || []).find((c) => String(c._id) === String(commentId));
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+
+    if (!comment.replies) comment.replies = [];
+    comment.replies.push({
+      body: body.slice(0, 4000),
+      authorEmail: userEmail,
+      authorName: req.user?.name || userEmail,
+      createdAt: new Date()
+    });
+    job.updatedAt = new Date();
+    job.markModified('comments');
+    await job.save();
+    jobListCache.clear();
+    jobDetailCache.del(`job:${jobId}`);
+
+    // Notify thread participants: parent author + tagged users + earlier
+    // repliers, minus the person replying now.
+    const participants = new Set(
+      [
+        comment.authorEmail,
+        ...(comment.taggedUserIds || []),
+        ...(comment.replies || []).map((r) => r.authorEmail)
+      ]
+        .map((e) => (e || '').toLowerCase().trim())
+        .filter((e) => e && e !== userEmail && !e.includes('.internal'))
+    );
+    if (participants.size > 0) {
+      const snippet = body.slice(0, 120);
+      const notifications = [...participants].map((email) => ({
+        userEmail: email,
+        jobId: job._id,
+        jobNumber: job.jobNumber,
+        clientNumber: job.clientNumber ?? null,
+        clientName: job.clientName || '',
+        commentSnippet: `↩ ${snippet}`,
+        authorEmail: userEmail,
+        authorName: req.user?.name || userEmail,
+        read: false
+      }));
+      OnboardingNotificationModel.insertMany(notifications).catch((err) =>
+        console.error('reply notifications insert:', err)
+      );
+      for (const email of participants) {
+        emitToUsers([email], 'notify', {
+          kind: 'thread_reply',
+          jobId: String(job._id),
+          jobNumber: job.jobNumber,
+          clientName: job.clientName || '',
+          authorName: req.user?.name || userEmail,
+          commentSnippet: snippet
+        });
+      }
+    }
+
+    res.status(200).json({ job: job.toObject() });
+  } catch (e) {
+    console.error('addCommentReply:', e);
+    res.status(500).json({ error: e.message || 'Failed to add reply' });
+  }
+}
+
+/**
+ * PATCH /api/onboarding/jobs/:id/comments/:commentId/reopen
+ * Clear a comment's resolutions (admin, comment author, or a tagged user).
+ * Discord tag reminders restart because the reminder log is reset.
+ */
+export async function reopenComment(req, res) {
+  try {
+    const { id: jobId, commentId } = req.params;
+    const userEmail = (req.user?.email || '').toLowerCase().trim();
+    if (!userEmail) return res.status(401).json({ error: 'Unauthorized' });
+    const isAdmin = req.user?.role === 'admin';
+
+    const job = await OnboardingJobModel.findById(jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    const comment = (job.comments || []).find((c) => String(c._id) === String(commentId));
+    if (!comment) return res.status(404).json({ error: 'Comment not found' });
+
+    const taggedEmails = (comment.taggedUserIds || []).map((e) => (e || '').toLowerCase().trim());
+    const isAuthor = (comment.authorEmail || '').toLowerCase().trim() === userEmail;
+    if (!isAdmin && !isAuthor && !taggedEmails.includes(userEmail)) {
+      return res.status(403).json({ error: 'Only an admin, the author, or a tagged user can reopen this' });
+    }
+    if (!(comment.resolvedByTagged || []).length) {
+      return res.status(400).json({ error: 'Comment is not resolved' });
+    }
+
+    comment.resolvedByTagged = [];
+    if (!job.moveHistory) job.moveHistory = [];
+    job.moveHistory.push({
+      actionType: 'comment_reopened',
+      movedBy: userEmail,
+      movedByName: req.user?.name || '',
+      movedAt: new Date(),
+      commentId: String(comment._id),
+      commentSnippet: (comment.body || '').slice(0, 120)
+    });
+    job.updatedAt = new Date();
+    job.markModified('comments');
+    job.markModified('moveHistory');
+    await job.save();
+    jobListCache.clear();
+    jobDetailCache.del(`job:${jobId}`);
+
+    // Reset Discord reminder counters so the re-opened tag gets chased again.
+    TagReminderModel.deleteMany({ jobId: job._id, commentId: String(comment._id) }).catch(() => {});
+
+    res.status(200).json({ job: job.toObject() });
+  } catch (e) {
+    console.error('reopenComment:', e);
+    res.status(500).json({ error: e.message || 'Failed to reopen' });
   }
 }
 

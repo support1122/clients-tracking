@@ -24,6 +24,13 @@ const commentImageSchema = new mongoose.Schema({
   filename: { type: String, default: '' }
 }, { _id: false });
 
+const commentReplySchema = new mongoose.Schema({
+  body: { type: String, required: true },
+  authorEmail: { type: String, required: true },
+  authorName: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now }
+}, { _id: true });
+
 const commentSchema = new mongoose.Schema({
   body: { type: String, required: true },
   authorEmail: { type: String, required: true },
@@ -31,6 +38,7 @@ const commentSchema = new mongoose.Schema({
   taggedUserIds: [{ type: String }],
   taggedNames: [{ type: String }],
   resolvedByTagged: [resolvedByTaggedSchema],
+  replies: [commentReplySchema],
   images: [commentImageSchema],
   createdAt: { type: Date, default: Date.now }
 }, { _id: true });
@@ -42,7 +50,7 @@ const moveHistorySchema = new mongoose.Schema({
   movedByName: { type: String, default: '' },
   movedAt: { type: Date, default: Date.now },
   // For assignment events: 'dashboard_manager', 'linkedin_member'. client_phase_set = "New" in Client Job Analysis.
-  actionType: { type: String, default: 'status_change', enum: ['status_change', 'assignment', 'client_paused', 'client_unpaused', 'client_phase_set', 'comment_resolved', 'payment_email_set', 'payment_email_updated', 'payment_email_cleared', 'milestone_email_sent', 'milestone_email_skipped'] },
+  actionType: { type: String, default: 'status_change', enum: ['status_change', 'assignment', 'client_paused', 'client_unpaused', 'client_phase_set', 'comment_resolved', 'comment_reopened', 'payment_email_set', 'payment_email_updated', 'payment_email_cleared', 'milestone_email_sent', 'milestone_email_skipped'] },
   targetRole: { type: String },
   targetName: { type: String },
   commentId: { type: String, required: false },

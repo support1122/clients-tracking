@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo, useTransition } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { motion as Motion, AnimatePresence } from 'framer-motion';
 import {
   useOnboardingStore,
   useClientProfileStore,
@@ -40,24 +42,35 @@ import {
 import JobCard from './ClientOnboarding/JobCard';
 import KanbanColumn from './ClientOnboarding/KanbanColumn';
 import ClientSidebar from './ClientOnboarding/ClientSidebar';
-import JobDetailModal from './ClientOnboarding/JobDetailModal';
+import JobDetailModalHost from './ClientOnboarding/JobDetailModalHost';
 
 // Helpers & constants
 import {
   getVisibleColumns,
   clientDisplayName,
   getAllowedStatusesForPlan,
-  getStatusColor,
-  getColumnAccent,
-  getSortingNumber,
   convertToDMY
 } from './ClientOnboarding/helpers';
 import { API_BASE, AUTH_HEADERS, LOG, LONG_PRESS_MS } from './ClientOnboarding/constants';
+import { OVERLAY_FADE, SECTION_EASE } from './ClientOnboarding/animation';
+import { initials, avatarColor } from '../utils/chatFormat';
 import { apiFetch, getCached, invalidateCache, promisePool } from '../utils/apiClient';
 import { fetchDashboardManagerFullNames } from '../utils/fetchDashboardManagerCatalog.js';
 
 export default function ClientOnboarding() {
-  const { jobs, setJobs, selectedJob, setSelectedJob, loading, setLoading, roles, setRoles, getJobsByStatus, clearSelected } = useOnboardingStore();
+  // Per-field selectors — the page must NOT subscribe to `selectedJob` (the
+  // modal host owns that). Subscribing to the whole store made every modal
+  // interaction re-render this 2,700-line component.
+  const jobs = useOnboardingStore((s) => s.jobs);
+  const setJobs = useOnboardingStore((s) => s.setJobs);
+  const setSelectedJob = useOnboardingStore((s) => s.setSelectedJob);
+  const loading = useOnboardingStore((s) => s.loading);
+  const setLoading = useOnboardingStore((s) => s.setLoading);
+  const roles = useOnboardingStore((s) => s.roles);
+  const setRoles = useOnboardingStore((s) => s.setRoles);
+  const clearSelected = useOnboardingStore((s) => s.clearSelected);
+  // Only the id — re-renders on open/close/switch, not on every detail merge.
+  const selectedJobId = useOnboardingStore((s) => s.selectedJob?._id ?? null);
   const [user] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('user') || '{}');
@@ -109,8 +122,6 @@ export default function ClientOnboarding() {
   const [filteredClientEmail, setFilteredClientEmail] = useState(null);
   const [clientJobAnalysis, setClientJobAnalysis] = useState({});
   const [clientJobAnalysisLoading, setClientJobAnalysisLoading] = useState(true);
-  const [loadingJobDetails, setLoadingJobDetails] = useState(false);
-  const [loadingComments, setLoadingComments] = useState(false);
 
   // ── Add Client modal state ──
   const [showAddModal, setShowAddModal] = useState(false);
@@ -145,6 +156,7 @@ export default function ClientOnboarding() {
 
   // ── Misc ──
   const [moveToJob, setMoveToJob] = useState(null);
+  const [showToolsMenu, setShowToolsMenu] = useState(false);
   const [showAdminTicketSummary, setShowAdminTicketSummary] = useState(true);
   const [savingClientNumber, setSavingClientNumber] = useState(false);
   const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
@@ -170,8 +182,9 @@ export default function ClientOnboarding() {
   const userSubRole = user?.onboardingSubRole || '';
   const canMoveAny = isAdmin || isCsm || isTeamLead;
 
-  // Get allowed statuses based on user role
-  const getAllowedStatusesForUser = () => {
+  // Get allowed statuses based on user role — memoized so handleMove (and the
+  // modal's onMoveJob prop) keep a stable identity across board re-renders.
+  const getAllowedStatusesForUser = useCallback(() => {
     if (canMoveAny) return ONBOARDING_STATUSES;
     if (userSubRole === 'resume_maker') {
       return ['resume_in_progress', 'resume_draft_done', 'resume_in_review', 'resume_approved'];
@@ -180,18 +193,17 @@ export default function ClientOnboarding() {
       return ['linkedin_in_progress', 'linkedin_done', 'cover_letter_in_progress', 'cover_letter_done'];
     }
     return [];
-  };
+  }, [canMoveAny, userSubRole]);
 
   const canMoveTo = (currentStatus, nextStatus) => {
     const allowed = VALID_NEXT_STATUSES[currentStatus] || [];
     return allowed.includes(nextStatus);
   };
 
-  const canUserMoveToStatus = (targetStatus) => {
+  const canUserMoveToStatus = useCallback((targetStatus) => {
     if (canMoveAny) return true;
-    const allowedStatuses = getAllowedStatusesForUser();
-    return allowedStatuses.includes(targetStatus);
-  };
+    return getAllowedStatusesForUser().includes(targetStatus);
+  }, [canMoveAny, getAllowedStatusesForUser]);
 
   const computeJobsForStatus = useCallback((status, deduplicatedJobs) => {
     const baseJobs = deduplicatedJobs.filter((j) => {
@@ -410,12 +422,12 @@ export default function ClientOnboarding() {
             }
             notificationSoundRef.current.currentTime = 0;
             notificationSoundRef.current.play().catch(() => {});
-          } catch (_) { }
+          } catch { /* non-critical */ }
         }
         prevUnreadCountRef.current = unreadCount;
         setNotifications(notifs);
       }
-    } catch (_) { }
+    } catch { /* non-critical */ }
   }, []);
 
   const fetchNonResolvedIssues = useCallback(async () => {
@@ -431,7 +443,7 @@ export default function ClientOnboarding() {
       } else {
         setNonResolvedIssues({ count: data.count ?? 0, items: data.items ?? [], perUser: data.perUser ?? [], pendingMoves: data.pendingMoves ?? [] });
       }
-    } catch (_) { }
+    } catch { /* non-critical */ }
   }, [user?.role]);
 
   const fetchClientJobAnalysis = useCallback(async (selectedDate) => {
@@ -512,7 +524,7 @@ export default function ClientOnboarding() {
         headers: AUTH_HEADERS()
       });
       if (res.ok) setNotifications((prev) => prev.map((n) => (n._id === id ? { ...n, read: true } : n)));
-    } catch (_) { }
+    } catch { /* non-critical */ }
   }, []);
 
   // ── Effects ──
@@ -548,13 +560,24 @@ export default function ClientOnboarding() {
     return () => clearTimeout(timer);
   }, [filteredClientEmail, loading]);
 
-  // Poll for new notifications every 30 seconds
+  // Fallback poll (2 min). Primary delivery is the instant SSE push below.
   useEffect(() => {
     const id = setInterval(() => {
       fetchNotifications();
       fetchNonResolvedIssues();
     }, 2 * 60 * 1000);
     return () => clearInterval(id);
+  }, [fetchNotifications, fetchNonResolvedIssues]);
+
+  // Instant refresh when the chat SSE stream pushes an onboarding notification
+  // (someone tagged you, a move needs approval, ...). Dispatched by chatSse.js.
+  useEffect(() => {
+    const onNotify = () => {
+      fetchNotifications();
+      fetchNonResolvedIssues();
+    };
+    window.addEventListener('ff-onboarding-notify', onNotify);
+    return () => window.removeEventListener('ff-onboarding-notify', onNotify);
   }, [fetchNotifications, fetchNonResolvedIssues]);
 
   // Cleanup all timers on unmount
@@ -566,13 +589,13 @@ export default function ClientOnboarding() {
     };
   }, []);
 
-  // Mark notifications read when selectedJob changes
+  // Mark notifications read when the selected job changes
   useEffect(() => {
-    if (!selectedJob?._id) return;
+    if (!selectedJobId) return;
     notifications
-      .filter((n) => !n.read && n.jobId === selectedJob._id)
+      .filter((n) => !n.read && n.jobId === selectedJobId)
       .forEach((n) => { if (n._id) markNotificationRead(n._id); });
-  }, [selectedJob?._id, notifications, markNotificationRead]);
+  }, [selectedJobId, notifications, markNotificationRead]);
 
   // ── Move handler ──
   const handleMove = useCallback(async (jobId, newStatus, skipRoleCheck = false) => {
@@ -581,7 +604,7 @@ export default function ClientOnboarding() {
       return;
     }
 
-    const job = jobs.find((j) => j._id === jobId);
+    const job = useOnboardingStore.getState().jobs.find((j) => j._id === jobId);
     if (!job) {
       toastUtils.error('Job not found');
       return;
@@ -603,11 +626,10 @@ export default function ClientOnboarding() {
     const originalJob = { ...job };
     setMovingStatus(jobId);
 
-    // Optimistic update
+    // Optimistic update (selected job read via getState so this callback stays
+    // stable and never subscribes the page to modal state)
     setJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, status: newStatus } : j)));
-    if (selectedJob?._id === jobId) {
-      setSelectedJob((prev) => (prev ? { ...prev, status: newStatus } : null));
-    }
+    setSelectedJob((prev) => (prev && prev._id === jobId ? { ...prev, status: newStatus } : prev));
 
     try {
       const res = await fetch(`${API_BASE}/api/onboarding/jobs/${jobId}`, {
@@ -621,21 +643,17 @@ export default function ClientOnboarding() {
 
       prefetchCacheRef.current.delete(jobId);
       setJobs((prev) => prev.map((j) => (j._id === jobId ? data.job : j)));
-      if (selectedJob?._id === jobId) {
-        setSelectedJob(data.job);
-      }
+      setSelectedJob((prev) => (prev && prev._id === jobId ? data.job : prev));
       toastUtils.success(`Moved to ${STATUS_LABELS[newStatus] || newStatus}`);
     } catch (e) {
       console.error('Move error:', e);
       toastUtils.error(e.message || 'Failed to move card');
       setJobs((prev) => prev.map((j) => (j._id === jobId ? originalJob : j)));
-      if (selectedJob?._id === jobId) {
-        setSelectedJob(originalJob);
-      }
+      setSelectedJob((prev) => (prev && prev._id === jobId ? originalJob : prev));
     } finally {
       setMovingStatus(null);
     }
-  }, [jobs, movingStatus, selectedJob, canUserMoveToStatus, setJobs, setSelectedJob]);
+  }, [movingStatus, canUserMoveToStatus, getAllowedStatusesForUser, setJobs, setSelectedJob]);
 
   // ── Drag & Drop ──
   const handleDragStart = useCallback((e, job) => {
@@ -732,6 +750,9 @@ export default function ClientOnboarding() {
       longPressActivatedRef.current = false;
       return;
     }
+    // Store-backed flags: only the modal host subscribes to these, so
+    // toggling them doesn't re-render the board.
+    const { setLoadingJobDetails, setLoadingComments } = useOnboardingStore.getState();
 
     // Admin unread: optimistic reset + fire-and-forget server sync
     if (user?.role === 'admin' && job.adminUnreadCount > 0) {
@@ -792,6 +813,23 @@ export default function ClientOnboarding() {
       .finally(() => setLoadingComments(false));
   }, [setSelectedJob, setJobs, user]);
 
+  // Deep link from the chat widget: /client-onboarding?job=<jobId> opens that
+  // ticket's modal once jobs are loaded, then strips the param.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deepLinkJobId = searchParams.get('job');
+  useEffect(() => {
+    if (!deepLinkJobId || loading) return;
+    const jobsList = Array.isArray(jobs) ? jobs : [];
+    if (jobsList.length === 0) return; // still fetching (or empty board — retried on next jobs change)
+    const job = jobsList.find((j) => j._id === deepLinkJobId);
+    if (job) {
+      handleCardClick(job);
+    } else {
+      toastUtils.error('Ticket not found or not visible to you');
+    }
+    setSearchParams({}, { replace: true });
+  }, [deepLinkJobId, loading, jobs, handleCardClick, setSearchParams]);
+
   // Prefetch full job on hover
   const handleCardHoverStart = useCallback((job) => {
     if (prefetchCacheRef.current.has(job._id)) return;
@@ -835,7 +873,7 @@ export default function ClientOnboarding() {
 
     try {
       const raw = e.dataTransfer.getData('application/json');
-      const { jobId, fromStatus } = raw ? JSON.parse(raw) : { jobId: draggedJobId, fromStatus: '' };
+      const { jobId } = raw ? JSON.parse(raw) : { jobId: draggedJobId };
 
       if (!jobId || typeof jobId !== 'string') {
         setDraggedJobId(null);
@@ -910,11 +948,8 @@ export default function ClientOnboarding() {
   }, [handleMove]);
 
   const handleCloseModal = useCallback(() => {
-    clearSelected();
-    setSelectedJob(null);
-    setLoadingJobDetails(false);
-    setLoadingComments(false);
-  }, [clearSelected, setSelectedJob]);
+    clearSelected(); // also resets the detail/comments loading flags
+  }, [clearSelected]);
 
   // ── Notification helpers ──
   const unreadNotifications = useMemo(() => (notifications || []).filter((n) => !n.read), [notifications]);
@@ -1068,22 +1103,6 @@ export default function ClientOnboarding() {
       setAddSubmitting(false);
     }
   };
-
-  // ── Access check ──
-  if (visibleColumns.length === 0) {
-    return (
-      <div className="p-6 max-w-2xl mx-auto flex items-center justify-center min-h-[60vh]">
-        <div className="bg-white border border-gray-100 rounded-2xl p-10 text-center shadow-lg">
-          <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mx-auto mb-4">
-            <AlertCircle className="w-8 h-8 text-primary" />
-          </div>
-          <h2 className="text-xl font-bold text-gray-900 mb-2">Access Restricted</h2>
-          <p className="text-gray-600">You don't have access to Client Onboarding.</p>
-          <p className="text-gray-500 text-sm mt-2">Contact an admin to assign you an onboarding or CSM role.</p>
-        </div>
-      </div>
-    );
-  }
 
   // ── Bulk import: Payment Email by Assigned Email ──
   const parsePaymentImportFile = useCallback((file) => {
@@ -1303,13 +1322,29 @@ export default function ClientOnboarding() {
     setSendPrevResult(null);
   }, [sendPrevRunning]);
 
+  // ── Access check (after all hooks — rules-of-hooks) ──
+  if (visibleColumns.length === 0) {
+    return (
+      <div className="p-6 max-w-2xl mx-auto flex items-center justify-center min-h-[60vh]">
+        <div className="bg-white border border-gray-100 rounded-2xl p-10 text-center shadow-lg">
+          <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mx-auto mb-4">
+            <AlertCircle className="w-8 h-8 text-primary" />
+          </div>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Access Restricted</h2>
+          <p className="text-gray-600">You don't have access to Client Onboarding.</p>
+          <p className="text-gray-500 text-sm mt-2">Contact an admin to assign you an onboarding or CSM role.</p>
+        </div>
+      </div>
+    );
+  }
+
   // ══════════════════════════════════════════════════════════════════
   //  JSX
   // ══════════════════════════════════════════════════════════════════
   return (
-    <div className="min-h-screen bg-[#F8FAFC] pb-10">
+    <div className="min-h-screen bg-[#f6f5f4] pb-10">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm backdrop-blur-md bg-white/90">
+      <div className="bg-white border-b border-[#e6e4e1] sticky top-0 z-30 shadow-sm">
         <div className="max-w-[1920px] mx-auto px-6 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Client Onboarding</h1>
@@ -1319,7 +1354,7 @@ export default function ClientOnboarding() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             {/* Search */}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -1328,46 +1363,68 @@ export default function ClientOnboarding() {
                 placeholder="Search by client name, email, or number..."
                 value={searchInput}
                 onChange={(e) => handleSearchChange(e.target.value)}
-                className="pl-10 pr-4 py-2 w-72 border border-gray-200 rounded-xl focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white shadow-sm text-sm"
+                className="pl-10 pr-4 py-2 w-72 border border-[#e6e4e1] rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary bg-white text-sm placeholder:text-gray-400"
               />
             </div>
 
-            {/* Import Payment Emails */}
-            <button
-              type="button"
-              onClick={() => setShowPaymentImportModal(true)}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-gray-200 bg-white hover:bg-orange-50 hover:border-orange-300 text-sm font-medium text-gray-700 hover:text-orange-700 shadow-sm transition-colors"
-              title="Bulk import Payment Emails (CSV)"
-            >
-              <Upload className="w-4 h-4" />
-              <span className="hidden sm:inline">Import Payment Emails</span>
-            </button>
-
-            {/* Export Logs (admin only) */}
-            {isAdmin && (
+            {/* Tools — occasional admin actions folded into one utility menu */}
+            <div className="relative">
               <button
                 type="button"
-                onClick={() => { setShowExportModal(true); fetchExportRows({}); }}
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-gray-200 bg-white hover:bg-orange-50 hover:border-orange-300 text-sm font-medium text-gray-700 hover:text-orange-700 shadow-sm transition-colors"
-                title="Export milestone email logs (admin)"
+                onClick={() => setShowToolsMenu((v) => !v)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[#e6e4e1] bg-white hover:border-[#d9d5d0] text-sm font-medium text-gray-700 transition-colors"
               >
-                <Download className="w-4 h-4" />
-                <span className="hidden sm:inline">Export Logs</span>
+                Tools <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${showToolsMenu ? 'rotate-180' : ''}`} />
               </button>
-            )}
-
-            {/* Send to Previous Clients (admin only) */}
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => setShowSendPrevModal(true)}
-                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border border-orange-300 bg-orange-50 hover:bg-orange-100 text-sm font-semibold text-orange-700 shadow-sm transition-colors"
-                title="Send stuck milestone emails — checks all active clients with paymentEmail set, sends any milestones that were reached but not yet emailed (admin)"
-              >
-                <Send className="w-4 h-4" />
-                <span className="hidden sm:inline">Send Stuck Payment Emails</span>
-              </button>
-            )}
+              {showToolsMenu && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowToolsMenu(false)} aria-hidden="true" />
+                  <div className="absolute left-0 top-full z-50 mt-1.5 w-64 rounded-xl bg-white border border-[#e6e4e1] shadow-[0_2px_4px_rgba(0,0,0,0.04),0_12px_32px_rgba(0,0,0,0.10)] p-1.5 text-sm">
+                    <button
+                      type="button"
+                      onClick={() => { setShowToolsMenu(false); setShowPaymentImportModal(true); }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-gray-700 hover:bg-[#f6f5f4] text-left"
+                      title="Bulk import Payment Emails (CSV)"
+                    >
+                      <Upload className="w-4 h-4 text-gray-400" /> Import payment emails
+                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => { setShowToolsMenu(false); setShowExportModal(true); fetchExportRows({}); }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-gray-700 hover:bg-[#f6f5f4] text-left"
+                        title="Export milestone email logs (admin)"
+                      >
+                        <Download className="w-4 h-4 text-gray-400" /> Export logs
+                      </button>
+                    )}
+                    {(isAdmin || isTeamLead) && (
+                      <button
+                        type="button"
+                        onClick={() => { setShowToolsMenu(false); setShowImportModal(true); }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-gray-700 hover:bg-[#f6f5f4] text-left"
+                        title="Create onboarding tickets for all clients that don't have one"
+                      >
+                        <Briefcase className="w-4 h-4 text-gray-400" /> Import all clients
+                      </button>
+                    )}
+                    {isAdmin && (
+                      <>
+                        <div className="my-1 border-t border-[#efedeb]" />
+                        <button
+                          type="button"
+                          onClick={() => { setShowToolsMenu(false); setShowSendPrevModal(true); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-orange-700 hover:bg-orange-50 text-left font-medium"
+                          title="Send stuck milestone emails — checks all active clients with paymentEmail set, sends any milestones that were reached but not yet emailed (admin)"
+                        >
+                          <Send className="w-4 h-4" /> Send stuck payment emails
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
 
             {/* Notification Bell */}
             <div className="relative">
@@ -1388,7 +1445,7 @@ export default function ClientOnboarding() {
               {showNotificationPanel && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowNotificationPanel(false)} aria-hidden="true" />
-                  <div className="absolute right-0 top-full z-50 mt-4 w-96 rounded-2xl bg-white border border-gray-100 shadow-2xl ring-1 ring-black/5 max-h-[70vh] overflow-hidden flex flex-col">
+                  <div className="absolute right-0 top-full z-50 mt-4 w-96 rounded-2xl bg-white border border-[#e6e4e1] shadow-2xl ring-1 ring-black/5 max-h-[70vh] overflow-hidden flex flex-col">
                     <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
                       <h3 className="font-semibold text-gray-900">Notifications</h3>
                       <button type="button" onClick={() => setShowNotificationPanel(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -1444,13 +1501,13 @@ export default function ClientOnboarding() {
               <button
                 type="button"
                 onClick={() => setShowIssuesPanel((v) => !v)}
-                className="relative flex items-center gap-2 px-3 py-2.5 rounded-xl text-gray-600 hover:bg-gray-100 hover:text-gray-900 border border-gray-200 bg-white text-sm font-medium transition-all focus:outline-none"
+                className="relative flex items-center gap-1.5 px-3.5 py-2 rounded-full text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-[13px] font-medium transition-colors focus:outline-none"
                 title={isAdmin ? 'Unresolved tagged issues across all clients' : 'My unresolved tagged issues'}
               >
-                <AlertCircle className="w-5 h-5 text-amber-500" />
+                <AlertCircle className="w-4 h-4 text-amber-600" />
                 <span className="hidden sm:inline">Unresolved</span>
                 {(nonResolvedIssues.count + (nonResolvedIssues.pendingMoves?.length || 0)) > 0 && (
-                  <span className="flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold px-1.5">
+                  <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-amber-600 text-white text-[11px] font-bold px-1.5 tabular-nums">
                     {(() => { const total = nonResolvedIssues.count + (nonResolvedIssues.pendingMoves?.length || 0); return total > 99 ? '99+' : total; })()}
                   </span>
                 )}
@@ -1459,7 +1516,7 @@ export default function ClientOnboarding() {
               {showIssuesPanel && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => { setShowIssuesPanel(false); setIssuesFilterUser(null); }} aria-hidden="true" />
-                  <div className="absolute right-0 top-full z-50 mt-4 w-[420px] rounded-2xl bg-white border border-gray-100 shadow-2xl ring-1 ring-black/5 max-h-[70vh] overflow-hidden flex flex-col">
+                  <div className="absolute right-0 top-full z-50 mt-4 w-[420px] rounded-2xl bg-white border border-[#e6e4e1] shadow-2xl ring-1 ring-black/5 max-h-[70vh] overflow-hidden flex flex-col">
                     <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
                       <h3 className="font-semibold text-gray-900">
                         {isAdmin ? 'Unresolved tagged issues' : 'My unresolved issues'}
@@ -1548,7 +1605,7 @@ export default function ClientOnboarding() {
                                                 const data = await res.json();
                                                 if (!res.ok) throw new Error(data.error || 'Failed');
                                                 setJobs(prev => prev.map(j => j._id === String(mv.jobId) ? data.job : j));
-                                                if (selectedJob?._id === String(mv.jobId)) setSelectedJob(data.job);
+                                                setSelectedJob(prev => (prev && prev._id === String(mv.jobId) ? data.job : prev));
                                                 toastUtils.success(`Approved move to ${STATUS_LABELS[mv.targetStatus] || mv.targetStatus}`);
                                                 fetchNonResolvedIssues();
                                               } catch (err) { toastUtils.error(err.message); }
@@ -1562,7 +1619,7 @@ export default function ClientOnboarding() {
                                                 const data = await res.json();
                                                 if (!res.ok) throw new Error(data.error || 'Failed');
                                                 setJobs(prev => prev.map(j => j._id === String(mv.jobId) ? data.job : j));
-                                                if (selectedJob?._id === String(mv.jobId)) setSelectedJob(data.job);
+                                                setSelectedJob(prev => (prev && prev._id === String(mv.jobId) ? data.job : prev));
                                                 toastUtils.success('Move request rejected');
                                                 fetchNonResolvedIssues();
                                               } catch (err) { toastUtils.error(err.message); }
@@ -1686,7 +1743,7 @@ export default function ClientOnboarding() {
                                         const data = await res.json();
                                         if (!res.ok) throw new Error(data.error || 'Failed to mark as resolved');
                                         setJobs((prev) => prev.map((j) => (j._id === jobIdStr ? data.job : j)));
-                                        if (selectedJob?._id === jobIdStr) setSelectedJob(data.job);
+                                        setSelectedJob((prev) => (prev && prev._id === jobIdStr ? data.job : prev));
                                         toastUtils.success('Marked as resolved');
                                         await fetchNonResolvedIssues();
                                       } catch (err) {
@@ -1716,26 +1773,16 @@ export default function ClientOnboarding() {
               )}
             </div>
 
-            {/* Add Client / Import Buttons */}
+            {/* Add Client — the single primary CTA; Import All lives in Tools */}
             {(isAdmin || isTeamLead) && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setShowImportModal(true)}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-white text-gray-700 border-2 border-gray-200 rounded-xl hover:bg-gray-50 hover:border-gray-300 text-sm font-semibold shadow-sm transition-all active:scale-95"
-                >
-                  <Briefcase className="w-4 h-4" />
-                  <span className="tracking-wide">Import All Clients</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={openAddModal}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl hover:bg-primary-hover text-sm font-semibold shadow-lg shadow-orange-500/20 transition-all active:scale-95"
-                >
-                  <Plus className="w-4 h-4 stroke-[3px]" />
-                  <span className="tracking-wide">Add Client</span>
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={openAddModal}
+                className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-full hover:bg-primary-hover text-sm font-semibold shadow-[0_1px_2px_rgba(214,79,39,0.3)] transition-all active:scale-95"
+              >
+                <Plus className="w-4 h-4 stroke-[3px]" />
+                <span>Add client</span>
+              </button>
             )}
           </div>
         </div>
@@ -1752,14 +1799,14 @@ export default function ClientOnboarding() {
             Team Lead Assignment Summary
           </button>
           {showAdminTicketSummary && (
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-2 items-center">
               {adminTicketSummary.map(m => (
-                <div key={m.name} className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-sm min-w-[180px]">
-                  <div className="flex items-center justify-between gap-3 mb-1.5">
-                    <span className="text-sm font-semibold text-slate-800 truncate max-w-[140px]">{m.name}</span>
-                    <span className="bg-orange-100 text-orange-700 text-xs font-bold px-2 py-0.5 rounded-full">{m.total}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
+                <div key={m.name} className="inline-flex items-center gap-2 bg-white border border-[#e6e4e1] rounded-full pl-1.5 pr-1.5 py-1 text-[13px]">
+                  <span className={`w-6 h-6 rounded-full grid place-items-center text-[9px] font-bold flex-shrink-0 ${avatarColor(m.name.toLowerCase())}`}>
+                    {initials(m.name)}
+                  </span>
+                  <span className="font-semibold text-gray-800 truncate max-w-[140px]">{m.name}</span>
+                  <span className="flex gap-1">
                     {ONBOARDING_STATUSES.filter(s => s !== 'completed').map(s => {
                       const count = m.byStatus[s] || 0;
                       if (count === 0) return null;
@@ -1776,12 +1823,13 @@ export default function ClientOnboarding() {
                         applications_in_progress: 'App IP'
                       };
                       return (
-                        <span key={s} className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium" title={STATUS_LABELS[s]}>
-                          {shortLabels[s] || s}: {count}
+                        <span key={s} className="text-[11px] text-gray-500 bg-[#f6f5f4] rounded-full px-2 py-0.5 tabular-nums" title={STATUS_LABELS[s]}>
+                          {shortLabels[s] || s} {count}
                         </span>
                       );
                     })}
-                  </div>
+                  </span>
+                  <span className="bg-orange-100 text-orange-700 text-xs font-bold px-2.5 py-0.5 rounded-full tabular-nums">{m.total}</span>
                 </div>
               ))}
             </div>
@@ -1806,16 +1854,16 @@ export default function ClientOnboarding() {
         {/* Main Content / Kanban */}
         <div
           ref={boardRef}
-          className={`flex-1 overflow-x-auto overflow-y-hidden pb-6 scroll-smooth ${isAdmin ? '' : 'h-full'}`}
+          className={`flex-1 overflow-x-auto overflow-y-hidden pb-6 ${isAdmin ? '' : 'h-full'}`}
           onDragOver={handleDragOverBoard}
-          style={{ WebkitOverflowScrolling: 'touch', scrollPaddingLeft: 16, scrollPaddingRight: 16 }}
+          style={{ WebkitOverflowScrolling: 'touch', scrollPaddingLeft: 16, scrollPaddingRight: 16, overscrollBehaviorX: 'contain' }}
         >
           {loading ? (
             <div className="flex h-full w-full items-center justify-center">
               <Loader2 className="w-10 h-10 animate-spin text-primary" />
             </div>
           ) : (
-            <div className="flex gap-6 p-6 min-w-max h-full">
+            <div className="flex gap-4 p-5 min-w-max h-full">
               {visibleColumns.map((status) => {
                 const columnJobs = jobsByColumn[status] || [];
                 return (
@@ -1849,14 +1897,20 @@ export default function ClientOnboarding() {
       </div>
 
       {/* Move to sheet (long-press 3.5s on a card) */}
+      <AnimatePresence>
       {moveToJob && (
-        <div
-          className="fixed inset-0 z-[60] flex flex-col justify-end sm:justify-center sm:items-center bg-black/40 backdrop-blur-[2px] animate-in fade-in duration-200"
+        <Motion.div
+          className="fixed inset-0 z-[60] flex flex-col justify-end sm:justify-center sm:items-center bg-black/40"
           onClick={() => setMoveToJob(null)}
+          {...OVERLAY_FADE}
         >
-          <div
-            className="bg-white rounded-t-3xl sm:rounded-2xl w-full sm:max-w-md shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10 duration-300 sm:slide-in-from-bottom-0"
+          <Motion.div
+            className="bg-white rounded-t-3xl sm:rounded-2xl w-full sm:max-w-md shadow-2xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            transition={{ duration: 0.2, ease: SECTION_EASE }}
           >
             <div className="p-5 pb-4 border-b border-gray-100">
               <div className="flex items-center gap-3">
@@ -1899,31 +1953,27 @@ export default function ClientOnboarding() {
                 Cancel
               </button>
             </div>
-          </div>
-        </div>
+          </Motion.div>
+        </Motion.div>
       )}
+      </AnimatePresence>
 
-      {/* Detail Modal */}
-      {selectedJob && (
-        <JobDetailModal
-          selectedJob={selectedJob}
-          user={user}
-          roles={roles}
-          loadingJobDetails={loadingJobDetails}
-          loadingComments={loadingComments}
-          onClose={handleCloseModal}
-          onUpdateJob={handleUpdateJob}
-          onMoveJob={handleMoveForModal}
-          canMoveAny={canMoveAny}
-          movingStatus={movingStatus}
-          onFetchNonResolvedIssues={fetchNonResolvedIssues}
-          dashboardManagerNames={dashboardManagerNames}
-        />
-      )}
+      {/* Detail Modal — host subscribes to selectedJob itself, so opening or
+          updating a ticket never re-renders this page */}
+      <JobDetailModalHost
+        user={user}
+        onClose={handleCloseModal}
+        onUpdateJob={handleUpdateJob}
+        onMoveJob={handleMoveForModal}
+        canMoveAny={canMoveAny}
+        movingStatus={movingStatus}
+        onFetchNonResolvedIssues={fetchNonResolvedIssues}
+        dashboardManagerNames={dashboardManagerNames}
+      />
 
       {/* Bulk Import Payment Emails Modal */}
       {showPaymentImportModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) closePaymentImportModal(); }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={(e) => { if (e.target === e.currentTarget) closePaymentImportModal(); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -2026,7 +2076,7 @@ client2@example.com,payer2@example.com</pre>
 
       {/* Send to Previous Clients Modal (admin) */}
       {showSendPrevModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) closeSendPrevModal(); }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={(e) => { if (e.target === e.currentTarget) closeSendPrevModal(); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -2194,7 +2244,7 @@ client2@example.com,payer2@example.com</pre>
 
       {/* Export Logs Modal (admin) */}
       {showExportModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) closeExportModal(); }}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={(e) => { if (e.target === e.currentTarget) closeExportModal(); }}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="px-6 py-5 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -2350,7 +2400,7 @@ client2@example.com,payer2@example.com</pre>
 
       {/* Add Client Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={(e) => {
           if (e.target === e.currentTarget) {
             setShowAddModal(false);
           }
@@ -2536,7 +2586,7 @@ client2@example.com,payer2@example.com</pre>
 
       {/* Import All Clients Warning Modal */}
       {showImportModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={(e) => {
           if (e.target === e.currentTarget) {
             setShowImportModal(false);
           }
@@ -2616,7 +2666,7 @@ client2@example.com,payer2@example.com</pre>
 
       {/* Import Confirmation Modal (when no roles exist) */}
       {showImportConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => {
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={(e) => {
           if (e.target === e.currentTarget) {
             setShowImportConfirmModal(false);
           }
@@ -2683,7 +2733,7 @@ client2@example.com,payer2@example.com</pre>
 
       {/* Import Progress Modal */}
       {importingClients && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="px-6 py-5 border-b border-gray-200 bg-primary/5 flex items-center justify-between">
               <div className="flex items-center gap-3">

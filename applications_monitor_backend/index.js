@@ -51,6 +51,8 @@ import {
   patchOnboardingJobAttachment,
   getOnboardingNotifications,
   markOnboardingNotificationRead,
+  addCommentReply,
+  reopenComment,
   markAdminRead,
   getNonResolvedIssues,
   requestMove,
@@ -59,6 +61,18 @@ import {
   invalidateJobListCache,
   runHighAppliedJobsNotifications
 } from './controllers/onboardingController.js';
+import {
+  chatStream,
+  listChatUsers,
+  listConversations,
+  openConversation,
+  getMessages as getChatMessages,
+  postMessage as postChatMessage,
+  markConversationRead,
+  getPresence,
+  typingPing
+} from './controllers/chatController.js';
+import { runChatEscalationSweep, runAdminDailyDigest, runTagDiscordReminders } from './utils/chatCrons.js';
 import { ClientCounterModel } from './ClientCounterModel.js';
 import { OnboardingJobModel } from './OnboardingJobModel.js';
 import { ClientOperationsModel } from './ClientOperationsModel.js';
@@ -1739,9 +1753,47 @@ const login = async (req, res) => {
         roles: user.roles || []
       },
       JWT_SECRET,
-      { expiresIn: '24h' }
+      { expiresIn: '30d' }
     );
 
+    res.status(200).json({
+      token,
+      user: {
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        onboardingSubRole: user.onboardingSubRole,
+        roles: user.roles || []
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Sliding session: exchange a still-valid token for a fresh 30-day one.
+// Claims are re-read from the DB so role changes and deactivation take effect
+// on the next refresh instead of living for the full token lifetime.
+const refreshToken = async (req, res) => {
+  try {
+    const user = await UserModel.findOne({ email: (req.user?.email || '').toLowerCase() })
+      .select('email role name onboardingSubRole roles isActive')
+      .lean();
+    if (!user || user.isActive === false) {
+      return res.status(401).json({ error: 'Account is disabled or no longer exists.' });
+    }
+    const token = jwt.sign(
+      {
+        userId: user._id,
+        email: user.email,
+        role: user.role,
+        name: user.name,
+        onboardingSubRole: user.onboardingSubRole,
+        roles: user.roles || []
+      },
+      JWT_SECRET,
+      { expiresIn: '30d' }
+    );
     res.status(200).json({
       token,
       user: {
@@ -2241,7 +2293,7 @@ const resetPasswordByEmail = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { email, otpEmail, name, linkedDashboardManagerName } = req.body;
+    const { email, otpEmail, name, linkedDashboardManagerName, discordWebhookUrl } = req.body;
 
     const user = await UserModel.findById(userId);
     if (!user) {
@@ -2269,6 +2321,13 @@ const updateUser = async (req, res) => {
     if (linkedDashboardManagerName !== undefined && typeof linkedDashboardManagerName === 'string') {
       user.linkedDashboardManagerName = linkedDashboardManagerName.trim();
     }
+    if (discordWebhookUrl !== undefined) {
+      const val = discordWebhookUrl === null ? '' : String(discordWebhookUrl).trim();
+      if (val && !/^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+$/.test(val)) {
+        return res.status(400).json({ error: 'Invalid Discord webhook URL (must be https://discord.com/api/webhooks/...)' });
+      }
+      user.discordWebhookUrl = val;
+    }
 
     user.updatedAt = new Date().toLocaleString('en-US', 'Asia/Kolkata');
     await user.save();
@@ -2280,6 +2339,7 @@ const updateUser = async (req, res) => {
         name: user.name,
         otpEmail: user.otpEmail || '',
         linkedDashboardManagerName: user.linkedDashboardManagerName || '',
+        discordWebhookUrl: user.discordWebhookUrl || '',
         role: user.role,
         onboardingSubRole: user.onboardingSubRole,
         roles: user.roles
@@ -2614,6 +2674,7 @@ const deleteClient = async (req, res) => {
 // Authentication routes
 app.post('/api/auth/verify-credentials', verifyCredentials);
 app.post('/api/auth/login', login);
+app.post('/api/auth/refresh', verifyToken, refreshToken);
 app.post('/api/auth/request-otp', requestOtp);
 app.post('/api/auth/verify-otp', verifyOtp);
 app.post('/api/auth/validate-otp-trust', validateOtpTrust);
@@ -3409,7 +3470,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
   try {
     const { date, refresh } = req.body || {};
     const cacheKey = date || '__all__';
-    // The response carries a day-scoped number (aiRemovedToday), so a cached
+    // The response carries a day-scoped number (removedByAI, which defaults to
+    // TODAY when no date filter is set), so a cached
     // payload is only valid on the IST day it was computed. See
     // utils/analysisCachePolicy.js for why freshness alone is not enough.
     const istDay = istDayStamp();
@@ -3687,7 +3749,16 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const client = clientMap.get(email) || {};
       const referralMeta = referralMap.get(email.toLowerCase()) || {};
       const removedCount = multiFormatDateRegex ? (removedMap.get(email) || 0) : (counts.deleted || 0);
-      const removedByAICount = multiFormatDateRegex ? (removedByAiMap.get(email) || 0) : (counts.deletedByAI || 0);
+      // ONE AI-removed number, and it always answers "on the day you are looking
+      // at": the selected date when a date filter is set, otherwise TODAY. Two
+      // columns (today + lifetime) made the operator read a total and a daily
+      // figure side by side and decide which one the date picker applied to.
+      // Lifetime is deliberately NOT exposed here — "Removed" already carries the
+      // running total, and an AI lifetime number next to a per-day one is exactly
+      // the ambiguity being removed.
+      const removedByAICount = multiFormatDateRegex
+        ? (removedByAiMap.get(email) || 0)
+        : (aiRemovedMap.get(email)?.todayCount || 0);
       return {
         email,
         name: client.name || email,
@@ -3718,12 +3789,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         offer: counts.offer || 0,
         rejected: counts.rejected || 0,
         removed: removedCount,
+        // Counts REMOVALS only — never AI flags, which leave the job in place for
+        // an operator to decide. Scoped to the selected date, or today.
         removedByAI: removedByAICount,
-        // Lifetime + today, always (unlike removedByAI, which narrows to the
-        // selected date). These count REMOVALS only — never AI flags, which
-        // leave the job in place for an operator to decide.
-        aiRemoved: aiRemovedMap.get(email)?.count || 0,
-        aiRemovedToday: aiRemovedMap.get(email)?.todayCount || 0,
         appliedOnDate: appliedMap.get(email) || 0
       };
     });
@@ -3748,7 +3816,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return numA - numB;
     });
 
-    // istDay stamps which IST calendar day aiRemovedToday belongs to; the
+    // istDay stamps which IST calendar day removedByAI belongs to; the
     // cache readers below refuse an entry from a different day.
     const result = { success: true, date: date || null, istDay, rows, summary };
     setAnalysisCache(cacheKey, result);
@@ -4999,6 +5067,33 @@ app.get('/api/clients/:email/email-logs', verifyToken, async (req, res) => {
 });
 app.get('/api/managers/names', getDashboardManagerNames);
 
+// ── Team chat (widget) ──
+app.post('/api/upload/chat-attachment', verifyToken, fileUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: 'No file uploaded' });
+    const result = await uploadFile(req.file.buffer, {
+      folder: 'chat-assets',
+      filename: req.file.originalname,
+      contentType: req.file.mimetype,
+      fileType: null,
+    });
+    if (!result.success) return res.status(500).json({ success: false, message: result.error || 'Upload failed' });
+    res.status(200).json({ success: true, url: result.url, filename: req.file.originalname, contentType: req.file.mimetype });
+  } catch (e) {
+    console.error('Chat attachment upload error:', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to upload' });
+  }
+});
+app.get('/api/chat/stream', chatStream); // token via ?token= (EventSource cannot set headers)
+app.get('/api/chat/users', verifyToken, listChatUsers);
+app.get('/api/chat/conversations', verifyToken, listConversations);
+app.post('/api/chat/conversations', verifyToken, openConversation);
+app.get('/api/chat/conversations/:id/messages', verifyToken, getChatMessages);
+app.post('/api/chat/conversations/:id/messages', verifyToken, postChatMessage);
+app.post('/api/chat/conversations/:id/read', verifyToken, markConversationRead);
+app.get('/api/chat/presence', verifyToken, getPresence);
+app.post('/api/chat/conversations/:id/typing', verifyToken, typingPing);
+
 app.get('/api/onboarding/jobs', verifyToken, listOnboardingJobs);
 app.get('/api/onboarding/jobs/roles', verifyToken, getOnboardingRoles);
 app.get('/api/onboarding/issues/non-resolved', verifyToken, getNonResolvedIssues);
@@ -5009,6 +5104,8 @@ app.post('/api/onboarding/jobs', verifyToken, postOnboardingJob);
 app.get('/api/onboarding/jobs/:id', verifyToken, getOnboardingJobById);
 app.get('/api/onboarding/jobs/:id/comments', verifyToken, getOnboardingJobComments);
 app.patch('/api/onboarding/jobs/:id/comments/:commentId/resolve', verifyToken, resolveOnboardingComment);
+app.post('/api/onboarding/jobs/:id/comments/:commentId/replies', verifyToken, addCommentReply);
+app.patch('/api/onboarding/jobs/:id/comments/:commentId/reopen', verifyToken, reopenComment);
 app.patch('/api/onboarding/jobs/:id', verifyToken, patchOnboardingJob);
 app.post('/api/onboarding/jobs/:id/attachments', verifyToken, postOnboardingJobAttachment);
 app.patch('/api/onboarding/jobs/:id/attachments/:index', verifyToken, patchOnboardingJobAttachment);
@@ -8611,6 +8708,28 @@ if (DISCORD_ZERO_SAVED_WEBHOOK) {
       setTimeout(() => {
         runClientMilestoneCron({ trigger: 'boot' }).catch((e) => console.error('[Client Milestones] boot run failed:', e));
       }, 15_000);
+
+      // Chat: escalation sweep every 10 min (email tags unread 30m, admin ping 3h)
+      try {
+        cron.schedule('*/10 * * * *', runChatEscalationSweep, { timezone: 'Asia/Kolkata' });
+        console.log('📬 [Chat Escalation] Cron scheduled every 10 minutes');
+      } catch (e) {
+        console.error('❌ [Chat Escalation] cron registration failed:', e?.message || e);
+      }
+      // Chat: admin daily digest at 9:00 AM IST
+      try {
+        cron.schedule('0 9 * * *', runAdminDailyDigest, { timezone: 'Asia/Kolkata' });
+        console.log('📬 [Admin Digest] Cron scheduled daily 9:00 AM IST');
+      } catch (e) {
+        console.error('❌ [Admin Digest] cron registration failed:', e?.message || e);
+      }
+      // Discord tag reminders: re-ping unresolved tags every 3h (sweep every 30 min)
+      try {
+        cron.schedule('*/30 * * * *', runTagDiscordReminders, { timezone: 'Asia/Kolkata' });
+        console.log('📬 [Tag Reminders] Cron scheduled every 30 minutes');
+      } catch (e) {
+        console.error('❌ [Tag Reminders] cron registration failed:', e?.message || e);
+      }
     });
   })
   .catch((err) => {

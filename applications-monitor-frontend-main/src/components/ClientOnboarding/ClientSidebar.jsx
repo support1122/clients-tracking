@@ -1,8 +1,25 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Search, X, Pencil, Loader2, CheckCircle } from 'lucide-react';
-import { clientDisplayName, getSortingNumber } from './helpers';
-import { API_BASE, AUTH_HEADERS } from './constants';
-import { toastUtils } from '../../utils/toastUtils';
+import { getSortingNumber } from './helpers';
+
+const PLAN_TAGS = {
+  executive: 'EXEC',
+  professional: 'PRO',
+  prime: 'PRIME',
+  ignite: 'IGNITE',
+  starter: 'START'
+};
+const planTag = (planType) => {
+  const key = (planType || '').toLowerCase().trim();
+  return PLAN_TAGS[key] || (key ? key.slice(0, 5).toUpperCase() : 'PRO');
+};
+
+const splitName = (job) => {
+  const num = job.clientNumber;
+  let name = (job.clientName || '').trim();
+  if (num != null && name.startsWith(`${num} - `)) name = name.slice(`${num} - `.length).trim();
+  return { num, name: name || '—' };
+};
 
 const ClientSidebar = React.memo(({
   jobs,
@@ -60,17 +77,17 @@ const ClientSidebar = React.memo(({
   }, [onSaveClientNumber, editingClientNumberValue]);
 
   return (
-    <div className="w-80 flex-shrink-0 bg-white border-r border-gray-200 flex flex-col h-full">
-      <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-        <h2 className="text-sm font-semibold text-gray-900">Clients</h2>
-        <div className="mt-2 relative">
+    <div className="w-64 flex-shrink-0 bg-white border-r border-[#e6e4e1] flex flex-col h-full">
+      <div className="px-4 pt-4 pb-3 border-b border-[#efedeb]">
+        <h2 className="text-[11px] font-semibold text-gray-400 uppercase tracking-[0.1em] mb-2.5">Clients</h2>
+        <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
           <input
             type="text"
-            placeholder="Search by name or number..."
+            placeholder="Name or number…"
             value={clientSidebarSearch}
             onChange={(e) => setClientSidebarSearch(e.target.value)}
-            className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+            className="w-full pl-8 pr-3 py-1.5 text-[12.5px] border border-[#e6e4e1] rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary placeholder:text-gray-400"
           />
         </div>
         {filteredClientEmail && (
@@ -84,22 +101,20 @@ const ClientSidebar = React.memo(({
       </div>
       <div className="flex-1 overflow-y-auto">
         {filteredClientsForSidebar.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-gray-500">
+          <div className="px-4 py-8 text-center text-sm text-gray-400">
             {clientsListForSidebar.length === 0 ? 'No clients found' : 'No matches for your search'}
           </div>
         ) : (
-          <ul className="py-2">
+          <ul className="py-1.5">
             {filteredClientsForSidebar.map((job) => {
               const email = (job.clientEmail || '').toLowerCase();
               const isSelected = filteredClientEmail && filteredClientEmail.toLowerCase() === email;
-              const displayName = clientDisplayName(job);
-              const planType = (job.planType || 'Professional').toLowerCase();
-              const fullDisplayName = `${displayName} - ${planType}`;
+              const { num, name } = splitName(job);
               const isEditing = editingClientNumberEmail?.toLowerCase() === email;
               return (
                 <li key={email}>
                   {isEditing ? (
-                    <div className="px-4 py-2.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <div className="px-4 py-2 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="number"
                         min={1}
@@ -122,19 +137,23 @@ const ClientSidebar = React.memo(({
                     </div>
                   ) : (
                     <div
-                      className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors hover:bg-gray-50 flex items-center justify-between gap-2 group ${
+                      className={`group w-full flex items-center gap-2.5 pl-3.5 pr-3 py-2 text-[13px] border-l-[3px] transition-colors ${
                         isSelected
-                          ? 'bg-primary/10 text-primary border-l-4 border-primary'
-                          : 'text-gray-700 hover:text-gray-900'
+                          ? 'border-primary bg-[#faf3f0] font-semibold text-gray-900'
+                          : 'border-transparent text-gray-700 hover:bg-[#f6f5f4]'
                       }`}
                     >
                       <button
                         type="button"
                         onClick={() => onFilterClient(isSelected ? null : job.clientEmail)}
-                        className="flex-1 min-w-0 truncate text-left"
+                        className="flex-1 min-w-0 flex items-center gap-2.5 text-left"
                       >
-                        <span className="block truncate">{fullDisplayName}</span>
+                        <span className={`tabular-nums font-semibold flex-shrink-0 ${isSelected ? 'text-primary' : 'text-gray-500'}`}>
+                          {num ?? '—'}
+                        </span>
+                        <span className="truncate">{name}</span>
                       </button>
+                      <span className="text-[10px] font-semibold tracking-[0.06em] text-gray-400 flex-shrink-0">{planTag(job.planType)}</span>
                       <button
                         type="button"
                         onClick={(e) => {
@@ -142,7 +161,7 @@ const ClientSidebar = React.memo(({
                           setEditingClientNumberEmail(job.clientEmail);
                           setEditingClientNumberValue(String(job.clientNumber ?? ''));
                         }}
-                        className="p-1 text-gray-400 hover:text-primary hover:bg-primary/5 rounded flex-shrink-0"
+                        className="p-1 text-gray-300 hover:text-primary rounded flex-shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
                         title="Edit client number"
                       >
                         <Pencil className="w-3.5 h-3.5" />

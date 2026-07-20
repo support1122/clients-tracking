@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { handleAuthFailure } from '../utils/authUtils.js';
 import { fetchDashboardManagerFullNames } from '../utils/fetchDashboardManagerCatalog.js';
 
@@ -11,7 +11,6 @@ if (!API_BASE) {
 }
 
 export default function AdminDashboard() {
-  const navigate = useNavigate();
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -50,7 +49,7 @@ export default function AdminDashboard() {
         if (handleAuthFailure(response, data)) return;
         setError(data.error || 'Failed to fetch users');
       }
-    } catch (error) {
+    } catch {
       setError('Network error');
     } finally {
       setLoading(false);
@@ -84,7 +83,7 @@ export default function AdminDashboard() {
         if (handleAuthFailure(response, data)) return;
         setError(data.error || 'Failed to create user');
       }
-    } catch (error) {
+    } catch {
       setError('Network error');
     }
   };
@@ -116,33 +115,11 @@ export default function AdminDashboard() {
         if (handleAuthFailure(response, data)) return;
         setError(data.error || 'Failed to generate session key');
       }
-    } catch (error) {
+    } catch {
       setError('Network error');
     } finally {
       setLoadingSessionKey(prev => ({ ...prev, [userEmail]: false }));
     }
-  };
-
-  // Fetch session keys for a user
-  const fetchSessionKeys = async (userEmail) => {
-    try {
-      const response = await fetch(`${API_BASE}/api/auth/session-keys/${userEmail}`, {
-        headers: {
-          'Authorization': `Bearer ${getAuthToken()}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        return data.sessionKeys;
-      } else {
-        const data = await response.json().catch(() => ({}));
-        if (handleAuthFailure(response, data)) return [];
-      }
-    } catch (error) {
-      // Error fetching session keys
-    }
-    return [];
   };
 
   // Delete user
@@ -167,7 +144,7 @@ export default function AdminDashboard() {
         if (handleAuthFailure(response, data)) return;
         setError(data.error || 'Failed to delete user');
       }
-    } catch (error) {
+    } catch {
       setError('Network error');
     }
   };
@@ -228,7 +205,7 @@ export default function AdminDashboard() {
         if (handleAuthFailure(response, data)) return;
         setPasswordError(data.error || 'Failed to change password');
       }
-    } catch (error) {
+    } catch {
       setPasswordError('Network error. Please try again.');
     } finally {
       setChangingPassword(false);
@@ -241,14 +218,15 @@ export default function AdminDashboard() {
       email: u.email || '',
       otpEmail: u.otpEmail || '',
       name: u.name || '',
-      linkedDashboardManagerName: u.linkedDashboardManagerName || ''
+      linkedDashboardManagerName: u.linkedDashboardManagerName || '',
+      discordWebhookUrl: u.discordWebhookUrl || ''
     });
     setEditUserError('');
   };
 
   const closeEditUserModal = () => {
     setEditUserModal(null);
-    setEditUserForm({ email: '', otpEmail: '', name: '', linkedDashboardManagerName: '' });
+    setEditUserForm({ email: '', otpEmail: '', name: '', linkedDashboardManagerName: '', discordWebhookUrl: '' });
     setEditUserError('');
   };
 
@@ -268,7 +246,8 @@ export default function AdminDashboard() {
           email: editUserForm.email.trim() || undefined,
           otpEmail: editUserForm.otpEmail.trim() || '',
           name: editUserForm.name.trim() || undefined,
-          linkedDashboardManagerName: editUserForm.linkedDashboardManagerName?.trim() || ''
+          linkedDashboardManagerName: editUserForm.linkedDashboardManagerName?.trim() || '',
+          discordWebhookUrl: editUserForm.discordWebhookUrl?.trim() || ''
         })
       });
       const data = await res.json().catch(() => ({}));
@@ -279,7 +258,7 @@ export default function AdminDashboard() {
         if (handleAuthFailure(res, data)) return;
         setEditUserError(data.error || 'Failed to update user');
       }
-    } catch (err) {
+    } catch {
       setEditUserError('Network error');
     } finally {
       setSavingUser(false);
@@ -298,13 +277,6 @@ export default function AdminDashboard() {
       .then(setDashboardManagerNames)
       .catch(() => setDashboardManagerNames([]));
   }, []);
-
-  const handleLogout = () => {
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('user');
-    navigate('/');
-    window.location.reload(); // Force reload to reset app state
-  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
@@ -750,7 +722,7 @@ export default function AdminDashboard() {
                 <p className="text-xs text-gray-500 mt-1">OTP is sent here for login. For @flashfirehq logins we auto-add .com if not set.</p>
               </div>
 
-              <div className="mb-6">
+              <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Name</label>
                 <input
                   type="text"
@@ -759,6 +731,21 @@ export default function AdminDashboard() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                   placeholder="Display name"
                 />
+              </div>
+
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Discord webhook URL (optional)</label>
+                <input
+                  type="url"
+                  value={editUserForm.discordWebhookUrl || ''}
+                  onChange={(e) => setEditUserForm({ ...editUserForm, discordWebhookUrl: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono text-sm"
+                  placeholder="https://discord.com/api/webhooks/…"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Create a private Discord channel → Edit channel → Integrations → Webhooks → copy the URL.
+                  When this user is tagged in a ticket comment, the tag lands there instantly and repeats every 3h until they resolve it.
+                </p>
               </div>
 
               {['team_lead', 'csm'].includes(editUserModal?.role) && (

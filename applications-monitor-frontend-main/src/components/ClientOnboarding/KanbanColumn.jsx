@@ -1,6 +1,6 @@
 import React from 'react';
 import { STATUS_LABELS } from '../../store/onboardingStore';
-import { getColumnAccent } from './helpers';
+import { getColumnDot } from './helpers';
 import JobCard from './JobCard';
 
 const KanbanColumn = React.memo(({
@@ -25,43 +25,67 @@ const KanbanColumn = React.memo(({
   onHoverEnd
 }) => {
   return (
-    <div className="w-80 flex-shrink-0 flex flex-col h-full max-h-full">
-      <div className={`bg-white border border-gray-200 rounded-t-2xl p-4 shadow-sm border-b-2 ${getColumnAccent(status)}`}>
-        <div className="flex items-center justify-between mb-1">
-          <h3 className="font-bold text-gray-800 text-[15px] tracking-tight">{STATUS_LABELS[status] || status}</h3>
-          <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2.5 py-1 rounded-full">{jobs.length}</span>
-        </div>
+    // content-visibility lets the browser skip layout/paint for columns that
+    // are horizontally off-screen — the main fix for janky sideways scrolling
+    // on boards with hundreds of cards.
+    <div
+      className="w-80 flex-shrink-0 flex flex-col h-full max-h-full"
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '320px 800px' }}
+    >
+      {/* Column head: identity dot + title + count, quiet on the canvas */}
+      <div className="flex items-center gap-2.5 px-1.5 pb-2.5">
+        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${getColumnDot(status)}`} />
+        <h3 className="font-bold text-gray-900 text-[13.5px] tracking-tight truncate">{STATUS_LABELS[status] || status}</h3>
+        <span className="ml-auto bg-[#edebe8] text-gray-500 text-xs font-semibold px-2.5 py-0.5 rounded-full tabular-nums">{jobs.length}</span>
       </div>
+      {/* Recessed well — white cards read by hairline alone */}
       <div
-        className={`flex-1 bg-gray-100/50 border-x border-b border-gray-200 rounded-b-2xl p-3 overflow-y-auto space-y-3 scrollbar-hide transition-[background-color,border-color,box-shadow] duration-200 ease-out ${dragOverStatus === status ? 'bg-orange-50 border-primary border-dashed shadow-inner' : ''}`}
+        className={`flex-1 rounded-xl border p-2.5 overflow-y-auto space-y-2.5 scrollbar-hide transition-[background-color,border-color] duration-200 ease-out ${
+          dragOverStatus === status
+            ? 'bg-orange-50 border-orange-300 border-dashed'
+            : 'bg-[#edebe8] border-[#e4e1dd]'
+        }`}
         onDragOver={(e) => onDragOver(e, status)}
         onDragLeave={onDragLeave}
         onDrop={(e) => onDrop(e, status)}
       >
-        {jobs.map((job) => {
-          const clientEmail = (job.clientEmail || '').toLowerCase();
-          const analysis = clientJobAnalysis[clientEmail] || null;
-          return (
-            <div key={job._id} data-client-email={clientEmail} data-job-id={job._id} className="scroll-ml-6 scroll-mt-3">
-              <JobCard
-                job={job}
-                draggedJobId={draggedJobId}
-                isAdmin={isAdmin}
-                visibleColumns={visibleColumns}
-                onMoveTo={onMoveTo}
-                onDragStart={onDragStart}
-                onDragEnd={onDragEnd}
-                onCardClick={onCardClick}
-                onLongPressStart={onLongPressStart}
-                onLongPressEnd={onLongPressEnd}
-                onHoverStart={onHoverStart}
-                onHoverEnd={onHoverEnd}
-                showJobAnalysis={true}
-                jobAnalysis={analysis}
-              />
-            </div>
-          );
-        })}
+        {jobs.length === 0 ? (
+          <div className="h-full min-h-[160px] grid place-items-center">
+            <p className="text-xs text-gray-400 text-center leading-relaxed">No tickets in this stage.</p>
+          </div>
+        ) : (
+          jobs.map((job) => {
+            const clientEmail = (job.clientEmail || '').toLowerCase();
+            const analysis = clientJobAnalysis[clientEmail] || null;
+            return (
+              <div
+                key={job._id}
+                data-client-email={clientEmail}
+                data-job-id={job._id}
+                className="scroll-ml-6 scroll-mt-3"
+                style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 200px' }}
+              >
+                <JobCard
+                  job={job}
+                  draggedJobId={draggedJobId}
+                  isAdmin={isAdmin}
+                  visibleColumns={visibleColumns}
+                  onMoveTo={onMoveTo}
+                  onDragStart={onDragStart}
+                  onDragEnd={onDragEnd}
+                  onCardClick={onCardClick}
+                  onLongPressStart={onLongPressStart}
+                  onLongPressEnd={onLongPressEnd}
+                  onHoverStart={onHoverStart}
+                  onHoverEnd={onHoverEnd}
+                  showJobAnalysis={true}
+                  jobAnalysis={analysis}
+                  jobAnalysisLoading={clientJobAnalysisLoading}
+                />
+              </div>
+            );
+          })
+        )}
       </div>
     </div>
   );
