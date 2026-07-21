@@ -431,6 +431,34 @@ export default function AdminSummariesPage() {
 }
 
 // -------------------------------------------------------------------------
+// diffLines: minimal LCS line diff for the "what changed" panel. Summaries
+// are ≤8000 chars (~150 lines), so the O(n·m) table is trivial.
+// -------------------------------------------------------------------------
+function diffLines(oldText, newText) {
+    const a = String(oldText || '').split('\n');
+    const b = String(newText || '').split('\n');
+    const m = a.length;
+    const n = b.length;
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = m - 1; i >= 0; i--) {
+        for (let j = n - 1; j >= 0; j--) {
+            dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+    }
+    const out = [];
+    let i = 0;
+    let j = 0;
+    while (i < m && j < n) {
+        if (a[i] === b[j]) { out.push({ type: 'same', text: a[i] }); i++; j++; }
+        else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ type: 'del', text: a[i] }); i++; }
+        else { out.push({ type: 'add', text: b[j] }); j++; }
+    }
+    while (i < m) { out.push({ type: 'del', text: a[i] }); i++; }
+    while (j < n) { out.push({ type: 'add', text: b[j] }); j++; }
+    return out;
+}
+
+// -------------------------------------------------------------------------
 // LEFT — list row
 // -------------------------------------------------------------------------
 
@@ -544,6 +572,11 @@ function ClientDetailPane({ row, onProfileChanged }) {
     // newest reason the client gave when removing a job, or an explicit
     // "nothing to show" empty state.
     const [showRemovalReason, setShowRemovalReason] = useState(false);
+    // "Show old summary" popup — compares the stored previous version
+    // (profile.aiSummaryPrevious) with the current summary, side by side or
+    // as a changes-only line diff.
+    const [showDiff, setShowDiff] = useState(false);
+    const [diffMode, setDiffMode] = useState('side'); // 'side' | 'changes'
     // "See AI reasons to remove" modal — lists AI-removed jobs (top 5/page).
     const [showAiRemoved, setShowAiRemoved] = useState(false);
     const [aiRemoved, setAiRemoved] = useState({ jobs: [], total: 0, totalPages: 1, page: 1 });
@@ -691,6 +724,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
         loadHistory();
         loadNotes();
         setShowRemovalReason(false);
+        setShowDiff(false);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [row.email]);
 
@@ -1188,6 +1222,15 @@ function ClientDetailPane({ row, onProfileChanged }) {
                     </div>
                     {!editing && (
                         <div className="flex gap-2 flex-shrink-0">
+                            {profile?.aiSummaryPrevious?.text && profile.aiSummaryPrevious.text !== summary && (
+                                <button
+                                    onClick={() => setShowDiff(true)}
+                                    className="px-3 py-1.5 rounded-lg text-sm font-medium border bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 transition"
+                                    title="Open the previous summary and compare it with the current one"
+                                >
+                                    📜 Show old summary
+                                </button>
+                            )}
                             <button
                                 onClick={() => setShowRemovalReason(true)}
                                 className="px-3 py-1.5 rounded-lg text-sm font-medium border bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100 transition"
@@ -1213,6 +1256,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                         </div>
                     )}
                 </div>
+
 
 
                 <div className="p-5">
@@ -1248,6 +1292,104 @@ function ClientDetailPane({ row, onProfileChanged }) {
             {/* Per-client OpenAI key card removed — single global key now lives
                 in the page header. Extension falls back to that global key
                 whenever a client profile doesn't carry its own. */}
+
+            {/* Old-summary comparison modal — previous vs current, side by
+                side or as a changes-only line diff. */}
+            {showDiff && profile?.aiSummaryPrevious?.text && (
+                <div
+                    className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+                    onClick={() => setShowDiff(false)}
+                >
+                    <div
+                        className="bg-white rounded-2xl shadow-2xl max-w-6xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="px-6 py-4 border-b border-slate-200 bg-indigo-50 flex items-center justify-between gap-4">
+                            <div className="min-w-0">
+                                <h3 className="text-lg font-bold text-indigo-900">📜 Summary comparison</h3>
+                                <p className="text-xs text-slate-600 mt-0.5 truncate">
+                                    {row.name} · {row.email}
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                                <div className="flex rounded-lg border border-indigo-300 overflow-hidden text-xs font-semibold">
+                                    <button
+                                        onClick={() => setDiffMode('side')}
+                                        className={`px-3 py-1.5 transition ${diffMode === 'side' ? 'bg-indigo-600 text-white' : 'bg-white text-indigo-700 hover:bg-indigo-50'}`}
+                                    >
+                                        Side by side
+                                    </button>
+                                    <button
+                                        onClick={() => setDiffMode('changes')}
+                                        className={`px-3 py-1.5 transition border-l border-indigo-300 ${diffMode === 'changes' ? 'bg-indigo-600 text-white' : 'bg-white text-indigo-700 hover:bg-indigo-50'}`}
+                                    >
+                                        Changes only
+                                    </button>
+                                </div>
+                                <button
+                                    onClick={() => setShowDiff(false)}
+                                    className="text-slate-400 hover:text-slate-700 text-xl leading-none ml-1"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+
+                        {diffMode === 'side' ? (
+                            <div className="grid grid-cols-2 divide-x divide-slate-200 overflow-hidden flex-1">
+                                <div className="flex flex-col min-h-0">
+                                    <div className="px-4 py-2 bg-slate-100 border-b border-slate-200 text-xs font-semibold text-slate-600 flex items-center justify-between gap-2">
+                                        <span>Previous version</span>
+                                        <span className="font-normal text-slate-400 truncate">
+                                            {profile.aiSummaryPrevious.builtAt ? new Date(profile.aiSummaryPrevious.builtAt).toLocaleString() : ''}
+                                            {profile.aiSummaryPrevious.wordCount ? ` · ${profile.aiSummaryPrevious.wordCount}w` : ''}
+                                            {profile.aiSummaryPrevious.source ? ` · ${profile.aiSummaryPrevious.source}` : ''}
+                                        </span>
+                                    </div>
+                                    <pre className="whitespace-pre-wrap text-[13px] text-slate-600 font-sans leading-relaxed p-4 overflow-y-auto flex-1">{profile.aiSummaryPrevious.text}</pre>
+                                </div>
+                                <div className="flex flex-col min-h-0">
+                                    <div className="px-4 py-2 bg-emerald-50 border-b border-emerald-200 text-xs font-semibold text-emerald-700 flex items-center justify-between gap-2">
+                                        <span>Current version</span>
+                                        <span className="font-normal text-emerald-600/70 truncate">
+                                            {meta.builtAt ? new Date(meta.builtAt).toLocaleString() : ''}
+                                            {meta.wordCount ? ` · ${meta.wordCount}w` : ''}
+                                            {meta.source ? ` · ${meta.source}` : ''}
+                                        </span>
+                                    </div>
+                                    <pre className="whitespace-pre-wrap text-[13px] text-slate-800 font-sans leading-relaxed p-4 overflow-y-auto flex-1">{summary}</pre>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col min-h-0 flex-1">
+                                <div className="px-4 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between">
+                                    <span className="text-xs text-slate-500">
+                                        Line changes vs previous version
+                                    </span>
+                                    <span className="flex gap-2 text-[10px] font-semibold">
+                                        <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">added</span>
+                                        <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 line-through">removed</span>
+                                    </span>
+                                </div>
+                                <div className="text-[13px] font-sans leading-relaxed p-4 overflow-y-auto flex-1">
+                                    {diffLines(profile.aiSummaryPrevious.text, summary).map((l, idx) => (
+                                        <div
+                                            key={idx}
+                                            className={`whitespace-pre-wrap pl-2 rounded-sm ${
+                                                l.type === 'add' ? 'bg-emerald-50 text-emerald-900 border-l-2 border-emerald-400'
+                                                : l.type === 'del' ? 'bg-rose-50 text-rose-800 border-l-2 border-rose-300 line-through opacity-80'
+                                                : 'text-slate-500'
+                                            }`}
+                                        >
+                                            {l.text || ' '}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Last removal reason modal — the newest reason the client gave
                 when removing a job card, with the job card info and a portal
