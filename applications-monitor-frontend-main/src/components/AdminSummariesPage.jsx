@@ -577,6 +577,10 @@ function ClientDetailPane({ row, onProfileChanged }) {
     // as a changes-only line diff.
     const [showDiff, setShowDiff] = useState(false);
     const [diffMode, setDiffMode] = useState('side'); // 'side' | 'changes'
+    // Page-driven auto rebuild when removal feedback is newer than the
+    // last build. autoBuildFiredRef stops repeat fires for the same entry.
+    const [autoBuilding, setAutoBuilding] = useState(false);
+    const autoBuildFiredRef = useRef(null);
     // "See AI reasons to remove" modal — lists AI-removed jobs (top 5/page).
     const [showAiRemoved, setShowAiRemoved] = useState(false);
     const [aiRemoved, setAiRemoved] = useState({ jobs: [], total: 0, totalPages: 1, page: 1 });
@@ -753,6 +757,28 @@ function ClientDetailPane({ row, onProfileChanged }) {
             setBuilding(false);
         }
     }
+
+    // REAL-TIME auto-rebuild from the tracking page itself: when the loaded
+    // profile carries removal feedback NEWER than the last summary build,
+    // trigger /build-ai-summary immediately instead of leaving the operator
+    // staring at "rebuild recommended". Fires at most once per feedback
+    // entry per mount (ref guard), so a failing build can't loop.
+    useEffect(() => {
+        if (!profile || building) return;
+        const fb = Array.isArray(profile.removalFeedback)
+            ? profile.removalFeedback.find((i) => i?.reason && String(i.reason).trim())
+            : null;
+        if (!fb) return;
+        const fbAt = fb.removedAt ? new Date(fb.removedAt).getTime() : 0;
+        const builtAt = profile.aiSummaryMeta?.builtAt ? new Date(profile.aiSummaryMeta.builtAt).getTime() : 0;
+        if (!fbAt || fbAt <= builtAt) return;
+        const fireKey = `${row.email}:${fbAt}`;
+        if (autoBuildFiredRef.current === fireKey) return;
+        autoBuildFiredRef.current = fireKey;
+        setAutoBuilding(true);
+        buildSummary().finally(() => setAutoBuilding(false));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [profile, building, row.email]);
 
     async function saveEdit() {
         const text = draft.trim();
@@ -1152,7 +1178,11 @@ function ClientDetailPane({ row, onProfileChanged }) {
                     <div className="flex-1 min-w-0">
                         <h3 className="font-bold text-slate-900">Candidate Summary</h3>
                         <div className="text-xs mt-1">
-                            {summary ? (
+                            {autoBuilding ? (
+                                <span className="inline-flex items-center gap-1.5 text-violet-700 font-semibold animate-pulse">
+                                    ⚡ Removal feedback received — rebuilding the summary now…
+                                </span>
+                            ) : summary ? (
                                 profile?.summaryStale ? (
                                     <span className="text-orange-700 font-semibold">
                                         ↻ Profile changed — rebuild recommended.
@@ -1222,7 +1252,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                     </div>
                     {!editing && (
                         <div className="flex gap-2 flex-shrink-0">
-                            {profile?.aiSummaryPrevious?.text && profile.aiSummaryPrevious.text !== summary && (
+                            {summary && (
                                 <button
                                     onClick={() => setShowDiff(true)}
                                     className="px-3 py-1.5 rounded-lg text-sm font-medium border bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100 transition"
@@ -1294,7 +1324,36 @@ function ClientDetailPane({ row, onProfileChanged }) {
                 whenever a client profile doesn't carry its own. */}
 
             {/* Old-summary comparison modal — previous vs current, side by
-                side or as a changes-only line diff. */}
+                side or as a changes-only line diff. Explicit empty state
+                when no previous version has been stored yet. */}
+            {showDiff && !profile?.aiSummaryPrevious?.text && (
+                <div
+                    className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+                    onClick={() => setShowDiff(false)}
+                >
+                    <div
+                        className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="px-6 py-4 border-b border-slate-200 bg-indigo-50 flex items-center justify-between">
+                            <h3 className="text-lg font-bold text-indigo-900">📜 Summary comparison</h3>
+                            <button
+                                onClick={() => setShowDiff(false)}
+                                className="text-slate-400 hover:text-slate-700 text-xl leading-none"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                        <div className="p-6 text-center text-sm text-slate-500">
+                            No previous version stored yet.
+                            <div className="text-xs text-slate-400 mt-1">
+                                The next rebuild or edit will keep the current summary as the
+                                old version, and the comparison will appear here.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
             {showDiff && profile?.aiSummaryPrevious?.text && (
                 <div
                     className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
