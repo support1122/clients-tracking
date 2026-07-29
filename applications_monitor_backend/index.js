@@ -4698,7 +4698,8 @@ app.post('/api/clients/:email/send-pending-milestones', verifyToken, verifyAdmin
     if (!emailLower) return res.status(400).json({ error: 'email required' });
     const client = await ClientModel.findOne({ email: emailLower }).lean();
     if (!client) return res.status(404).json({ error: 'client not found' });
-    if (client.status !== 'active') return res.status(400).json({ error: 'client is not active', code: 'inactive' });
+    // Milestone emails fire regardless of status — Inactive and Paused clients
+    // still receive them. Only a recipient address is required.
     if (!client.paymentEmail) return res.status(400).json({ error: 'paymentEmail not set', code: 'no_payment_email' });
 
     const referralUser = await NewUserModel.findOne({ email: emailLower }, 'referrals').lean();
@@ -4779,7 +4780,8 @@ app.post('/api/clients/:email/resend-milestone', verifyToken, verifyAdmin, async
 
     const client = await ClientModel.findOne({ email: emailLower }).lean();
     if (!client) return res.status(404).json({ error: 'client not found' });
-    if (client.status !== 'active') return res.status(400).json({ error: 'client is not active', code: 'inactive' });
+    // Milestone emails fire regardless of status — Inactive and Paused clients
+    // still receive them. Only a recipient address is required.
     if (!client.paymentEmail) return res.status(400).json({ error: 'paymentEmail not set', code: 'no_payment_email' });
 
     const referralUser = await NewUserModel.findOne({ email: emailLower }, 'referrals').lean();
@@ -8486,9 +8488,10 @@ async function runClientMilestoneCron({ trigger = 'cron', verbose = false } = {}
   console.log(`[Client Milestones] sweep start (trigger=${trigger})`);
   const summary = { processed: 0, sent: 0, failed: 0, skipped: 0, errors: 0, details: [] };
   try {
+    // Milestone emails fire regardless of client status: Inactive and Paused
+    // clients still receive them. The only requirement is a recipient address
+    // (paymentEmail) — without it there's nowhere to send.
     const clients = await ClientModel.find({
-      status: 'active',
-      isPaused: { $ne: true },
       paymentEmail: { $exists: true, $ne: '' }
     }).lean();
     console.log(`[Client Milestones] candidate clients: ${clients.length}`);
