@@ -1,4 +1,5 @@
 import express from 'express';
+import Stripe from 'stripe';
 import compression from 'compression';
 import mongoose from 'mongoose';
 import { JobModel } from './JobModel.js';
@@ -247,6 +248,127 @@ app.options(/.*/, cors());
 
 // Gzip all JSON/text responses — cuts payload size 60-80%
 app.use(compression());
+
+// ── Stripe webhook (must be registered BEFORE express.json() so the raw body is preserved) ──
+app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const stripeSecret = process.env.STRIPE_SECRET_KEY;
+  const discordWebhookUrl = process.env.DISCORD_STRIPE_WEBHOOK_URL;
+
+  if (!stripeSecret || !webhookSecret) {
+    console.error('Stripe keys not configured');
+    return res.status(500).send('Stripe not configured');
+  }
+
+  const stripe = new Stripe(stripeSecret);
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+  } catch (err) {
+    console.error('Stripe webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type !== 'checkout.session.completed') {
+    return res.json({ received: true });
+  }
+
+  const session = event.data.object;
+  const email = (session.client_reference_id || session.customer_details?.email || '').toLowerCase();
+  const metadata = session.metadata || {};
+  const type = metadata.type; // 'upgrade' or 'addon'
+  const planTarget = metadata.plan; // e.g. 'professional', 'executive'
+  const addonApps = metadata.addon; // e.g. '250', '500', '1000'
+  const currency = (session.currency || 'usd').toUpperCase();
+  const amountPaid = ((session.amount_total || 0) / 100).toFixed(2);
+  const currentDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+
+  if (!email) {
+    console.error('Stripe webhook: no email in client_reference_id or customer_details');
+    return res.status(200).json({ received: true, warning: 'no email found' });
+  }
+
+  try {
+    const existingClient = await ClientModel.findOne({ email }).lean();
+    if (!existingClient) {
+      console.error(`Stripe webhook: client not found for email ${email}`);
+      // Still return 200 so Stripe doesn't retry
+      return res.status(200).json({ received: true, warning: 'client not found' });
+    }
+
+    if (type === 'upgrade' && planTarget) {
+      const planPrices = { ignite: 199, professional: 349, executive: 599, prime: 119 };
+      const planTypeLower = planTarget.toLowerCase();
+      const planPrice = planPrices[planTypeLower];
+      if (!planPrice) {
+        console.error(`Stripe webhook: unknown plan ${planTarget}`);
+        return res.status(200).json({ received: true, warning: 'unknown plan' });
+      }
+      const capitalizedPlan = planTypeLower.charAt(0).toUpperCase() + planTypeLower.slice(1);
+      const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹,\s]/g, '') || '0');
+      const currentPlanPrice = existingClient.planPrice || 0;
+      const newAmountPaid = currentAmountPaid + (planPrice - currentPlanPrice);
+      const planChanged = String(existingClient.planType || '').toLowerCase() !== planTypeLower;
+
+      const upgradeOps = {
+        $set: { planType: planTypeLower, planPrice, amountPaid: newAmountPaid.toString(), amountPaidDate: currentDate, updatedAt: currentDate },
+        $push: { upgradePayments: { amount: parseFloat(amountPaid), currency, for: `plan_upgrade_to_${planTypeLower}`, paidAt: currentDate } },
+      };
+      if (planChanged) {
+        upgradeOps.$unset = {
+          'milestonesNotified.count_250': '', 'milestonesNotified.count_350': '',
+          'milestonesNotified.count_700': '', 'milestonesNotified.completed': ''
+        };
+      }
+      await ClientModel.updateOne({ email }, upgradeOps, { runValidators: false });
+      await NewUserModel.updateOne({ email }, { $set: { planType: capitalizedPlan, updatedAt: currentDate } }, { runValidators: false });
+      console.log(`✅ Stripe webhook: upgraded ${email} to ${capitalizedPlan}`);
+
+      if (discordWebhookUrl) {
+        await fetch(discordWebhookUrl, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: `✅ **Plan Upgrade via Stripe**\n📧 ${email}\n📦 → ${capitalizedPlan}\n💰 ${currency} ${amountPaid}` }),
+        }).catch(() => {});
+      }
+
+    } else if (type === 'addon' && addonApps) {
+      const addonType = addonApps; // '250', '500', '1000'
+      const addonPrice = parseFloat(amountPaid);
+      const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹,\s]/g, '') || '0');
+      const newAmountPaid = currentAmountPaid + addonPrice;
+      const existingAddons = existingClient.addons || [];
+      const newAddon = { type: addonType, price: addonPrice, addedAt: currentDate };
+
+      await ClientModel.updateOne(
+        { email },
+        {
+          $set: { addons: [...existingAddons, newAddon], amountPaid: newAmountPaid.toString(), amountPaidDate: currentDate, updatedAt: currentDate },
+          $push: { upgradePayments: { amount: addonPrice, currency, for: `addon_${addonType}`, paidAt: currentDate } },
+        },
+        { runValidators: false }
+      );
+      console.log(`✅ Stripe webhook: added ${addonType} addon to ${email}`);
+
+      if (discordWebhookUrl) {
+        await fetch(discordWebhookUrl, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: `✅ **Add-On Purchase via Stripe**\n📧 ${email}\n➕ +${addonType} applications\n💰 ${currency} ${amountPaid}` }),
+        }).catch(() => {});
+      }
+
+    } else {
+      console.warn(`Stripe webhook: unhandled metadata type="${type}" plan="${planTarget}" addon="${addonApps}"`);
+    }
+
+  } catch (err) {
+    console.error('Stripe webhook processing error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+
+  res.json({ received: true });
+});
+
 app.use(express.json());
 // Twilio webhooks send application/x-www-form-urlencoded by default
 app.use(express.urlencoded({ extended: false }));
@@ -857,6 +979,12 @@ export const createOrUpdateClient = async (req, res) => {
               : null)
       : null;
 
+    // Detect currency from amountPaid prefix (e.g. "CAD199" → "CAD", "$199" → "USD", "₹199" → "INR")
+    const amountPaidStr = String(amountPaid || "");
+    const detectedCurrency = amountPaidStr.toUpperCase().startsWith("CAD") ? "CAD"
+      : amountPaidStr.startsWith("₹") ? "INR"
+      : "USD";
+
     const userData = {
       name,
       email: emailLower,
@@ -864,6 +992,7 @@ export const createOrUpdateClient = async (req, res) => {
       ...(capitalizedPlan && { planType: capitalizedPlan }),
       userType: "User",
       dashboardManager,
+      currency: detectedCurrency,
     };
 
     const existingUser = await NewUserModel.findOne({ email: emailLower });
