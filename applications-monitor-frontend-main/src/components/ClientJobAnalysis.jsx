@@ -81,6 +81,9 @@ const ROW_CHUNK = 80;
 export default function ClientJobAnalysis() {
   const [date, setDate] = useState('');
   const [rows, setRows] = useState([]);
+  // Google-mail connection status per client email (for the "Google Mail" column).
+  // Loaded separately from the heavy analysis endpoint; refreshed on load + Refresh.
+  const [mailConn, setMailConn] = useState({ connected: new Set(), reconnect: new Set() });
   const [loading, setLoading] = useState(false);
   const [sortDir, setSortDir] = useState('desc');
   const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
@@ -158,12 +161,28 @@ export default function ClientJobAnalysis() {
       }
 
       if (data.summary) setSummaryCounts(data.summary);
-    } catch (e) {
+    } catch {
       toast.error('Failed to load client job analysis');
     } finally {
       setLoading(false);
     }
   }, [convertToDMY]);
+
+  // Load Google-mail connection status (separate, lightweight). Non-blocking:
+  // a failure just leaves the column blank rather than breaking the table.
+  const loadMailConnection = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/clients/mail-connection`, { headers: AUTH_HEADERS() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return;
+      setMailConn({
+        connected: new Set((data.connected || []).map((e) => String(e).toLowerCase())),
+        reconnect: new Set((data.reconnect || []).map((e) => String(e).toLowerCase()))
+      });
+    } catch {
+      /* non-blocking */
+    }
+  }, []);
 
   const handleSaveClientNumber = useCallback(async () => {
     if (!editingClientNumberEmail || userRole !== 'admin') return;
@@ -203,6 +222,11 @@ export default function ClientJobAnalysis() {
   useEffect(() => {
     fetchAnalysis();
   }, [fetchAnalysis]);
+
+  // Load mail-connection status on mount (refreshed alongside the Refresh button).
+  useEffect(() => {
+    loadMailConnection();
+  }, [loadMailConnection]);
 
   // One-time bulk load of saved scrape counts from the scraper service.
   // Failures here never block the page — the Scrape column just starts
@@ -256,7 +280,7 @@ export default function ClientJobAnalysis() {
     [dashboardManagerNames, rows]
   );
 
-  const onRefresh = () => { invalidateCache('analysis:'); fetchAnalysis(date, true); };
+  const onRefresh = () => { invalidateCache('analysis:'); fetchAnalysis(date, true); loadMailConnection(); };
 
   const findAppliedOnDate = useCallback(async () => {
     if (!date) {
@@ -276,7 +300,7 @@ export default function ClientJobAnalysis() {
       // Merge counts into current rows optimally without extra fetch
       setRows(prev => (prev || []).map(r => ({ ...r, appliedOnDate: Number(map[r.email] || 0) })));
       toast.success(`Updated applied-on-date for ${Object.keys(map).length} client(s)`);
-    } catch (e) {
+    } catch {
       toast.error('Failed to fetch applied-on-date');
     }
   }, [date, convertToDMY]);
@@ -303,7 +327,7 @@ export default function ClientJobAnalysis() {
         invalidateCache('analysis:');
         toast.success('Dashboard Manager updated successfully');
       }
-    } catch (e) {
+    } catch {
       toast.error('Failed to update dashboard manager');
     } finally {
       setSavingDashboardManager(prev => {
@@ -337,7 +361,7 @@ export default function ClientJobAnalysis() {
         fetchAnalysis(undefined, true);
         toast.success('Client status updated successfully');
       }
-    } catch (e) {
+    } catch {
       toast.error('Failed to update client status');
     } finally {
       setSavingStatus(prev => {
@@ -375,7 +399,7 @@ export default function ClientJobAnalysis() {
         const msg = value === 'new' ? 'Client set to New (onboarding phase)' : value === 'paused' ? 'Client paused' : 'Client unpaused';
         toast.success(msg);
       }
-    } catch (e) {
+    } catch {
       toast.error('Failed to update phase/pause status');
     } finally {
       setSavingPause(prev => {
@@ -766,6 +790,7 @@ export default function ClientJobAnalysis() {
             <thead className="bg-slate-50">
               <tr>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700" title="Whether this client's Google mail is connected. Auto-detected; updates on Refresh.">Google Mail</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Status</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Country</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Pause/Unpause/New</th>
@@ -847,6 +872,7 @@ export default function ClientJobAnalysis() {
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={`skel-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                     <td className="px-2 py-2"><div className="space-y-1.5"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-28" /><div className="h-2.5 bg-gray-100 rounded animate-pulse w-36" /></div></td>
+                    <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-12" /></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-16" /></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-14" /></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-20" /></td>
@@ -872,7 +898,7 @@ export default function ClientJobAnalysis() {
                 ))
               ) : processedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdmin ? 18 : 17} className="px-2 py-8 text-center text-gray-500 text-sm">
+                  <td colSpan={isAdmin ? 19 : 18} className="px-2 py-8 text-center text-gray-500 text-sm">
                     {searchQuery.trim() ? `No clients match "${searchQuery}"` : lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
                   </td>
                 </tr>
@@ -905,6 +931,18 @@ export default function ClientJobAnalysis() {
                         </div>
                       </div>
                       <div className="text-gray-500 text-[10px] truncate max-w-[180px]">{r.email}</div>
+                    </td>
+                    <td className="px-2 py-1">
+                      {(() => {
+                        const em = String(r.email || '').toLowerCase();
+                        if (mailConn.connected.has(em)) {
+                          return <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold bg-green-100 text-green-700" title="Google mail connected">Yes</span>;
+                        }
+                        if (mailConn.reconnect.has(em)) {
+                          return <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold bg-amber-100 text-amber-700" title="Connected before, but the Google token expired — reconnect needed">Reconnect</span>;
+                        }
+                        return <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold bg-red-100 text-red-700" title="No Google mail connected">No</span>;
+                      })()}
                     </td>
                     <td className="px-2 py-1">
                       {userRole === 'admin' ? (
@@ -1140,7 +1178,7 @@ export default function ClientJobAnalysis() {
               {/* Sentinel: when scrolled near, mount the next chunk of rows. */}
               {visibleRows.length < processedRows.length && (
                 <tr ref={loadMoreRef}>
-                  <td colSpan={isAdmin ? 18 : 17} className="px-2 py-3 text-center text-[11px] text-gray-400">
+                  <td colSpan={isAdmin ? 19 : 18} className="px-2 py-3 text-center text-[11px] text-gray-400">
                     Loading more… ({visibleRows.length}/{processedRows.length})
                   </td>
                 </tr>
