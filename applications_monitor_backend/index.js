@@ -4551,6 +4551,50 @@ const getRevenueStats = async (req, res) => {
   }
 };
 
+// Google-mail connection status per client — backs the "Google Mail" Yes/No
+// column in Client Job Analysis. Lightweight and separate from the heavy
+// analytics endpoint on purpose. Reads the SHARED collections directly (no
+// model import needed): a client is "connected" when a connected mailbox's
+// email OR ownerEmail matches their account email; "reconnect" when their only
+// mailbox has a dead Google token (gmailpollstates.authErrorAt, written by the
+// dashboard mail poller).
+app.get('/api/clients/mail-connection', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const mailboxes = await db
+      .collection('gmailusers')
+      .find({ refreshToken: { $exists: true, $ne: '' } }, { projection: { email: 1, ownerEmail: 1 } })
+      .toArray();
+
+    let dead = new Set();
+    try {
+      const states = await db
+        .collection('gmailpollstates')
+        .find({ authErrorAt: { $ne: null } }, { projection: { gmailEmail: 1 } })
+        .toArray();
+      dead = new Set(states.map((s) => String(s.gmailEmail || '').toLowerCase()));
+    } catch (_) { /* poll-state collection may not exist yet — treat as no dead tokens */ }
+
+    const connected = new Set();
+    const reconnect = new Set();
+    for (const m of mailboxes) {
+      const box = String(m.email || '').toLowerCase();
+      const isDead = dead.has(box);
+      for (const addr of [box, String(m.ownerEmail || '').toLowerCase()].filter(Boolean)) {
+        if (isDead) reconnect.add(addr);
+        else connected.add(addr);
+      }
+    }
+    // A healthy mailbox wins: if any mailbox for an address is alive, it's connected.
+    for (const a of connected) reconnect.delete(a);
+
+    res.json({ connected: [...connected], reconnect: [...reconnect], mailboxes: mailboxes.length });
+  } catch (e) {
+    console.error('mail-connection error', e?.message || e);
+    res.status(500).json({ error: 'mail_connection_failed' });
+  }
+});
+
 // Client routes
 app.get('/api/clients', getAllClients);
 app.get('/api/clients/stats', getClientStats);
