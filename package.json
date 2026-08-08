@@ -1,0 +1,8 @@
+{
+  "name": "clients-tracking-root",
+  "version": "1.0.0",
+  "scripts": {
+    "postinstall": "cd applications_monitor_backend && npm install",
+    "start": "cd applications_monitor_backend && npm start"
+  }
+}
