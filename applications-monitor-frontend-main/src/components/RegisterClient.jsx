@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { ArrowRight, Mail, Lock, User, Eye, EyeOff, CheckCircle, CreditCard, Users, ArrowLeft, Plus, KeyRound } from 'lucide-react';
 import { toastUtils, toastMessages } from '../utils/toastUtils.js';
 
@@ -18,8 +18,11 @@ const RegisterClient = () => {
     clientNumber: '',
     paymentEmail: '',
     // Max number of jobs operators can push for this client. Enforced by
-    // dashboard /addjob via ProfileModel.targetJobCount. Empty = no cap.
-    targetJobCount: ''
+    // dashboard /addjob via ProfileModel.targetJobCount. Pre-filled with the
+    // standard 30/day target so every new client is capped by default; the
+    // operator can change it. (Clearing it falls back to the same 30 default
+    // that dailyCapGuard enforces server-side.)
+    targetJobCount: '30'
   });
 
   const [dashboardManagers, setDashboardManagers] = useState([]);
@@ -28,13 +31,12 @@ const RegisterClient = () => {
   const [loadingClients, setLoadingClients] = useState(false);
   const [showForm, setShowForm] = useState(false);
 
-  const [response, setResponse] = useState({});
+  const [, setResponse] = useState({});
   const [lastRegisteredEmail, setLastRegisteredEmail] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [showPassword] = useState(false);
+  const [showConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState({});
-  const navigate = useNavigate();
   
   // Password change states
   const [showPasswordChangeModal, setShowPasswordChangeModal] = useState(false);
@@ -327,7 +329,7 @@ const RegisterClient = () => {
         currency: "$",
         clientNumber: "",
         paymentEmail: "",
-        targetJobCount: "",
+        targetJobCount: "30",
       });
       setErrors({});
       setShowForm(false);
@@ -752,13 +754,13 @@ const RegisterClient = () => {
                       name="targetJobCount"
                       value={formData.targetJobCount}
                       onChange={handleInputChange}
-                      placeholder="e.g. 50  (empty = no cap)"
+                      placeholder="e.g. 50  (default 30)"
                       min="0"
                       max="10000"
                       step="5"
                       className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-amber-500 focus:border-amber-500 border-gray-300"
                     />
-                    <p className="text-xs text-gray-500 mt-1">Caps the total number of jobs operators (scraper + extension) can push to this client's tracker. Once reached, /addjob refuses with TARGET_REACHED. Leave empty for no cap.</p>
+                    <p className="text-xs text-gray-500 mt-1">Caps the total number of jobs operators (scraper + extension) can push to this client's tracker. Once reached, /addjob refuses with TARGET_REACHED. Defaults to 30 if left empty.</p>
                   </div>
 
                   {/* Submit Button */}
