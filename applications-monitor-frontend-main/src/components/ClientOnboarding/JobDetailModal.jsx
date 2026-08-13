@@ -866,7 +866,7 @@ const JobDetailModal = React.memo(({
     >
       <Motion.div
         key={selectedJob._id}
-        className="bg-[#f6f5f4] rounded-2xl shadow-2xl w-full max-w-7xl max-h-[90vh] overflow-hidden flex flex-col ring-1 ring-white/20"
+        className="bg-[#f6f5f4] rounded-2xl shadow-2xl w-full max-w-7xl max-h-[94vh] h-[94vh] overflow-hidden flex flex-col ring-1 ring-white/20"
         onClick={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
         {...PANEL_RISE}
@@ -960,7 +960,12 @@ const JobDetailModal = React.memo(({
             />
             <Motion.div
               key="drawer"
-              className="absolute left-0 top-0 bottom-0 w-[470px] max-w-[88%] bg-[#f6f5f4] border-r border-[#e6e4e1] z-20 flex flex-col shadow-[12px_0_40px_rgba(0,0,0,0.12)]"
+              /* Width scales with the viewport: 470px was too narrow for the
+                 timeline cards — milestone and onboarding rows wrapped onto
+                 three lines and every list needed its own scrollbar.
+                 max-w-[92%] keeps a sliver of the chat visible so this still
+                 reads as a drawer over the modal, not a second modal. */
+              className="absolute left-0 top-0 bottom-0 w-[640px] 2xl:w-[760px] max-w-[92%] bg-[#f6f5f4] border-r border-[#e6e4e1] z-20 flex flex-col shadow-[12px_0_40px_rgba(0,0,0,0.12)]"
               initial={{ x: '-100%' }}
               animate={{ x: 0 }}
               exit={{ x: '-100%' }}
@@ -978,7 +983,9 @@ const JobDetailModal = React.memo(({
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-4">
+            {/* overscroll-contain stops a scroll that reaches the end of this
+                column from chaining out to the board behind the modal. */}
+            <div className="flex-1 overflow-y-auto overscroll-contain p-4">
             <div className="flex flex-col gap-3 mb-4">
               {/* Team Section */}
               <CollapsibleSection
@@ -1024,7 +1031,7 @@ const JobDetailModal = React.memo(({
                           {canManageOperations && (<button type="button" onClick={() => setShowAddOperatorModal(true)} className="text-xs font-medium text-primary hover:text-primary/80">+ Add operations intern</button>)}
                         </div>
                         {loadingOperationsForClient ? (<p className="text-xs text-gray-500">Loading...</p>) : operationsForClient.length === 0 ? (<p className="text-xs text-gray-500">No operations assigned yet.</p>) : (
-                          <ul className="space-y-1.5 max-h-32 overflow-y-auto rounded-lg border border-gray-100 bg-white p-2">
+                          <ul className="space-y-1.5 max-h-52 overflow-y-auto rounded-lg border border-gray-100 bg-white p-2">
                             {operationsForClient.map((o) => (
                               <li key={(o.email || '').toLowerCase()} className="flex items-center justify-between gap-2 text-sm">
                                 <span className="truncate text-gray-800" title={o.email}>{o.name || o.email}</span>
@@ -1041,7 +1048,7 @@ const JobDetailModal = React.memo(({
                             {canManageOperations && (<button type="button" onClick={openAddManagedUserModal} className="text-xs font-medium text-primary hover:text-primary/80">+ Add new user</button>)}
                           </div>
                           {loadingOperatorManagedUsers ? (<p className="text-xs text-gray-500">Loading...</p>) : operatorManagedUsers.length === 0 ? (<p className="text-xs text-gray-500">No users assigned yet.</p>) : (
-                            <ul className="space-y-1.5 max-h-32 overflow-y-auto rounded-lg border border-gray-100 bg-white p-2">
+                            <ul className="space-y-1.5 max-h-52 overflow-y-auto rounded-lg border border-gray-100 bg-white p-2">
                               {operatorManagedUsers.map((u) => (
                                 <li key={u.userID} className="flex items-center justify-between gap-2 text-sm">
                                   <span className="truncate text-gray-800" title={u.email}>{u.name || u.email}</span>
@@ -1219,7 +1226,7 @@ const JobDetailModal = React.memo(({
                         <ChevronRight className={`w-4 h-4 transition-transform ${showGmailCredentialsHistory ? 'rotate-90' : ''}`} />
                       </button>
                       {showGmailCredentialsHistory && (
-                        <div className="mt-3 space-y-2 max-h-60 overflow-y-auto">
+                        <div className="mt-3 space-y-2 max-h-80 overflow-y-auto">
                           {(selectedJob.gmailCredentialsHistory || []).slice().reverse().map((h, idx) => (
                             <div key={idx} className="bg-white rounded-lg p-3 border border-gray-200">
                               <div className="flex items-center justify-between mb-2">
@@ -1407,7 +1414,19 @@ const JobDetailModal = React.memo(({
                       ? 'Loading…'
                       : onboardingMailError
                         ? 'Unavailable'
-                        : `${(onboardingMail?.steps || []).filter((s) => s.sent).length}/${(onboardingMail?.steps || []).length} sent`
+                        : (() => {
+                            // Collapsed summary has to answer "did they all go
+                            // out?" without expanding — so name the problem,
+                            // don't just count.
+                            const all = onboardingMail?.steps || [];
+                            const sent = all.filter((s) => s.sent).length;
+                            const failed = all.filter((s) => s.state === 'failed').length;
+                            const base = `${sent}/${all.length} sent`;
+                            if (failed) return `${base} · ${failed} failed`;
+                            if (sent < all.length && onboardingMail?.status === 'skipped') return `${base} · never scheduled`;
+                            if (sent < all.length) return `${base} · ${all.length - sent} pending`;
+                            return base;
+                          })()
                   }
                 >
                   {onboardingMailLoading ? (
@@ -1591,7 +1610,7 @@ const JobDetailModal = React.memo(({
                   ) : emailLogs.length === 0 ? (
                     <div className="text-xs text-gray-500 py-3 text-center">No emails sent yet.</div>
                   ) : (
-                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
                       {emailLogs.map((l) => {
                         const typeLabel = ({
                           started: 'Applications started + resume',
@@ -1655,7 +1674,7 @@ const JobDetailModal = React.memo(({
                   {Array.isArray(selectedJob?.moveHistory) && selectedJob.moveHistory.length > 0 && (
                     <div className="mt-4 pt-3 border-t border-gray-200">
                       <div className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-2 flex items-center gap-1"><History className="w-3 h-3" /> Move history</div>
-                      <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                      <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
                         {selectedJob.moveHistory.slice().reverse().map((m, i) => {
                           const who = m.movedByName || m.movedBy || 'unknown';
                           const when = m.movedAt ? new Date(m.movedAt).toLocaleString() : '';
@@ -1817,7 +1836,7 @@ const JobDetailModal = React.memo(({
                 <span className="text-xs text-gray-500 bg-slate-200 px-2 py-0.5 rounded-full flex-shrink-0">{(selectedJob.moveHistory || []).length}</span>
               ) : null}
             >
-                <div className="space-y-3 max-h-[300px] overflow-y-auto">
+                <div className="space-y-3 max-h-[26rem] overflow-y-auto">
                   {(selectedJob.moveHistory || []).length === 0 ? (<p className="text-xs text-gray-400 italic py-2 text-center">No move history</p>) : (
                     (selectedJob.moveHistory || []).map((move, i) => {
                       const actionType = move.actionType || 'status_change';
