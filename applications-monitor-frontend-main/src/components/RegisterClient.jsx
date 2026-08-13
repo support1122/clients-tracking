@@ -685,6 +685,7 @@ const RegisterClient = () => {
                         <option value="$">$ (Dollar)</option>
                         <option value="₹">₹ (Rupee)</option>
                         <option value="CAD">CAD (Canadian Dollar)</option>
+                        <option value="£">£ (Pound)</option>
                       </select>
                     </div>
                     <div className="col-span-2">

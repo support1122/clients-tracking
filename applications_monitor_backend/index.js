@@ -306,7 +306,7 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
         return res.status(200).json({ received: true, warning: 'unknown plan' });
       }
       const capitalizedPlan = planTypeLower.charAt(0).toUpperCase() + planTypeLower.slice(1);
-      const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹,\s]/g, '') || '0');
+      const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£,\s]/g, '') || '0');
       const currentPlanPrice = existingClient.planPrice || 0;
       const newAmountPaid = currentAmountPaid + (planPrice - currentPlanPrice);
       const planChanged = String(existingClient.planType || '').toLowerCase() !== planTypeLower;
@@ -335,7 +335,7 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
     } else if (type === 'addon' && addonApps) {
       const addonType = addonApps; // '250', '500', '1000'
       const addonPrice = parseFloat(amountPaid);
-      const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹,\s]/g, '') || '0');
+      const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£,\s]/g, '') || '0');
       const newAmountPaid = currentAmountPaid + addonPrice;
       const existingAddons = existingClient.addons || [];
       const newAddon = { type: addonType, price: addonPrice, addedAt: currentDate };
@@ -979,10 +979,11 @@ export const createOrUpdateClient = async (req, res) => {
               : null)
       : null;
 
-    // Detect currency from amountPaid prefix (e.g. "CAD199" → "CAD", "$199" → "USD", "₹199" → "INR")
+    // Detect currency from amountPaid prefix (e.g. "CAD199" → "CAD", "$199" → "USD", "₹199" → "INR", "£199" → "GBP")
     const amountPaidStr = String(amountPaid || "");
     const detectedCurrency = amountPaidStr.toUpperCase().startsWith("CAD") ? "CAD"
       : amountPaidStr.startsWith("₹") ? "INR"
+      : amountPaidStr.startsWith("£") ? "GBP"
       : "USD";
 
     const userData = {
@@ -1366,7 +1367,7 @@ const upgradeClientPlan = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Client not found' });
     }
 
-    const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹,\s]/g, '') || '0');
+    const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£,\s]/g, '') || '0');
     const currentPlanPrice = existingClient.planPrice || 0;
     const upgradeDifference = planPrice - currentPlanPrice;
     const newAmountPaid = currentAmountPaid + upgradeDifference;
@@ -1456,7 +1457,7 @@ const addClientAddon = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Client not found' });
     }
 
-    const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹,\s]/g, '') || '0');
+    const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£,\s]/g, '') || '0');
     const newAmountPaid = currentAmountPaid + parseFloat(addonPrice);
 
     const newAddon = {
@@ -4525,8 +4526,8 @@ const getRevenueStats = async (req, res) => {
 
       // If amountPaid is a string, parse it to a number
       if (typeof amountPaid === 'string') {
-        // Remove currency symbols ($, ₹) and any whitespace
-        amountPaid = amountPaid.replace(/[$₹,\s]/g, '').trim();
+        // Remove currency symbols ($, ₹, £) and any whitespace
+        amountPaid = amountPaid.replace(/[$₹£,\s]/g, '').trim();
         // Convert to number, default to 0 if invalid
         amountPaid = parseFloat(amountPaid) || 0;
       }

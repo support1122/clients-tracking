@@ -11,7 +11,7 @@ export const parseAmount = (amountStr) => {
   if (!amountStr) return 0;
   const str = amountStr.toString();
   // Remove currency symbols and whitespace: $, ₹, CAD, commas, spaces
-  const cleaned = str.replace(/[$₹CAD,\s]/gi, '').trim();
+  const cleaned = str.replace(/[$₹£CAD,\s]/gi, '').trim();
   return parseFloat(cleaned) || 0;
 };
 
@@ -25,6 +25,7 @@ export const extractCurrency = (amountStr) => {
   const str = amountStr.toString();
   if (str.startsWith('CAD')) return 'CAD';
   if (str.startsWith('₹')) return '₹';
+  if (str.startsWith('£')) return '£';
   if (str.startsWith('$')) return '$';
   return '';
 };
@@ -46,6 +47,8 @@ export const formatAmount = (amount, currency = '') => {
     return `CAD ${numAmount.toLocaleString()}`;
   } else if (currency === '₹') {
     return `₹${numAmount.toLocaleString()}`;
+  } else if (currency === '£') {
+    return `£${numAmount.toLocaleString()}`;
   } else if (currency === '$') {
     return `$${numAmount.toLocaleString()}`;
   }
@@ -61,6 +64,7 @@ export const formatAmount = (amount, currency = '') => {
 export const getCurrencyPrefix = (currency) => {
   if (currency === 'CAD') return 'CAD';
   if (currency === '₹') return '₹';
+  if (currency === '£') return '£';
   if (currency === '$') return '$';
   return '$';
 };
