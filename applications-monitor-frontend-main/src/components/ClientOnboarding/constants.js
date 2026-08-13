@@ -18,3 +18,15 @@ export const AUTH_HEADERS = () => ({
 });
 
 export const LONG_PRESS_MS = 3500;
+
+/**
+ * FlashFire dashboard backend — a DIFFERENT service from API_BASE above.
+ * It owns ProfileModel and OnboardingMailState, so the AI summary and the
+ * onboarding email sequence (base résumé / cover letter / LinkedIn) are read
+ * from here, not from the clients-tracking API. Same value ClientAiSummary.jsx
+ * uses, kept in one place so the two can't drift.
+ */
+export const DASHBOARD_BASE = (
+  import.meta.env.VITE_DASHBOARD_BASE ||
+  (import.meta.env.DEV ? 'http://localhost:8086' : 'https://dashboard-api.flashfirejobs.com')
+).replace(/\/+$/, '');

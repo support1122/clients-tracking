@@ -30,7 +30,7 @@ import {
 import CollapsibleSection from './CollapsibleSection';
 import PersonChip from './PersonChip';
 import { OVERLAY_FADE, PANEL_RISE } from './animation';
-import { API_BASE, AUTH_HEADERS, LOG } from './constants';
+import { API_BASE, AUTH_HEADERS, LOG, DASHBOARD_BASE } from './constants';
 import { getStatusColor, clientDisplayName, convertToDMY } from './helpers';
 import { toastUtils } from '../../utils/toastUtils';
 import { handleAuthFailure } from '../../utils/authUtils';
@@ -106,6 +106,12 @@ const JobDetailModal = React.memo(({
   const [milestoneReferralApps, setMilestoneReferralApps] = useState(0);
   const [sendingPendingMilestone, setSendingPendingMilestone] = useState(false);
   const [resendingLogId, setResendingLogId] = useState(null);
+  // Onboarding email sequence (base résumé / cover letter / LinkedIn) — lives
+  // in the dashboard backend's OnboardingMailState, not in this app's DB.
+  const [onboardingMail, setOnboardingMail] = useState(null);
+  const [onboardingMailLoading, setOnboardingMailLoading] = useState(false);
+  const [onboardingMailError, setOnboardingMailError] = useState(null);
+  const [sendingOnboardingStep, setSendingOnboardingStep] = useState(null);
   const [savingClientName, setSavingClientName] = useState(false);
   const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
   const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
@@ -359,13 +365,74 @@ const JobDetailModal = React.memo(({
     }
   }, [selectedJob?.clientEmail, paymentEmailValue, fetchEmailLogs]);
 
+  // ── Onboarding email sequence ──
+  // Reads the dashboard backend (OnboardingMailState), which is where the
+  // worker records base résumé / cover letter / LinkedIn delivery. Unlike the
+  // milestone emails, this state does NOT live in the clients-tracking DB, so
+  // it goes direct to DASHBOARD_BASE the same way ClientAiSummary.jsx does.
+  const onboardingMailClientRef = useRef('');
+  const fetchOnboardingMail = useCallback(async (clientEmail) => {
+    if (!clientEmail) { setOnboardingMail(null); return; }
+    const key = clientEmail.toLowerCase();
+    onboardingMailClientRef.current = key;
+    setOnboardingMailLoading(true);
+    setOnboardingMailError(null);
+    try {
+      const res = await fetch(
+        `${DASHBOARD_BASE}/admin/onboarding-mail/status?email=${encodeURIComponent(key)}`
+      );
+      const body = await res.json().catch(() => null);
+      if (onboardingMailClientRef.current !== key) return; // superseded
+      if (!res.ok) {
+        setOnboardingMailError(body?.error || `HTTP ${res.status}`);
+        setOnboardingMail(null);
+        return;
+      }
+      setOnboardingMail(body);
+    } catch (err) {
+      if (onboardingMailClientRef.current !== key) return;
+      setOnboardingMailError(err?.message || 'Network error');
+      setOnboardingMail(null);
+    } finally {
+      if (onboardingMailClientRef.current === key) setOnboardingMailLoading(false);
+    }
+  }, []);
+
+  // Manual send for one step. `force` re-sends a step already delivered — the
+  // backend refuses a repeat without it, so a double-click can't re-mail.
+  const sendOnboardingStep = useCallback(async (stepKey, { force = false } = {}) => {
+    const clientEmail = selectedJob?.clientEmail;
+    if (!clientEmail || !stepKey) return;
+    setSendingOnboardingStep(stepKey);
+    try {
+      const res = await fetch(`${DASHBOARD_BASE}/admin/onboarding-mail/send-step`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: clientEmail.toLowerCase(), key: stepKey, force })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.ok) {
+        toastUtils.error(body?.error || `Failed to send (HTTP ${res.status})`);
+        return;
+      }
+      toastUtils.success(`Sent to ${body.to}`);
+      await fetchOnboardingMail(clientEmail);
+    } catch (err) {
+      toastUtils.error(err?.message || 'Network error');
+    } finally {
+      setSendingOnboardingStep(null);
+    }
+  }, [selectedJob?.clientEmail, fetchOnboardingMail]);
+
   useEffect(() => {
     if (!selectedJob?.clientEmail) {
       setEmailLogs([]); setPaymentEmailValue(''); setPaymentEmailDraft(''); setMilestoneSchedule([]); setMilestonePlanCap(0); setMilestonePlanType('');
+      setOnboardingMail(null); setOnboardingMailError(null);
       return;
     }
     fetchEmailLogs(selectedJob.clientEmail);
-  }, [selectedJob?.clientEmail, fetchEmailLogs]);
+    fetchOnboardingMail(selectedJob.clientEmail);
+  }, [selectedJob?.clientEmail, fetchEmailLogs, fetchOnboardingMail]);
 
   // Fetch operator managed users — TTL-cached per operator.
   const managedOpRef = useRef('');
@@ -1323,6 +1390,185 @@ const JobDetailModal = React.memo(({
                       );
                     })}
                   </ol>
+                </CollapsibleSection>
+              )}
+
+              {/* Onboarding Emails — base résumé / cover letter / LinkedIn.
+                  Separate from the Milestone Timeline above: these fire off the
+                  client's FIRST application (dashboard backend), the milestones
+                  fire off application COUNT (this app's backend). */}
+              {(onboardingMailLoading || onboardingMailError || onboardingMail) && (
+                <CollapsibleSection
+                  id="onboardingMail"
+                  icon={Mail}
+                  title="Onboarding Emails"
+                  summary={
+                    onboardingMailLoading
+                      ? 'Loading…'
+                      : onboardingMailError
+                        ? 'Unavailable'
+                        : `${(onboardingMail?.steps || []).filter((s) => s.sent).length}/${(onboardingMail?.steps || []).length} sent`
+                  }
+                >
+                  {onboardingMailLoading ? (
+                    <div className="text-sm text-gray-500 py-3 text-center flex items-center justify-center gap-2">
+                      <Loader2 className="w-3 h-3 animate-spin" /> Loading…
+                    </div>
+                  ) : onboardingMailError ? (
+                    <div className="text-xs text-red-600 py-2 flex items-center justify-between gap-2">
+                      <span>Could not load onboarding email status: {onboardingMailError}</span>
+                      <button
+                        type="button"
+                        onClick={() => fetchOnboardingMail(selectedJob.clientEmail)}
+                        className="text-[10px] text-gray-500 hover:text-orange-600 font-medium whitespace-nowrap"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {onboardingMail.planType ? (
+                            <span
+                              className="text-[10px] text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full uppercase tracking-wider"
+                              title="Executive / Prime get all three; Professional / Ignite skip the cover letter"
+                            >
+                              {onboardingMail.planType}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-rose-600 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-full" title="No planType on the tracking record — the sequence falls back to résumé + LinkedIn">
+                              no plan set
+                            </span>
+                          )}
+                          {onboardingMail.paymentEmail ? (
+                            <span className="text-[10px] text-gray-600 bg-white border border-gray-200 px-1.5 py-0.5 rounded-full lowercase" title="Onboarding emails are sent to this Payment Email">
+                              ✉ {onboardingMail.paymentEmail}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-rose-600 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-full" title="No Payment Email — nothing can be sent">
+                              ✉ no payment email
+                            </span>
+                          )}
+                          <span className="text-[10px] text-gray-600 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded-full" title="Applied jobs on the dashboard — the sequence starts at the first one">
+                            {onboardingMail.appliedCount} applied
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => fetchOnboardingMail(selectedJob.clientEmail)}
+                          className="text-[10px] text-gray-500 hover:text-orange-600 font-medium"
+                        >
+                          Refresh
+                        </button>
+                      </div>
+
+                      {/* Why nothing is going out — stated once, above the rows. */}
+                      {!onboardingMail.delivery?.canSend && (
+                        <div className="mb-3 flex items-start gap-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                          <span>
+                            {onboardingMail.delivery?.paused
+                              ? 'Onboarding emails are paused server-side and nothing will send, by hand or on schedule.'
+                              : !onboardingMail.delivery?.smtpConfigured
+                                ? 'SMTP is not configured on the dashboard backend (SMTP_USER / SMTP_PASS).'
+                                : !onboardingMail.paymentEmail
+                                  ? 'No Payment Email on file — set one in the INFO panel first.'
+                                  : 'Sending is unavailable right now.'}
+                          </span>
+                        </div>
+                      )}
+                      {onboardingMail.delivery?.canSend && !onboardingMail.delivery?.workerEnabled && (
+                        <div className="mb-3 flex items-start gap-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                          <span>
+                            The automatic sender is {onboardingMail.delivery.workerReason} — nothing fires on its own, but you can still send each email by hand below.
+                          </span>
+                        </div>
+                      )}
+                      {onboardingMail.notScheduledReason && (
+                        <div className="mb-3 text-[11px] text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                          Not scheduled: {onboardingMail.notScheduledReason}
+                        </div>
+                      )}
+
+                      <ol className="relative border-l-2 border-orange-200 ml-2 space-y-4">
+                        {(onboardingMail.steps || []).map((s) => {
+                          const dotColor = s.sent
+                            ? 'bg-green-500 ring-green-100'
+                            : s.state === 'failed'
+                              ? 'bg-rose-500 ring-rose-100'
+                              : 'bg-gray-300 ring-gray-100';
+                          const badge = s.sent
+                            ? 'bg-green-100 text-green-700'
+                            : s.state === 'failed'
+                              ? 'bg-rose-100 text-rose-700'
+                              : s.state === 'not-scheduled'
+                                ? 'bg-gray-100 text-gray-500'
+                                : 'bg-amber-100 text-amber-700';
+                          const badgeText = s.sent
+                            ? 'Sent'
+                            : s.state === 'failed'
+                              ? 'Failed'
+                              : s.state === 'not-scheduled'
+                                ? 'Not scheduled'
+                                : 'Pending';
+                          const busy = sendingOnboardingStep === s.key;
+                          const canSend = isAdmin && onboardingMail.delivery?.canSend;
+                          return (
+                            <li key={s.key} className="ml-4 pl-2">
+                              <span className={`absolute -left-[7px] flex items-center justify-center w-3 h-3 rounded-full ring-4 ${dotColor}`} />
+                              <div className="bg-white border border-gray-200 rounded-lg p-3">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <div className="text-xs font-bold text-gray-900">{s.label}</div>
+                                    {!s.sent && s.reason && (
+                                      <div className="text-[11px] text-gray-500 mt-0.5">{s.reason}</div>
+                                    )}
+                                    {!s.sent && !s.reason && s.sendAt && (
+                                      <div className="text-[11px] text-gray-500 mt-0.5">
+                                        Due {new Date(s.sendAt).toLocaleString()}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full whitespace-nowrap ${badge}`}>
+                                    {badgeText}
+                                  </span>
+                                </div>
+                                {s.sent && s.sentAt && (
+                                  <div className="text-[10px] text-gray-500 mt-1.5">
+                                    {new Date(s.sentAt).toLocaleString()}
+                                    {s.attempts > 1 ? ` · ${s.attempts} attempts` : ''}
+                                  </div>
+                                )}
+                                {!s.sent && s.error && (
+                                  <div className="text-[10px] text-rose-600 mt-1.5 break-words">
+                                    Last error: {s.error}
+                                  </div>
+                                )}
+                                {canSend && (
+                                  <div className="mt-2 flex items-center justify-end">
+                                    <button
+                                      type="button"
+                                      onClick={() => sendOnboardingStep(s.key, { force: s.sent })}
+                                      disabled={busy}
+                                      title={s.sent
+                                        ? 'Already delivered — send this email again'
+                                        : 'Send this email to the client now, ignoring the schedule'}
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                      {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                      {busy ? 'Sending…' : s.sent ? 'Send again' : 'Send now'}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    </>
+                  )}
                 </CollapsibleSection>
               )}
 
