@@ -133,6 +133,10 @@ export const MODAL_SECTION_DEFAULTS = {
   gmail: false,
   analysis: false,
   milestones: false,
+  // Open by default: the whole point of this panel is that an operator NOTICES
+  // an onboarding email that never went out. Collapsing it persists per user,
+  // so anyone who doesn't want it keeps it shut.
+  onboardingMail: true,
   emails: false,
   profile: false,
   attachments: false,
