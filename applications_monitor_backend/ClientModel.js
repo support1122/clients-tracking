@@ -235,6 +235,13 @@ export const ClientSchema = new mongoose.Schema({
     trim: true,
     default: ""
   },
+  crmEmail: {
+    type: String,
+    required: false,
+    lowercase: true,
+    trim: true,
+    default: ""
+  },
   // Dynamic per-plan milestone tracking. Keys come from PLAN_MILESTONES
   // ('started', 'count_250', 'count_350', 'count_700', 'completed').
   // Each value: { sent: Boolean, at: Date, count: Number }.
