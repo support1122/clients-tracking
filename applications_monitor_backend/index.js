@@ -953,6 +953,7 @@ export const createOrUpdateClient = async (req, res) => {
       modeOfPayment,
       status,
       paymentEmail,
+      oldEmail,
     } = req.body;
 
     const emailLower = email.toLowerCase();
@@ -1074,6 +1075,7 @@ export const createOrUpdateClient = async (req, res) => {
         amountPaidDate: amountPaidDate || " ",
         modeOfPayment: modeOfPayment || "paypal",
         paymentEmail: paymentEmailNorm,
+        crmEmail: typeof oldEmail === 'string' ? oldEmail.trim().toLowerCase() : '',
         status: status !== undefined && status !== null && status !== '' ? status : "active",
         isPaused: true,
         onboardingPhase: true,
