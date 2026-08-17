@@ -954,6 +954,7 @@ export const createOrUpdateClient = async (req, res) => {
       status,
       paymentEmail,
       oldEmail,
+      currency: currencyFromBody,
     } = req.body;
 
     const emailLower = email.toLowerCase();
@@ -980,12 +981,15 @@ export const createOrUpdateClient = async (req, res) => {
               : null)
       : null;
 
-    // Detect currency from amountPaid prefix (e.g. "CAD199" → "CAD", "$199" → "USD", "₹199" → "INR", "£199" → "GBP")
+    // Resolve currency: use explicit value from body first, then detect from amountPaid prefix
+    const currencySymbolMap = { "$": "USD", "₹": "INR", "£": "GBP", "CAD": "CAD" };
     const amountPaidStr = String(amountPaid || "");
-    const detectedCurrency = amountPaidStr.toUpperCase().startsWith("CAD") ? "CAD"
+    const amountDetected = amountPaidStr.toUpperCase().startsWith("CAD") ? "CAD"
       : amountPaidStr.startsWith("₹") ? "INR"
       : amountPaidStr.startsWith("£") ? "GBP"
-      : "USD";
+      : amountPaidStr.startsWith("$") ? "USD"
+      : null;
+    const detectedCurrency = (currencySymbolMap[currencyFromBody] || currencyFromBody?.toUpperCase() || amountDetected || "USD");
 
     const userData = {
       name,
