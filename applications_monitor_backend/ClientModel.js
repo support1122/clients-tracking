@@ -169,7 +169,7 @@ export const ClientSchema = new mongoose.Schema({
   /** Client Job Analysis: USA vs Canada (optional until set). */
   clientCountry: {
     type: String,
-    enum: ["USA", "Canada"],
+    enum: ["USA", "Canada", "UK"],
     required: false,
     default: undefined,
   },

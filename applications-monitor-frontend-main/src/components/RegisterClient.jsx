@@ -22,7 +22,8 @@ const RegisterClient = () => {
     // standard 30/day target so every new client is capped by default; the
     // operator can change it. (Clearing it falls back to the same 30 default
     // that dailyCapGuard enforces server-side.)
-    targetJobCount: '30'
+    targetJobCount: '30',
+    clientCountry: ''
   });
 
   const [dashboardManagers, setDashboardManagers] = useState([]);
@@ -222,7 +223,8 @@ const RegisterClient = () => {
       paymentEmail: (formData.paymentEmail || "").toLowerCase().trim(),
       status: "active",
       clientNumber: formData.clientNumber ? parseInt(formData.clientNumber.trim(), 10) : undefined,
-      currentPath: window.location.pathname, // 👈 this captures /monitor-clients or /clients/new
+      ...(formData.clientCountry && { clientCountry: formData.clientCountry }),
+      currentPath: window.location.pathname,
 
     };
 
@@ -762,6 +764,24 @@ const RegisterClient = () => {
                       className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-amber-500 focus:border-amber-500 border-gray-300"
                     />
                     <p className="text-xs text-gray-500 mt-1">Caps the total number of jobs operators (scraper + extension) can push to this client's tracker. Once reached, /addjob refuses with TARGET_REACHED. Defaults to 30 if left empty.</p>
+                  </div>
+
+                  {/* Client Country */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Client Country
+                    </label>
+                    <select
+                      name="clientCountry"
+                      value={formData.clientCountry}
+                      onChange={handleInputChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="">Select Country</option>
+                      <option value="UK">🇬🇧 UK</option>
+                      <option value="USA">🇺🇸 USA</option>
+                      <option value="Canada">🇨🇦 Canada</option>
+                    </select>
                   </div>
 
                   {/* Submit Button */}
