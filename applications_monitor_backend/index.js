@@ -3691,7 +3691,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const pLA = await pGetAnalysisCache('__lastAppliedOperator__');
       if (pLA && pLA.fresh) cachedLastApplied = pLA.val;
     }
-    const [overall, appliedOnDate, removedOnDate, removedByAiOnDate, lastAppliedAgg, clientInfo, aiRemovedAgg] = await Promise.all([
+    const [overall, appliedOnDate, removedOnDate, removedByAiOnDate, lastAppliedAgg, clientInfo, aiRemovedAgg, firstAppliedAgg] = await Promise.all([
       // 1) Overall counts per client, grouped on the RAW status. No regex/$switch
       //    in the pipeline — Mongo can satisfy this from the { userID:1, currentStatus:1 }
       //    index (covered scan, no document fetch). Buckets are folded in JS below.
@@ -3793,7 +3793,20 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
           }
         },
         { $project: { _id: 0, userID: '$_id', count: 1, todayCount: 1 } }
-      ])
+      ]),
+      // 7) FIRST application per client — powers the "Days Since 1st Apply"
+      //    column. appliedDate is a free-form STRING (en-US locale, DD/MM and
+      //    ISO all appear in the data), so Mongo cannot order it correctly and
+      //    $min on it would compare lexicographically. Instead take the
+      //    earliest-created applied job by _id — ObjectIds are monotonic in
+      //    creation time — and parse its appliedDate in JS below, falling back
+      //    to the ObjectId's own timestamp when the string is unparseable.
+      JobModel.aggregate([
+        { $match: { appliedDate: { $nin: [null, '', ' '] } } },
+        { $sort: { _id: 1 } },
+        { $group: { _id: '$userID', firstId: { $first: '$_id' }, firstAppliedDate: { $first: '$appliedDate' } } },
+        { $project: { _id: 0, userID: '$_id', firstId: 1, firstAppliedDate: 1 } }
+      ], { allowDiskUse: true })
     ]);
 
     // Cache last-applied operator separately with longer TTL (5 min)
@@ -3803,6 +3816,25 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     }
 
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
+    // email -> { at: Date, days: number } for the client's FIRST application.
+    // Days are whole IST calendar days elapsed, floored, so an application made
+    // earlier today reads as 0 rather than rounding up to 1.
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    const nowMs = Date.now();
+    const firstAppliedMap = new Map();
+    for (const r of (firstAppliedAgg || [])) {
+      const email = String(r.userID || '').toLowerCase();
+      if (!email) continue;
+      // Prefer the recorded appliedDate; fall back to when the job doc was
+      // created (ObjectId timestamp) if that string can't be parsed.
+      let at = parseFlexibleDate(r.firstAppliedDate);
+      if (!at && r.firstId?.getTimestamp) {
+        try { at = r.firstId.getTimestamp(); } catch { at = null; }
+      }
+      if (!at) continue;
+      const days = Math.max(0, Math.floor((nowMs - at.getTime()) / MS_PER_DAY));
+      firstAppliedMap.set(email, { at, days });
+    }
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const removedByAiMap = new Map(removedByAiOnDate.map(r => [r.userID, r.count]));
     const aiRemovedMap = new Map(
@@ -3913,6 +3945,10 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
           pausedAt: client.pausedAt ?? null
         }),
         clientCountry: client.clientCountry ?? null,
+        // Whole days since this client's FIRST application went out. null when
+        // they have never applied — the UI must show a dash, not "0 days".
+        firstAppliedAt: firstAppliedMap.get(email.toLowerCase())?.at?.toISOString() ?? null,
+        daysSinceFirstApplication: firstAppliedMap.get(email.toLowerCase())?.days ?? null,
         dashboardTeamLeadName: client.dashboardTeamLeadName || '',
         lastAppliedOperatorName: lastAppliedOperatorMap.get(email.toLowerCase()) || '',
         referrals: referralMeta.referrals || [],
