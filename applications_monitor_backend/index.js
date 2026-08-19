@@ -955,6 +955,7 @@ export const createOrUpdateClient = async (req, res) => {
       paymentEmail,
       oldEmail,
       currency: currencyFromBody,
+      clientCountry,
     } = req.body;
 
     const emailLower = email.toLowerCase();
@@ -1080,6 +1081,7 @@ export const createOrUpdateClient = async (req, res) => {
         modeOfPayment: modeOfPayment || "paypal",
         paymentEmail: paymentEmailNorm,
         crmEmail: typeof oldEmail === 'string' ? oldEmail.trim().toLowerCase() : '',
+        ...(clientCountry && { clientCountry }),
         status: status !== undefined && status !== null && status !== '' ? status : "active",
         isPaused: true,
         onboardingPhase: true,
@@ -4789,8 +4791,8 @@ const updateClientCountry = async (req, res) => {
       ).select('email clientCountry').lean();
     } else {
       const v = String(raw).trim();
-      if (!['USA', 'Canada'].includes(v)) {
-        return res.status(400).json({ error: 'clientCountry must be USA or Canada' });
+      if (!['USA', 'Canada', 'UK'].includes(v)) {
+        return res.status(400).json({ error: 'clientCountry must be USA, Canada, or UK' });
       }
       client = await ClientModel.findOneAndUpdate(
         { email: emailLower },
