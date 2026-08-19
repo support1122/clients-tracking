@@ -45,6 +45,90 @@ function formatClientLabel(row) {
 // instead of re-running it for every row on every render (typing in the scrape
 // box, toggling sort, etc. used to recompute this for all 500+ rows).
 const WARN_OFFSET = 50;
+// Row classification shared by the header filters and the cells that render
+// them. Kept in one place on purpose: the filter and the badge must agree, and
+// they diverge the moment either side re-derives the rule inline.
+function rowClientStatus(r) {
+  const s = r.status;
+  if (s === undefined || s === null || String(s).trim() === '') return 'active';
+  return String(s).toLowerCase().trim() === 'inactive' ? 'inactive' : 'active';
+}
+// Tri-state shown in the Pause/Unpause/New column. onboardingPhase wins over
+// isPaused — a client still onboarding reads as "New", never "Paused".
+function rowPhase(r) {
+  return r.onboardingPhase ? 'new' : r.isPaused ? 'paused' : 'unpaused';
+}
+// The Paused column only badges an explicitly paused client, so a client in
+// onboarding shows a dash there even though isPaused is true.
+function rowPausedState(r) {
+  return r.isPaused && !r.onboardingPhase ? 'paused' : 'not_paused';
+}
+
+// One dropdown for every filterable column header. Written once so the four
+// filters stay visually identical and a fifth is a two-line change. The clear
+// button only appears once a value is chosen, matching the original
+// "Last applied by" control this was factored out of.
+function HeaderFilter({ label, value, onChange, options, title }) {
+  return (
+    // Stacked, not side by side: a label+select on one line forced every
+    // filtered column to roughly double width, which pushed the count columns
+    // off screen. The select sits under its own title and is width-capped, so
+    // a long operator name can't stretch the column either.
+    <div className="flex flex-col items-start gap-1">
+      <span className="whitespace-nowrap">{label}</span>
+      <div className="flex items-center gap-1">
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          className="w-[104px] max-w-full px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500 truncate"
+          title={title}
+        >
+          <option value="">All</option>
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        {value && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onChange(''); }}
+            className="px-1 py-0.5 text-[10px] leading-none text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300"
+            title="Clear filter"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Duration since a client's first application, rendered in months.
+//
+// Uses the average month (30.4375 days = 365.25/12) rather than 30, so a full
+// calendar quarter reads "3 months" instead of drifting to 3.5. Rounded to the
+// nearest half so the column stays scannable: 1 month, 1.5 months, 3 months.
+//
+// Under 30 days it falls back to days. Everything in that range would round to
+// "0 months" or "0.5 months", which tells an operator nothing about a client
+// who started last week.
+const AVG_DAYS_PER_MONTH = 30.4375;
+const AVG_DAYS_PER_YEAR = 365.25;
+// Drop the ".0" so a whole unit reads "3 months", not "3.0 months".
+const halfStep = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+function formatSinceFirstApply(days) {
+  if (days == null || !Number.isFinite(days)) return null;
+  if (days < 30) return `${days} ${days === 1 ? 'day' : 'days'}`;
+  const months = Math.round((days / AVG_DAYS_PER_MONTH) * 2) / 2;
+  if (months < 12) return `${halfStep(months)} ${months === 1 ? 'month' : 'months'}`;
+  // Switch on ROUNDED months, not on a raw day count: 360 days rounds to 12
+  // months, so showing "12 months" there while 365 shows "1 year" would read as
+  // a jump. Anything that rounds to a full year is expressed in years.
+  const years = Math.round((days / AVG_DAYS_PER_YEAR) * 2) / 2;
+  return `${halfStep(years)} ${years === 1 ? 'year' : 'years'}`;
+}
+
 function computeRowDerived(r) {
   const totalApplications =
     Number(r.saved || 0) + Number(r.applied || 0) + Number(r.interviewing || 0) +
@@ -62,10 +146,7 @@ function computeRowDerived(r) {
   const exceeded = totalLimit !== Infinity && totalApplications >= totalLimit;
   const warnThreshold = (totalLimit === Infinity || isPrime) ? null : Math.max(1, totalLimit - WARN_OFFSET);
   const nearCap = !exceeded && warnThreshold != null && totalApplications >= warnThreshold;
-  const s = r.status;
-  const normalizedClientStatus = (s === undefined || s === null || String(s).trim() === '')
-    ? 'active'
-    : (String(s).toLowerCase().trim() === 'inactive' ? 'inactive' : 'active');
+  const normalizedClientStatus = rowClientStatus(r);
   const isClientRowActive = normalizedClientStatus === 'active';
   const isActiveWithNoSaved = isClientRowActive && Number(r.saved || 0) === 0;
   return {
@@ -86,6 +167,10 @@ export default function ClientJobAnalysis() {
   const [mailConn, setMailConn] = useState({ connected: new Set(), reconnect: new Set() });
   const [loading, setLoading] = useState(false);
   const [sortDir, setSortDir] = useState('desc');
+  // Sort on "Since 1st Apply": null = default ordering (active first, then
+  // client number). Cycles null -> desc -> asc -> null so an operator can get
+  // back to the default without reloading.
+  const [sinceSortDir, setSinceSortDir] = useState(null);
   const [dashboardManagerNames, setDashboardManagerNames] = useState([]);
   const [savingDashboardManager, setSavingDashboardManager] = useState(new Set());
   const [savingStatus, setSavingStatus] = useState(new Set());
@@ -103,6 +188,9 @@ export default function ClientJobAnalysis() {
   const batchSourceRef = useRef(null); // active EventSource
   const [userRole, setUserRole] = useState(null);
   const [lastAppliedByFilter, setLastAppliedByFilter] = useState(''); // Filter for "Last applied by" operator name
+  const [statusFilter, setStatusFilter] = useState('');   // '' | active | inactive
+  const [phaseFilter, setPhaseFilter] = useState('');     // '' | new | paused | unpaused
+  const [pausedFilter, setPausedFilter] = useState('');   // '' | paused | not_paused
   const [searchQuery, setSearchQuery] = useState('');
   const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
   const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
@@ -578,6 +666,9 @@ export default function ClientJobAnalysis() {
       const filterLower = lastAppliedByFilter.toLowerCase();
       filtered = rows.filter(r => (r.lastAppliedOperatorName || '').toLowerCase() === filterLower);
     }
+    if (statusFilter) filtered = filtered.filter(r => rowClientStatus(r) === statusFilter);
+    if (phaseFilter) filtered = filtered.filter(r => rowPhase(r) === phaseFilter);
+    if (pausedFilter) filtered = filtered.filter(r => rowPausedState(r) === pausedFilter);
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(r => {
@@ -589,6 +680,20 @@ export default function ClientJobAnalysis() {
       });
     }
     const sorted = [...filtered].sort((a, b) => {
+      // An explicit click on "Since 1st Apply" outranks everything, including
+      // the date-driven Applied-on-date sort. Clients who have never applied
+      // sort last in both directions — they have no duration to compare, and
+      // burying them at one end is more useful than letting them lead.
+      if (sinceSortDir) {
+        const av = a?.daysSinceFirstApplication;
+        const bv = b?.daysSinceFirstApplication;
+        const aNull = av == null, bNull = bv == null;
+        if (aNull || bNull) {
+          if (aNull && bNull) return 0;
+          return aNull ? 1 : -1;
+        }
+        if (av !== bv) return sinceSortDir === 'asc' ? av - bv : bv - av;
+      }
       if (date) {
         const av = Number(a?.appliedOnDate || 0);
         const bv = Number(b?.appliedOnDate || 0);
@@ -606,7 +711,7 @@ export default function ClientJobAnalysis() {
     // Attach derived cap/status math once per data change so per-render row
     // output stays cheap.
     return sorted.map((r) => ({ ...r, _d: computeRowDerived(r) }));
-  }, [rows, date, sortDir, lastAppliedByFilter, searchQuery, getSortingNumber]);
+  }, [rows, date, sortDir, sinceSortDir, lastAppliedByFilter, statusFilter, phaseFilter, pausedFilter, searchQuery, getSortingNumber]);
 
   // ── Chunked rendering: mount ROW_CHUNK rows at a time, growing as a sentinel
   // scrolls into view. Bounds initial paint cost + DOM size for big tables. ──
@@ -715,45 +820,59 @@ export default function ClientJobAnalysis() {
         <div className="px-4 py-3 overflow-x-auto">
           <table className="w-full divide-y divide-gray-200 text-xs">
             <thead className="bg-slate-50">
-              <tr>
+              <tr className="align-top">
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700" title="Whether this client's Google mail is connected. Auto-detected; updates on Refresh.">Google Mail</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Status</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                  <HeaderFilter
+                    label="Status"
+                    value={statusFilter}
+                    onChange={setStatusFilter}
+                    title="Filter by client status"
+                    options={[
+                      { value: 'active', label: 'Active' },
+                      { value: 'inactive', label: 'Inactive' }
+                    ]}
+                  />
+                </th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Country</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Pause/Unpause/New</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Paused</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                  <HeaderFilter
+                    label="Pause/Unpause/New"
+                    value={phaseFilter}
+                    onChange={setPhaseFilter}
+                    title="Filter by onboarding / pause phase"
+                    options={[
+                      { value: 'new', label: 'New' },
+                      { value: 'paused', label: 'Paused' },
+                      { value: 'unpaused', label: 'Unpaused' }
+                    ]}
+                  />
+                </th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                  <HeaderFilter
+                    label="Paused"
+                    value={pausedFilter}
+                    onChange={setPausedFilter}
+                    title="Filter by whether the client is currently paused. Clients still in onboarding count as Not paused here, matching the badge in this column."
+                    options={[
+                      { value: 'paused', label: 'Paused' },
+                      { value: 'not_paused', label: 'Not paused' }
+                    ]}
+                  />
+                </th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Plan</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-                  <div className="flex items-center gap-2">
-                    <span>Last applied by</span>
-                    <select
-                      value={lastAppliedByFilter}
-                      onChange={(e) => setLastAppliedByFilter(e.target.value)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="px-1.5 py-0.5 text-[10px] border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                      title="Filter by operator"
-                    >
-                      <option value="">All</option>
-                      {uniqueOperatorNames.map((name) => (
-                        <option key={name} value={name}>
-                          {capitalizeOperatorName(name)}
-                        </option>
-                      ))}
-                    </select>
-                    {lastAppliedByFilter && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setLastAppliedByFilter('');
-                        }}
-                        className="px-1 py-0.5 text-[10px] text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300"
-                        title="Clear filter"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
+                  <HeaderFilter
+                    label="Last applied by"
+                    value={lastAppliedByFilter}
+                    onChange={setLastAppliedByFilter}
+                    title="Filter by operator"
+                    options={uniqueOperatorNames.map((name) => ({
+                      value: name,
+                      label: capitalizeOperatorName(name)
+                    }))}
+                  />
                 </th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Dashboard Mgr</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Total Apps</th>
@@ -772,11 +891,35 @@ export default function ClientJobAnalysis() {
                     {date ? convertToDMY(date) : 'today'}
                   </span>
                 </th>
-                <th
-                  className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700"
-                  title="Whole days elapsed since this client's FIRST application was submitted. Blank when they have never applied."
-                >
-                  Days Since 1st Apply
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                  <div className="flex flex-col items-start gap-1">
+                    <span
+                      className="whitespace-nowrap"
+                      title="Time elapsed since this client's FIRST application was submitted: days for the first month, then months, then years. Blank when they have never applied."
+                    >
+                      Since 1st Apply
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSinceSortDir((prev) => (prev === null ? 'desc' : prev === 'desc' ? 'asc' : null))
+                      }
+                      title={
+                        sinceSortDir === null
+                          ? 'Sort by longest running first'
+                          : sinceSortDir === 'desc'
+                            ? 'Sorted longest first — click for shortest first'
+                            : 'Sorted shortest first — click to clear'
+                      }
+                      className={`px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal rounded-md border ${
+                        sinceSortDir
+                          ? 'border-indigo-400 bg-indigo-50 text-indigo-700'
+                          : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      {sinceSortDir === 'asc' ? '▲ Shortest' : sinceSortDir === 'desc' ? '▼ Longest' : '↕ Sort'}
+                    </button>
+                  </div>
                 </th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                   <div className="flex items-center gap-2">
@@ -825,7 +968,11 @@ export default function ClientJobAnalysis() {
               ) : processedRows.length === 0 ? (
                 <tr>
                   <td colSpan={isAdmin ? 19 : 18} className="px-2 py-8 text-center text-gray-500 text-sm">
-                    {searchQuery.trim() ? `No clients match "${searchQuery}"` : lastAppliedByFilter ? 'No clients found for selected operator' : 'No data'}
+                    {searchQuery.trim()
+                      ? `No clients match "${searchQuery}"`
+                      : (lastAppliedByFilter || statusFilter || phaseFilter || pausedFilter)
+                        ? 'No clients match the selected filters'
+                        : 'No data'}
                   </td>
                 </tr>
               ) : visibleRows.map((r, idx) => {
@@ -1051,9 +1198,12 @@ export default function ClientJobAnalysis() {
                       ) : (
                         <span
                           className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] bg-slate-100 border border-slate-300 text-slate-700 whitespace-nowrap"
-                          title={r.firstAppliedAt ? `First applied ${new Date(r.firstAppliedAt).toLocaleDateString()}` : undefined}
+                          title={[
+                            r.firstAppliedAt ? `First applied ${new Date(r.firstAppliedAt).toLocaleDateString()}` : null,
+                            `${r.daysSinceFirstApplication} day${r.daysSinceFirstApplication === 1 ? '' : 's'}`
+                          ].filter(Boolean).join(' · ')}
                         >
-                          {r.daysSinceFirstApplication} {r.daysSinceFirstApplication === 1 ? 'day' : 'days'}
+                          {formatSinceFirstApply(r.daysSinceFirstApplication)}
                         </span>
                       )}
                     </td>

@@ -3795,14 +3795,29 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         { $project: { _id: 0, userID: '$_id', count: 1, todayCount: 1 } }
       ]),
       // 7) FIRST application per client — powers the "Days Since 1st Apply"
-      //    column. appliedDate is a free-form STRING (en-US locale, DD/MM and
-      //    ISO all appear in the data), so Mongo cannot order it correctly and
-      //    $min on it would compare lexicographically. Instead take the
-      //    earliest-created applied job by _id — ObjectIds are monotonic in
-      //    creation time — and parse its appliedDate in JS below, falling back
-      //    to the ObjectId's own timestamp when the string is unparseable.
+      //    column.
+      //
+      //    Match on EITHER signal. appliedDate is only stamped by newer code
+      //    paths, so plenty of long-standing clients have hundreds of applied
+      //    jobs and not one appliedDate; matching on that field alone left the
+      //    column blank for exactly the clients it matters most for. The status
+      //    test mirrors classifyStatus() above (s.includes('appl')), which is
+      //    what the Applied column counts, and it also catches jobs applied and
+      //    later removed — those were still applications that went out.
+      //
+      //    appliedDate is a free-form STRING, so Mongo can only order it
+      //    lexicographically. Take the earliest-created matching job by _id
+      //    (ObjectIds are monotonic in creation time) and resolve its date in
+      //    JS below.
       JobModel.aggregate([
-        { $match: { appliedDate: { $nin: [null, '', ' '] } } },
+        {
+          $match: {
+            $or: [
+              { appliedDate: { $nin: [null, '', ' '] } },
+              { currentStatus: { $regex: /appl/i } }
+            ]
+          }
+        },
         { $sort: { _id: 1 } },
         { $group: { _id: '$userID', firstId: { $first: '$_id' }, firstAppliedDate: { $first: '$appliedDate' } } },
         { $project: { _id: 0, userID: '$_id', firstId: 1, firstAppliedDate: 1 } }
@@ -3821,13 +3836,34 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     // earlier today reads as 0 rather than rounding up to 1.
     const MS_PER_DAY = 24 * 60 * 60 * 1000;
     const nowMs = Date.now();
+    // appliedDate is written DAY-first (verified against the collection: 2996
+    // rows are unambiguously D/M — first component > 12 — and zero are M/D).
+    // parseFlexibleDate() is wrong for it: that helper tries new Date() first,
+    // which reads "1/8/2026" as 8 January instead of 1 August whenever both
+    // components are <= 12, silently shifting most dates by months.
+    const parseDayFirstDate = (val) => {
+      const str = String(val ?? '').trim();
+      if (!str || str === ' ') return null;
+      const m = str.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+      if (m) {
+        const day = Number(m[1]), mon = Number(m[2]), yr = Number(m[3]);
+        if (day >= 1 && day <= 31 && mon >= 1 && mon <= 12) {
+          const dt = new Date(Date.UTC(yr, mon - 1, day));
+          if (!Number.isNaN(dt.getTime())) return dt;
+        }
+      }
+      const native = new Date(str);
+      return Number.isNaN(native.getTime()) ? null : native;
+    };
     const firstAppliedMap = new Map();
     for (const r of (firstAppliedAgg || [])) {
       const email = String(r.userID || '').toLowerCase();
       if (!email) continue;
-      // Prefer the recorded appliedDate; fall back to when the job doc was
-      // created (ObjectId timestamp) if that string can't be parsed.
-      let at = parseFlexibleDate(r.firstAppliedDate);
+      // Prefer the stamped appliedDate; otherwise use when the job doc itself
+      // was created. dateAdded is NOT used as a fallback — it is written in
+      // mixed orientations (6564 day-first vs 1688 month-first rows), so it
+      // cannot be parsed reliably. The ObjectId timestamp always can.
+      let at = parseDayFirstDate(r.firstAppliedDate);
       if (!at && r.firstId?.getTimestamp) {
         try { at = r.firstId.getTimestamp(); } catch { at = null; }
       }
@@ -3835,6 +3871,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const days = Math.max(0, Math.floor((nowMs - at.getTime()) / MS_PER_DAY));
       firstAppliedMap.set(email, { at, days });
     }
+    console.log(`[client-job-analysis] first-apply resolved for ${firstAppliedMap.size}/${(firstAppliedAgg || []).length} client(s)`);
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const removedByAiMap = new Map(removedByAiOnDate.map(r => [r.userID, r.count]));
     const aiRemovedMap = new Map(
