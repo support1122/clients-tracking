@@ -91,11 +91,10 @@ export default function ClientJobAnalysis() {
   const [savingStatus, setSavingStatus] = useState(new Set());
   const [savingPause, setSavingPause] = useState(new Set());
   const [savingCountry, setSavingCountry] = useState(new Set());
-  // Scrape-column state: per-email count inputs, in-flight set, inline errors.
+  // Per-client scrape counts, loaded from the scraper service on mount. The
+  // per-row Scrape column that used to edit them is gone; these now only seed
+  // the "Scrape All" modal, where each count is still editable before running.
   const [scrapeCountByEmail, setScrapeCountByEmail] = useState({});
-  const [scrapingEmails, setScrapingEmails] = useState(new Set());
-  const [scrapeErrors, setScrapeErrors] = useState({});
-  const scrapeSaveTimers = useRef({}); // email → debounce timeout
   // Batch ("Scrape All") modal state.
   const [batchModalOpen, setBatchModalOpen] = useState(false);
   const [batchConfirmEligible, setBatchConfirmEligible] = useState([]); // [{email,name,count}]
@@ -253,23 +252,6 @@ export default function ClientJobAnalysis() {
     })();
   }, [userRole]);
 
-  // persistScrapeCount: debounced PUT to the scraper service. Runs on each
-  // input change; skips invalid values silently (the visible validation
-  // happens when the admin hits Scrape).
-  const persistScrapeCount = useCallback((email, rawValue) => {
-    const n = Number.parseInt(rawValue, 10);
-    if (!Number.isInteger(n) || n < 1 || n > 50) return;
-    clearTimeout(scrapeSaveTimers.current[email]);
-    scrapeSaveTimers.current[email] = setTimeout(() => {
-      fetch(`${SCRAPER_BASE}/api/client-settings/${encodeURIComponent(email)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scrapeCount: n }),
-      }).catch(() => {
-        /* best-effort; admin can still click Scrape */
-      });
-    }, 400);
-  }, []);
 
   const dashboardSelectOptions = useMemo(
     () =>
@@ -448,61 +430,6 @@ export default function ClientJobAnalysis() {
     }
   };
 
-  // handleScrape: admin-only. Kicks the internal JR scraper (DASH/scraper
-  // service on SCRAPER_BASE) to find + push `count` jobs into the client's
-  // dashboard. Pipeline runs fire-and-forget on that service; completion +
-  // error alerts already go to the ops Discord channel.
-  const handleScrape = useCallback(async (email, clientName, count) => {
-    if (userRole !== 'admin') {
-      toast.error('Only admins can trigger scrapes');
-      return;
-    }
-    const n = Number.parseInt(count, 10);
-    if (!Number.isInteger(n) || n < 1 || n > 50) {
-      setScrapeErrors(prev => ({ ...prev, [email]: 'Count 1–50' }));
-      return;
-    }
-    setScrapeErrors(prev => {
-      const next = { ...prev };
-      delete next[email];
-      return next;
-    });
-    setScrapingEmails(prev => new Set(prev).add(email));
-    try {
-      const res = await fetch(`${SCRAPER_BASE}/api/runs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clientEmail: email,
-          clientName: clientName || '',
-          count: n,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.run?.id) {
-        const shortMsg = data?.error === 'COOLDOWN'
-          ? 'JR cooldown active'
-          : data?.error === 'RESUME_MISSING'
-            ? 'No resume attached'
-            : (data?.error || data?.message || `HTTP ${res.status}`);
-        setScrapeErrors(prev => ({ ...prev, [email]: shortMsg }));
-        toast.error(`Scrape: ${shortMsg}`);
-        return;
-      }
-      toast.success(`Scrape started (${n}) — Discord will post on completion`);
-    } catch (e) {
-      // Most common here: scraper service not reachable (CORS / offline).
-      const shortMsg = /failed to fetch/i.test(e.message) ? 'Scraper offline' : e.message;
-      setScrapeErrors(prev => ({ ...prev, [email]: shortMsg }));
-      toast.error(`Scrape: ${shortMsg}`);
-    } finally {
-      setScrapingEmails(prev => {
-        const next = new Set(prev);
-        next.delete(email);
-        return next;
-      });
-    }
-  }, [userRole]);
 
   // --- Scrape All (batch) handlers --------------------------------------
 
@@ -845,11 +772,12 @@ export default function ClientJobAnalysis() {
                     {date ? convertToDMY(date) : 'today'}
                   </span>
                 </th>
-                {isAdmin && (
-                  <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700" title="Admin: trigger internal JR scraper for this client. Completion + errors post to Discord.">
-                    Scrape
-                  </th>
-                )}
+                <th
+                  className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700"
+                  title="Whole days elapsed since this client's FIRST application was submitted. Blank when they have never applied."
+                >
+                  Days Since 1st Apply
+                </th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                   <div className="flex items-center gap-2">
                     <span className="font-semibold">
@@ -890,9 +818,7 @@ export default function ClientJobAnalysis() {
                     {/* Removed by AI. The skeleton was already one cell short of the
                         header row before this column existed. */}
                     <td className="px-2 py-2"><div className="h-3.5 bg-amber-200/80 rounded animate-pulse w-8 ml-auto" /></td>
-                    {isAdmin && (
-                      <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-20" /></td>
-                    )}
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-14 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-10 ml-auto" /></td>
                   </tr>
                 ))
@@ -1119,50 +1045,18 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1 text-right font-semibold text-amber-700">
                       {r.removedByAI || 0}
                     </td>
-                    {isAdmin && (
-                      <td className="px-2 py-1">
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="number"
-                            min={1}
-                            max={50}
-                            value={scrapeCountByEmail[r.email] ?? ''}
-                            onChange={(e) => {
-                              setScrapeCountByEmail(prev => ({ ...prev, [r.email]: e.target.value }));
-                              persistScrapeCount(r.email, e.target.value);
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                const n = scrapeCountByEmail[r.email] ?? '';
-                                handleScrape(r.email, r.name, n);
-                              }
-                            }}
-                            disabled={scrapingEmails.has(r.email)}
-                            placeholder="N"
-                            title="Number of jobs to scrape (1–50)"
-                            className="w-12 px-1.5 py-0.5 text-[11px] border border-gray-300 rounded-md focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleScrape(r.email, r.name, scrapeCountByEmail[r.email] ?? '')}
-                            disabled={scrapingEmails.has(r.email)}
-                            title="Trigger internal JR scraper. Completion + errors post to Discord."
-                            className="px-2 py-0.5 text-[11px] bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 inline-flex items-center gap-1"
-                          >
-                            {scrapingEmails.has(r.email) ? (
-                              <><Loader2 className="w-3 h-3 animate-spin" /> …</>
-                            ) : (
-                              'Scrape'
-                            )}
-                          </button>
-                        </div>
-                        {scrapeErrors[r.email] && (
-                          <div className="text-[10px] text-red-600 mt-0.5 truncate max-w-[160px]" title={scrapeErrors[r.email]}>
-                            ⚠ {scrapeErrors[r.email]}
-                          </div>
-                        )}
-                      </td>
-                    )}
+                    <td className="px-2 py-1 text-right">
+                      {r.daysSinceFirstApplication == null ? (
+                        <span className="text-slate-400" title="No application submitted yet">—</span>
+                      ) : (
+                        <span
+                          className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] bg-slate-100 border border-slate-300 text-slate-700 whitespace-nowrap"
+                          title={r.firstAppliedAt ? `First applied ${new Date(r.firstAppliedAt).toLocaleDateString()}` : undefined}
+                        >
+                          {r.daysSinceFirstApplication} {r.daysSinceFirstApplication === 1 ? 'day' : 'days'}
+                        </span>
+                      )}
+                    </td>
                     <td className={`px-2 py-1 font-semibold text-right ${date ? (r.appliedOnDate > 0 ? 'text-blue-800' : 'text-slate-500') : ''}`}>
                       {date ? (
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] ${r.appliedOnDate > 0 ? 'bg-blue-100 border border-blue-300' : 'bg-slate-100 border border-slate-300 text-slate-600'}`}>
