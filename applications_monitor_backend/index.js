@@ -3855,7 +3855,15 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const native = new Date(str);
       return Number.isNaN(native.getTime()) ? null : native;
     };
+    // A FIRST application dated in the future is never real. It means the
+    // string was read with the wrong day/month orientation — and because the
+    // day count is floored at 0, that used to surface as a confident "0 days"
+    // rather than as an error. Distrust anything beyond the tolerance and fall
+    // back to the job document's own creation time, which cannot be misread.
+    // Tolerance covers clock skew and the IST/UTC gap, not a genuine mistake.
+    const FUTURE_TOLERANCE_MS = 36 * 60 * 60 * 1000;
     const firstAppliedMap = new Map();
+    let futureRejected = 0;
     for (const r of (firstAppliedAgg || [])) {
       const email = String(r.userID || '').toLowerCase();
       if (!email) continue;
@@ -3864,6 +3872,10 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       // mixed orientations (6564 day-first vs 1688 month-first rows), so it
       // cannot be parsed reliably. The ObjectId timestamp always can.
       let at = parseDayFirstDate(r.firstAppliedDate);
+      if (at && at.getTime() - nowMs > FUTURE_TOLERANCE_MS) {
+        futureRejected++;
+        at = null;
+      }
       if (!at && r.firstId?.getTimestamp) {
         try { at = r.firstId.getTimestamp(); } catch { at = null; }
       }
@@ -3871,7 +3883,10 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const days = Math.max(0, Math.floor((nowMs - at.getTime()) / MS_PER_DAY));
       firstAppliedMap.set(email, { at, days });
     }
-    console.log(`[client-job-analysis] first-apply resolved for ${firstAppliedMap.size}/${(firstAppliedAgg || []).length} client(s)`);
+    console.log(
+      `[client-job-analysis] first-apply resolved for ${firstAppliedMap.size}/${(firstAppliedAgg || []).length} client(s)` +
+      (futureRejected ? ` — ${futureRejected} had a future appliedDate and fell back to the job's creation time` : '')
+    );
     const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
     const removedByAiMap = new Map(removedByAiOnDate.map(r => [r.userID, r.count]));
     const aiRemovedMap = new Map(
