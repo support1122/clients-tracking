@@ -3976,7 +3976,14 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       isPaused: !!c.isPaused,
       onboardingPhase: !!c.onboardingPhase,
       pausedAt: c.pausedAt != null ? new Date(c.pausedAt).toISOString() : null,
-      clientCountry: c.clientCountry === 'USA' || c.clientCountry === 'Canada' ? c.clientCountry : null,
+      clientCountry: (() => {
+        if (c.clientCountry === 'USA' || c.clientCountry === 'Canada' || c.clientCountry === 'UK') return c.clientCountry;
+        const amt = String(c.amountPaid || '');
+        if (amt.startsWith('CAD')) return 'Canada';
+        if (amt.startsWith('£')) return 'UK';
+        if (amt.startsWith('$') || amt.startsWith('₹')) return 'USA';
+        return null;
+      })(),
       addonLimit: (c.addons || []).reduce((sum, a) => {
         const v = parseInt(a.type || a.addonType || 0, 10);
         return sum + (isNaN(v) ? 0 : v);
