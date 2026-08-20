@@ -23,7 +23,31 @@
  *      would happily serve a pre-22:00 entry showing the *previous* window's
  *      counts, which is precisely the two-hour slot when an operator is checking
  *      whether they hit target. Entries must match on BOTH stamps.
+ *
+ *   4. Neither stamp changes when the CODE changes. Adding a field to the row
+ *      shape therefore did nothing for anyone holding a cached entry — the new
+ *      field arrived as undefined and stayed that way until midnight or 22:00
+ *      IST rolled the stamps over. That produced rows which contradicted
+ *      themselves: a client passing the "under target" filter (isUnderTarget
+ *      true) while the badge rendered grey (addTargetTracked undefined, so
+ *      falsy), when both are derived from the same flag on the server and
+ *      cannot legitimately disagree. PAYLOAD_VERSION is the third stamp: bump it
+ *      whenever the row or summary shape changes and every stored entry becomes
+ *      unservable immediately, on deploy, rather than at the next day boundary.
  */
+
+/**
+ * Shape version of the /api/analytics/client-job-analysis payload.
+ *
+ * BUMP THIS whenever a field is added to, removed from, or given a new meaning
+ * in a row or in `summary`. Forgetting to is not a crash — it is worse: stale
+ * entries keep being served and the new field silently reads as undefined.
+ *
+ *   1  jobs-added columns (addedToday, addedYesterday, added7dAvg, dailyTarget,
+ *      addShortfall, daysSinceLastAdd), apply recency (appliedToday,
+ *      daysSinceLastApply), attention alerts, and addTargetTracked.
+ */
+export const ANALYSIS_PAYLOAD_VERSION = 1;
 
 /** 'YYYY-MM-DD' for the current IST calendar day. */
 export function istDayStamp(nowMs = Date.now()) {
@@ -41,6 +65,9 @@ export function istDayStamp(nowMs = Date.now()) {
  *                                  field existed are simply treated as stale
  *                                  rather than throwing; they carry no
  *                                  addWindowDay and so can never match.
+ * @param {number} [o.payloadVersion] shape version the caller expects. Optional
+ *                                  for the same reason; when given, an entry
+ *                                  built by older code can never match.
  * @returns {'l1'|'l2-fresh'|'l2-stale'|'compute'}
  */
 export function decideAnalysisCacheAction({
@@ -49,13 +76,16 @@ export function decideAnalysisCacheAction({
   entry = null,
   istDay,
   addWindowDay = null,
+  payloadVersion = null,
 }) {
-  // Both stamps must match. istDay alone is wrong between 22:00 and midnight
-  // IST, when a new add window has opened but the calendar day has not turned.
+  // All three stamps must match. istDay alone is wrong between 22:00 and
+  // midnight IST, when a new add window has opened but the calendar day has not
+  // turned; and neither day stamp moves when the payload SHAPE changes.
   const sameDay = (val) => {
     if (!val || val.istDay !== istDay) return false;
-    if (addWindowDay == null) return true;
-    return val.addWindowDay === addWindowDay;
+    if (addWindowDay != null && val.addWindowDay !== addWindowDay) return false;
+    if (payloadVersion != null && val.payloadVersion !== payloadVersion) return false;
+    return true;
   };
 
   if (!forceFresh && sameDay(memHit)) return 'l1';
