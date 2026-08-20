@@ -4,7 +4,7 @@
 //   * a cached removedByAI must never be served on a different IST day
 //   * a cached addedToday must never be served on a different 22:00-IST add window
 //   * an operator Refresh must never be answered from the stale cache
-import { istDayStamp, decideAnalysisCacheAction } from './analysisCachePolicy.js';
+import { istDayStamp, decideAnalysisCacheAction, ANALYSIS_PAYLOAD_VERSION } from './analysisCachePolicy.js';
 
 let pass = 0, fail = 0;
 const t = (name, got, want) => {
@@ -64,10 +64,33 @@ t('Refresh + PREV window           -> compute',  wdecide({ forceFresh: true, ent
 // stamp ignored, so this file's first 16 assertions keep their exact meaning.
 t('caller omits addWindowDay       -> l1',       decide({ memHit: wval(TODAY, WIN_TODAY) }), 'l1');
 
+console.log('\n--- the payload-shape stamp ---');
+// Neither day stamp moves when the CODE changes, so a deploy that adds a row
+// field used to be invisible to anyone holding a cached entry until midnight.
+// That shipped a row contradicting itself: passing the "under target" filter
+// (isUnderTarget true) while the badge read grey (addTargetTracked undefined).
+const V = ANALYSIS_PAYLOAD_VERSION;
+const pval = (ver) => ({ istDay: TODAY, addWindowDay: WIN_NEXT, payloadVersion: ver, rows: [] });
+const pdecide = (o) => decideAnalysisCacheAction({ istDay: TODAY, addWindowDay: WIN_NEXT, payloadVersion: V, ...o });
+
+t('L1 current version           -> l1',       pdecide({ memHit: pval(V) }), 'l1');
+t('L1 OLDER version             -> compute',  pdecide({ memHit: pval(V - 1) }), 'compute');
+t('L2 FRESH but older version   -> compute',  pdecide({ entry: { val: pval(V - 1), fresh: true } }), 'compute');
+t('L2 stale, older version      -> compute',  pdecide({ entry: { val: pval(V - 1), fresh: false } }), 'compute');
+t('L2 fresh, current version    -> l2-fresh', pdecide({ entry: { val: pval(V), fresh: true } }), 'l2-fresh');
+// The entry that caused the reported bug: right day, right window, but written
+// before the field existed so it carries no version at all.
+t('entry with NO version        -> compute',  pdecide({ entry: { val: wval(TODAY, WIN_NEXT), fresh: true } }), 'compute');
+t('Refresh + older version      -> compute',  pdecide({ forceFresh: true, entry: { val: pval(V - 1), fresh: true } }), 'compute');
+// A caller that passes no version keeps the old two-stamp behaviour, so the
+// assertions above this block still mean exactly what they meant before.
+t('caller omits payloadVersion  -> l1',       wdecide({ memHit: pval(V - 1) }), 'l1');
+
 console.log('\n--- the pre-fix behaviour these replace ---');
 console.log('  old: stale L2 of ANY age was served on Refresh, then refreshed in the background');
 console.log('  old: a fresh L2 computed at 23:59 IST answered requests until 00:01 IST');
 console.log('  old: an entry computed at 21:59 IST served a stale addedToday until midnight');
+console.log('  old: a deploy adding a row field was invisible to cached clients until midnight');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -91,7 +91,7 @@ import {
   pSetAnalysisCache,
   pClearAnalysisCache
 } from './utils/persistentAnalysisCache.js';
-import { istDayStamp, decideAnalysisCacheAction } from './utils/analysisCachePolicy.js';
+import { istDayStamp, decideAnalysisCacheAction, ANALYSIS_PAYLOAD_VERSION } from './utils/analysisCachePolicy.js';
 import { addWindowDayStamp } from './utils/addWindow.js';
 import { computeClientAddStats, emptyAddStat } from './utils/clientAddStats.js';
 import { computeClientApplyStats, emptyApplyStat, APPLY_LOOKBACK_DAYS } from './utils/clientApplyStats.js';
@@ -4137,7 +4137,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     // istDay stamps which IST calendar day removedByAI belongs to; the
     // cache readers below refuse an entry from a different day.
-    const result = { success: true, date: date || null, istDay, addWindowDay, rows, summary };
+    // payloadVersion stamps the row SHAPE. Without it a deploy that adds a field
+    // is invisible to anyone holding a cached entry until the next day boundary.
+    const result = { success: true, date: date || null, istDay, addWindowDay, payloadVersion: ANALYSIS_PAYLOAD_VERSION, rows, summary };
     setAnalysisCache(cacheKey, result);
     pSetAnalysisCache(cacheKey, result, ANALYSIS_CACHE_TTL).catch(() => {});
     return result;
@@ -4155,7 +4157,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const memHit = forceFresh ? null : getAnalysisCache(cacheKey);
     const entry = sameIstDay(memHit) ? null : await pGetAnalysisCache(cacheKey);
 
-    switch (decideAnalysisCacheAction({ forceFresh, memHit, entry, istDay, addWindowDay })) {
+    switch (decideAnalysisCacheAction({ forceFresh, memHit, entry, istDay, addWindowDay, payloadVersion: ANALYSIS_PAYLOAD_VERSION })) {
       case 'l1':
         return serve(memHit, true);
 
