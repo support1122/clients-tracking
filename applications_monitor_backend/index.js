@@ -4086,6 +4086,10 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         // inactive client legitimately gets nothing added, and flagging them red
         // trains operators to ignore the colour.
         isUnderTarget: addStat.isUnderTarget && owesWork,
+        // Whether a daily add target applies at all. Without this the UI cannot
+        // tell "hit the target" apart from "paused, so there was no target" —
+        // both arrive as isUnderTarget:false and used to render identically.
+        addTargetTracked: owesWork,
         lastAddedAt: addStat.lastAddedAt ? new Date(addStat.lastAddedAt).toISOString() : null,
         daysSinceLastAdd: addStat.daysSinceLastAdd,
         addedTodayBy: addStat.todayOperators,
