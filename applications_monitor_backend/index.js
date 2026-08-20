@@ -92,6 +92,10 @@ import {
   pClearAnalysisCache
 } from './utils/persistentAnalysisCache.js';
 import { istDayStamp, decideAnalysisCacheAction } from './utils/analysisCachePolicy.js';
+import { addWindowDayStamp } from './utils/addWindow.js';
+import { computeClientAddStats, emptyAddStat } from './utils/clientAddStats.js';
+import { computeClientApplyStats, emptyApplyStat, APPLY_LOOKBACK_DAYS } from './utils/clientApplyStats.js';
+import { deriveClientAlerts, summariseAlerts } from './utils/clientAlerts.js';
 import { ensureDbIndexes } from './utils/ensureDbIndexes.js';
 import { ExtensionIncentiveComplaintModel } from './ExtensionIncentiveComplaintModel.js';
 import { ExtensionDailyIncentiveModel } from './ExtensionDailyIncentiveModel.js';
@@ -3613,6 +3617,10 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     // payload is only valid on the IST day it was computed. See
     // utils/analysisCachePolicy.js for why freshness alone is not enough.
     const istDay = istDayStamp();
+    // The add columns (addedToday and friends) belong to the 22:00 IST operator
+    // window, which is NOT the calendar day. Both stamps go on the payload and
+    // both are checked before a cached entry is reused.
+    const addWindowDay = addWindowDayStamp();
     const sameIstDay = (val) => !!val && val.istDay === istDay;
     // Explicit operator Refresh (see fetchAnalysis in ClientJobAnalysis.jsx).
     const forceFresh = refresh === true;
@@ -3693,7 +3701,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const pLA = await pGetAnalysisCache('__lastAppliedOperator__');
       if (pLA && pLA.fresh) cachedLastApplied = pLA.val;
     }
-    const [overall, appliedOnDate, removedOnDate, removedByAiOnDate, lastAppliedAgg, clientInfo, aiRemovedAgg, firstAppliedAgg] = await Promise.all([
+    const [overall, appliedOnDate, removedOnDate, removedByAiOnDate, lastAppliedAgg, clientInfo, aiRemovedAgg, firstAppliedAgg, addStats, applyStats] = await Promise.all([
       // 1) Overall counts per client, grouped on the RAW status. No regex/$switch
       //    in the pipeline — Mongo can satisfy this from the { userID:1, currentStatus:1 }
       //    index (covered scan, no document fetch). Buckets are folded in JS below.
@@ -3823,7 +3831,30 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         { $sort: { _id: 1 } },
         { $group: { _id: '$userID', firstId: { $first: '$_id' }, firstAppliedDate: { $first: '$appliedDate' } } },
         { $project: { _id: 0, userID: '$_id', firstId: 1, firstAppliedDate: 1 } }
-      ], { allowDiskUse: true })
+      ], { allowDiskUse: true }),
+      // 8) JOBS ADDED per client, bucketed by the 22:00 IST operator window.
+      //    This is the number the whole under-delivery problem turns on: every
+      //    other column here is either a lifetime total or counts jobs APPLIED,
+      //    so a day on which an operator added nothing at all was previously
+      //    invisible on this screen. Keyed on ObjectId timestamps because
+      //    dateAdded is written in mixed day-first/month-first orientations and
+      //    cannot be bucketed by day. See utils/clientAddStats.js.
+      computeClientAddStats({ JobModel, ProfileModel: getProfileModel() })
+        .catch((err) => {
+          // Never let the new columns take down an endpoint the CRM depends on.
+          // An empty map degrades to dashes in the UI, not a 500.
+          console.error('[client-job-analysis] computeClientAddStats:', err?.message || err);
+          return new Map();
+        }),
+      // 9) APPLY RECENCY per client. Powers the "saved but nothing applied"
+      //    alert. Deliberately independent of the date picker: the alert asks
+      //    "is work going out RIGHT NOW", which is a question about today, not
+      //    about whichever day the operator happens to be inspecting.
+      computeClientApplyStats({ JobModel })
+        .catch((err) => {
+          console.error('[client-job-analysis] computeClientApplyStats:', err?.message || err);
+          return new Map();
+        })
     ]);
 
     // Cache last-applied operator separately with longer TTL (5 min)
@@ -3981,6 +4012,18 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       const removedByAICount = multiFormatDateRegex
         ? (removedByAiMap.get(email) || 0)
         : (aiRemovedMap.get(email)?.todayCount || 0);
+      // A client with no add row at all added nothing in seven days, which is
+      // the loudest signal on this screen — fall back to a zeroed stat rather
+      // than leaving the columns undefined.
+      const addStat = addStats.get(email.toLowerCase()) || emptyAddStat();
+      // No entry means no application in the lookback window at all, which is
+      // exactly what the alert needs to know — not an error case.
+      const applyStat = applyStats.get(email.toLowerCase()) || emptyApplyStat();
+      // Mirrors clientFilterActiveUnpaused(), the filter the reminder crons use,
+      // so "under target" means the same thing on the screen and in Discord.
+      const owesWork = (client.status || '') === 'active'
+        && !client.isPaused
+        && !client.onboardingPhase;
       return {
         email,
         name: client.name || email,
@@ -4018,9 +4061,41 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         // Counts REMOVALS only — never AI flags, which leave the job in place for
         // an operator to decide. Scoped to the selected date, or today.
         removedByAI: removedByAICount,
-        appliedOnDate: appliedMap.get(email) || 0
+        appliedOnDate: appliedMap.get(email) || 0,
+        // ── Jobs ADDED, on the 22:00 IST operator window ──
+        // addedToday is always the LIVE window and deliberately ignores the date
+        // picker: the picker filters appliedDate, and there is no reliable
+        // per-day added history to filter on (dateAdded is unparseable). Showing
+        // a date-scoped "added" next to a live one would invite exactly the
+        // ambiguity the removedByAI column was collapsed to avoid.
+        addedToday: addStat.addedToday,
+        addedYesterday: addStat.addedYesterday,
+        added7dAvg: addStat.added7dAvg,
+        dailyTarget: addStat.dailyTarget,
+        isDefaultTarget: addStat.isDefaultTarget,
+        addShortfall: addStat.addShortfall,
+        addFulfillmentPct: addStat.addFulfillmentPct,
+        // Only meaningful for a client we actually owe work to. A paused or
+        // inactive client legitimately gets nothing added, and flagging them red
+        // trains operators to ignore the colour.
+        isUnderTarget: addStat.isUnderTarget && owesWork,
+        lastAddedAt: addStat.lastAddedAt ? new Date(addStat.lastAddedAt).toISOString() : null,
+        daysSinceLastAdd: addStat.daysSinceLastAdd,
+        addedTodayBy: addStat.todayOperators,
+        // ── Applications going OUT, on the IST calendar day ──
+        // Separate boundary from the add columns above, and deliberately so:
+        // appliedDate is an IST wall-clock stamp with no window in it. See the
+        // header comment in utils/clientApplyStats.js.
+        appliedToday: applyStat.appliedToday,
+        daysSinceLastApply: applyStat.daysSinceLastApply,
+        lastAppliedYmd: applyStat.lastAppliedYmd,
+        applyLookbackDays: APPLY_LOOKBACK_DAYS
       };
     });
+
+    // Attention alerts, derived once here so the screen and any future digest
+    // can never disagree about what "needs attention" means.
+    for (const r of rows) r.alerts = deriveClientAlerts(r);
 
     // Sort: active first, then by clientNumber ascending (same as Client Onboarding)
     const getSortingNumber = (r) => {
@@ -4042,9 +4117,16 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       return numA - numB;
     });
 
+    // Headline counts for the tiles above the table. Computed from rows rather
+    // than clientInfo because isUnderTarget already folds in the owesWork test.
+    summary.underTarget = rows.filter((r) => r.isUnderTarget).length;
+    summary.addedToday = rows.reduce((n, r) => n + (r.addedToday || 0), 0);
+    summary.staleClients = rows.filter((r) => r.isUnderTarget && (r.daysSinceLastAdd ?? 0) >= 1).length;
+    summary.alerts = summariseAlerts(rows);
+
     // istDay stamps which IST calendar day removedByAI belongs to; the
     // cache readers below refuse an entry from a different day.
-    const result = { success: true, date: date || null, istDay, rows, summary };
+    const result = { success: true, date: date || null, istDay, addWindowDay, rows, summary };
     setAnalysisCache(cacheKey, result);
     pSetAnalysisCache(cacheKey, result, ANALYSIS_CACHE_TTL).catch(() => {});
     return result;
@@ -4062,7 +4144,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const memHit = forceFresh ? null : getAnalysisCache(cacheKey);
     const entry = sameIstDay(memHit) ? null : await pGetAnalysisCache(cacheKey);
 
-    switch (decideAnalysisCacheAction({ forceFresh, memHit, entry, istDay })) {
+    switch (decideAnalysisCacheAction({ forceFresh, memHit, entry, istDay, addWindowDay })) {
       case 'l1':
         return serve(memHit, true);
 
@@ -8041,6 +8123,11 @@ const DISCORD_JOBCARD_REMINDER_WEBHOOK = process.env.DISCORD_JOBCARD_REMINDER ||
 
 
 const DISCORD_ZERO_SAVED_WEBHOOK = process.env.DISCORD_ZERO_SAVED || '';
+// Daily add-shortfall report. Its own channel on purpose: the other two
+// reminders are per-client nags an operator can action one at a time, while
+// this one is a scoreboard a team lead reads top to bottom. Mixed into the same
+// feed it would be scrolled past.
+const DISCORD_ADD_SHORTFALL_WEBHOOK = process.env.DISCORD_ADD_SHORTFALL || '';
 
 function capitalizeOperatorName(name) {
   if (!name || typeof name !== 'string') return '';
@@ -8209,6 +8296,21 @@ async function runJobCardReminder() {
     const clientNameMap = new Map((clients || []).map((c) => [c.email.toLowerCase(), c.name || c.email]));
     const savedMap = new Map((savedByUser || []).map((r) => [r._id.toLowerCase(), r.saved]));
 
+    // Carry today's ADD count alongside the backlog. On its own this message
+    // creates a perverse incentive — it fires on saved > 0 and says "please
+    // apply", so an operator who adds fewer cards is nagged less and reads that
+    // as approval. Stating adds-against-target in the same line removes the
+    // gap: working the backlog down no longer looks like a finished day.
+    const jobCardAddStats = await computeClientAddStats({
+      JobModel,
+      ProfileModel: getProfileModel(),
+      emails: (clients || []).map((c) => (c.email || '').toLowerCase()).filter(Boolean),
+    }).catch((err) => {
+      // Fail soft: the apply nag is still worth sending without the add line.
+      console.error('[JobCard Reminder] add stats unavailable:', err?.message || err);
+      return new Map();
+    });
+
     let sentCount = 0;
     let failedCount = 0;
     for (const c of clients || []) {
@@ -8220,7 +8322,11 @@ async function runJobCardReminder() {
       const operatorName = lastApplied ? lastApplied.operatorName : 'Team';
       const clientName = clientNameMap.get(email) || email;
       const capitalizedOperator = capitalizeOperatorName(operatorName);
-      const message = `Hi ${capitalizedOperator}, there are ${saved} job card(s) in saved column for ${clientName}'s dashboard, please apply.`;
+      const addStat = jobCardAddStats.get(email) || null;
+      const addLine = addStat
+        ? ` Added today: ${addStat.addedToday}/${addStat.dailyTarget}${addStat.isUnderTarget ? ` — ${addStat.addShortfall} short of target.` : ' — target met.'}`
+        : '';
+      const message = `Hi ${capitalizedOperator}, there are ${saved} job card(s) in saved column for ${clientName}'s dashboard, please apply.${addLine}`;
       try {
         await postDiscordReminder(DISCORD_JOBCARD_REMINDER_WEBHOOK, message, '[JobCard Reminder]', {
           reminderType: 'job_card',
@@ -8228,7 +8334,12 @@ async function runJobCardReminder() {
           clientName,
           addedBy: capitalizedOperator,
           triggeredSource: 'cron',
-          metadata: { savedCount: saved },
+          metadata: {
+            savedCount: saved,
+            addedToday: addStat?.addedToday ?? null,
+            dailyTarget: addStat?.dailyTarget ?? null,
+            addShortfall: addStat?.addShortfall ?? null,
+          },
         });
         sentCount += 1;
       } catch (sendErr) {
@@ -8239,6 +8350,133 @@ async function runJobCardReminder() {
     console.log(`📬 [JobCard Reminder] Sent ${sentCount}, failed ${failedCount} reminders for clients with saved jobs`);
   } catch (err) {
     console.error('❌ [JobCard Reminder] Error:', err);
+  }
+}
+
+/** Discord rejects a message body over 2000 characters outright. */
+const DISCORD_CONTENT_LIMIT = 1900;
+
+/**
+ * Pack lines into as few Discord messages as possible without splitting a line.
+ * A line longer than the limit on its own is emitted alone and truncated, which
+ * is strictly better than dropping it.
+ */
+function chunkDiscordLines(header, lines) {
+  const chunks = [];
+  let cur = header;
+  for (const raw of lines) {
+    const line = raw.length > DISCORD_CONTENT_LIMIT ? `${raw.slice(0, DISCORD_CONTENT_LIMIT - 1)}…` : raw;
+    if (cur.length + 1 + line.length > DISCORD_CONTENT_LIMIT) {
+      chunks.push(cur);
+      cur = line;
+    } else {
+      cur = cur ? `${cur}\n${line}` : line;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+/**
+ * Daily add-shortfall report — the missing FLOOR.
+ *
+ * dailyCapGuard enforces a ceiling: it blocks job #31. Nothing enforced a
+ * minimum, so an operator could add three jobs a day indefinitely and no code
+ * path objected. Worse, both existing reminders keyed on the SAVED BACKLOG, so
+ * adding less made Discord quieter — runJobCardReminder ("please apply") fires
+ * on saved > 0, and runZeroSavedJobReminder fired only at exactly zero saved.
+ *
+ * This runs at 21:30 IST, thirty minutes before the 22:00 window closes, so an
+ * operator who is short still has time to fix it rather than reading about it
+ * the next morning when nothing can be done.
+ *
+ * Target is the SAME number dailyCapGuard enforces as the ceiling
+ * (profile.targetJobCount, else 30). One number, so the report can never
+ * disagree with the counter the extension shows the same operator.
+ */
+async function runAddShortfallReport({ triggeredSource = 'cron', triggeredBy = '' } = {}) {
+  if (!DISCORD_ADD_SHORTFALL_WEBHOOK) {
+    return { sentCount: 0, skipped: true, reason: 'DISCORD_ADD_SHORTFALL is not configured' };
+  }
+  if (isISTSunday()) {
+    console.log('[Add Shortfall] Skipping — Sunday (Asia/Kolkata)');
+    return { sentCount: 0, skipped: true, reason: 'Sunday no-send day (Asia/Kolkata)' };
+  }
+  try {
+    const clients = await ClientModel.find(clientFilterActiveUnpaused())
+      .select('email name operationsName dashboardTeamLeadName')
+      .lean();
+    if (!clients.length) {
+      return { sentCount: 0, skipped: true, reason: 'No active and unpaused clients found' };
+    }
+
+    const emails = clients.map((c) => (c.email || '').toLowerCase()).filter(Boolean);
+    const stats = await computeClientAddStats({ JobModel, ProfileModel: getProfileModel(), emails });
+
+    const rows = clients
+      .map((c) => {
+        const email = (c.email || '').toLowerCase();
+        if (!email) return null;
+        const stat = stats.get(email) || emptyAddStat();
+        return { email, name: c.name || email, ...stat };
+      })
+      .filter(Boolean);
+
+    const short = rows
+      .filter((r) => r.isUnderTarget)
+      // Worst first: biggest shortfall, then longest silence. A team lead reads
+      // the top of this list and stops, so the top must be the worst.
+      .sort((a, b) => (b.addShortfall - a.addShortfall) || ((b.daysSinceLastAdd ?? 0) - (a.daysSinceLastAdd ?? 0)));
+
+    const addedTotal = rows.reduce((n, r) => n + r.addedToday, 0);
+    const windowDay = addWindowDayStamp();
+
+    if (!short.length) {
+      const message = `✅ **Add target met** — ${windowDay}\nAll ${rows.length} active clients hit their daily target. ${addedTotal} job cards added today.`;
+      await postDiscordReminder(DISCORD_ADD_SHORTFALL_WEBHOOK, message, '[Add Shortfall]', {
+        reminderType: 'add_shortfall',
+        triggeredSource,
+        triggeredBy,
+        metadata: { windowDay, underTarget: 0, clients: rows.length, addedTotal },
+      });
+      return { sentCount: 1, underTarget: 0, clients: rows.length, addedTotal };
+    }
+
+    const header =
+      `🔻 **Add shortfall** — ${windowDay} (window closes 22:00 IST)\n` +
+      `${short.length} of ${rows.length} active clients are under target. ` +
+      `${addedTotal} job cards added today.\n`;
+
+    const lines = short.map((r) => {
+      const who = r.todayOperators.length ? r.todayOperators.map(capitalizeOperatorName).join(', ') : 'nobody';
+      const silence =
+        r.daysSinceLastAdd == null ? ' · **never had a job card added**'
+          : r.daysSinceLastAdd === 0 ? ''
+            : ` · **no adds for ${r.daysSinceLastAdd}d**`;
+      return `• ${r.name} — ${r.addedToday}/${r.dailyTarget} (${r.addFulfillmentPct}%) · today by: ${who}${silence}`;
+    });
+
+    let sentCount = 0;
+    let failedCount = 0;
+    for (const content of chunkDiscordLines(header, lines)) {
+      try {
+        await postDiscordReminder(DISCORD_ADD_SHORTFALL_WEBHOOK, content, '[Add Shortfall]', {
+          reminderType: 'add_shortfall',
+          triggeredSource,
+          triggeredBy,
+          metadata: { windowDay, underTarget: short.length, clients: rows.length, addedTotal },
+        });
+        sentCount += 1;
+      } catch (sendErr) {
+        failedCount += 1;
+        console.error('❌ [Add Shortfall] Failed to post chunk:', sendErr?.message || sendErr);
+      }
+    }
+    console.log(`📉 [Add Shortfall] ${short.length}/${rows.length} clients under target, ${addedTotal} added — ${sentCount} message(s) sent, ${failedCount} failed`);
+    return { sentCount, failedCount, underTarget: short.length, clients: rows.length, addedTotal };
+  } catch (err) {
+    console.error('❌ [Add Shortfall] Error:', err);
+    return { sentCount: 0, error: err?.message || String(err) };
   }
 }
 
@@ -8275,6 +8513,18 @@ async function runZeroSavedJobReminder() {
 
     const savedMap = new Map((savedByUser || []).map((r) => [(r._id || '').toLowerCase(), r.saved || 0]));
 
+    // Jobs ADDED in the live 22:00 IST window. This is the fix for the hole that
+    // let under-delivery run unnoticed: the reminder used to fire only when the
+    // saved column was at exactly ZERO, counted over ALL TIME. One stale card
+    // left over from three weeks ago suppressed it permanently, so an operator
+    // who added nothing today was silently indistinguishable from one who added
+    // thirty. Nothing added today now trips it regardless of backlog.
+    const addStatsToday = await computeClientAddStats({
+      JobModel,
+      ProfileModel: getProfileModel(),
+      emails: clientEmails,
+    });
+
     const lastAdderAgg = await JobModel.aggregate([
       {
         $addFields: {
@@ -8306,7 +8556,13 @@ async function runZeroSavedJobReminder() {
       if (!email) continue;
 
       const saved = savedMap.get(email) || 0;
-      if (saved !== 0) continue;
+      const addStat = addStatsToday.get(email) || emptyAddStat();
+      // Two independent reasons to ping, either one is enough:
+      //   • the saved column is empty, so there is nothing left to apply to
+      //   • nothing has been ADDED today, whatever the backlog looks like
+      const emptyColumn = saved === 0;
+      const nothingAddedToday = addStat.addedToday === 0;
+      if (!emptyColumn && !nothingAddedToday) continue;
 
       const clientName = clientNameMap.get(email) || email;
       const adderRow = lastAdderMap.get(email);
@@ -8316,7 +8572,14 @@ async function runZeroSavedJobReminder() {
           operatorName: adderRow?.operatorName,
           extensionCode: adderRow?.extensionCode
         }) || 'No job history yet';
-      const message = `${clientName} have zero jobs in their dashboard please add jobs — last job cards added by: ${adderLabel}`;
+      const silence = addStat.daysSinceLastAdd == null
+        ? ' (no job card has ever been added)'
+        : addStat.daysSinceLastAdd >= 1
+          ? ` (nothing added for ${addStat.daysSinceLastAdd} day${addStat.daysSinceLastAdd === 1 ? '' : 's'})`
+          : '';
+      const message = emptyColumn
+        ? `${clientName} have zero jobs in their dashboard please add jobs — last job cards added by: ${adderLabel}${silence}`
+        : `${clientName} has had 0 job cards added today (target ${addStat.dailyTarget}, ${saved} still sitting in saved) — last job cards added by: ${adderLabel}${silence}`;
 
       try {
         await postDiscordReminder(DISCORD_ZERO_SAVED_WEBHOOK, message, '[Zero Saved Reminder]', {
@@ -8325,7 +8588,13 @@ async function runZeroSavedJobReminder() {
           clientName,
           addedBy: adderLabel,
           triggeredSource: 'cron',
-          metadata: { savedCount: saved },
+          metadata: {
+            savedCount: saved,
+            addedToday: addStat.addedToday,
+            dailyTarget: addStat.dailyTarget,
+            daysSinceLastAdd: addStat.daysSinceLastAdd,
+            trigger: emptyColumn ? 'empty_saved_column' : 'no_adds_today',
+          },
         });
         sentCount += 1;
       } catch (sendErr) {
@@ -8351,6 +8620,26 @@ async function runZeroSavedJobReminder() {
     throw err;
   }
 }
+
+app.post('/api/admin/trigger-add-shortfall-report', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const result = await runAddShortfallReport({
+      triggeredSource: 'manual',
+      triggeredBy: req.user?.email || '',
+    });
+    return res.status(200).json({
+      success: true,
+      message: 'Add shortfall report trigger executed',
+      result
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to trigger add shortfall report',
+      error: error?.message || String(error)
+    });
+  }
+});
 
 app.post('/api/admin/trigger-zero-saved-reminder', verifyToken, verifyAdmin, async (req, res) => {
   try {
@@ -8938,9 +9227,13 @@ dbReady
         console.error('❌ [Startup] startCallSweepJob threw:', e?.message || e);
       }
 
-      // Job card reminder: 8:00 PM IST daily (14:30 UTC)
+      // Job card reminder: 8:00 PM IST daily.
+      // Was '30 14 * * *' with NO timezone, i.e. 14:30 in whatever zone the host
+      // happens to run in. That is 8:00 PM IST only while the host is UTC — an
+      // unstated dependency that every other cron in this file declares
+      // explicitly. Same firing instant on a UTC host, correct on any other.
       if (DISCORD_JOBCARD_REMINDER_WEBHOOK) {
-        cron.schedule('30 14 * * *', runJobCardReminder);
+        cron.schedule('0 20 * * *', runJobCardReminder, { timezone: 'Asia/Kolkata' });
         console.log('📬 [JobCard Reminder] Cron scheduled for 8:00 PM IST daily');
       }
 
@@ -8952,8 +9245,22 @@ if (DISCORD_ZERO_SAVED_WEBHOOK) {
   console.warn('⚠️ [Zero Saved Reminder] DISCORD_ZERO_SAVED is not set; reminders are disabled');
 }
 
-      // Daily incentive snapshot: 10:00 PM IST (16:30 UTC) — when the 24h day closes
-      cron.schedule('30 16 * * *', runDailyIncentiveSnapshot);
+// Add shortfall report: 9:30 PM IST daily, THIRTY MINUTES before the 22:00 IST
+// add window closes. The timing is the point — an operator who is short can
+// still fix it. Running it after the window rolls would only report a day that
+// is already lost, and an alert nobody can act on gets muted.
+if (DISCORD_ADD_SHORTFALL_WEBHOOK) {
+  cron.schedule('30 21 * * *', runAddShortfallReport, { timezone: 'Asia/Kolkata' });
+  console.log('📉 [Add Shortfall] Cron scheduled for 9:30 PM IST daily');
+} else {
+  console.warn('⚠️ [Add Shortfall] DISCORD_ADD_SHORTFALL is not set; the daily shortfall report is disabled');
+}
+
+      // Daily incentive snapshot: 10:00 PM IST — when the add window closes.
+      // Same latent host-timezone dependency as the job card reminder above;
+      // stated explicitly here rather than assumed. 16:30 UTC == 22:00 IST, so
+      // this is the same instant on the current host.
+      cron.schedule('0 22 * * *', runDailyIncentiveSnapshot, { timezone: 'Asia/Kolkata' });
       console.log('📬 [Incentive Cron] Scheduled for 10:00 PM IST daily');
 
       // Client milestone email cron: once daily at 9:00 PM IST (21:00 Asia/Kolkata).

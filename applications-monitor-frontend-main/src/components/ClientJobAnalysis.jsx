@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import Layout from './Layout';
 import toast from 'react-hot-toast';
 import { Link } from 'react-router-dom';
-import { Pencil, X, Loader2, Play, Square, CheckCircle2, XCircle, Clock, SkipForward } from 'lucide-react';
+import { Pencil, X, Loader2, Play, Square, CheckCircle2, XCircle, Clock, SkipForward, AlertTriangle, ChevronDown, ChevronRight, BellOff } from 'lucide-react';
 import {
   buildDashboardManagerSelectOptions,
   selectValueMatchingOption
@@ -58,16 +58,38 @@ function rowClientStatus(r) {
 function rowPhase(r) {
   return r.onboardingPhase ? 'new' : r.isPaused ? 'paused' : 'unpaused';
 }
-// The Paused column only badges an explicitly paused client, so a client in
-// onboarding shows a dash there even though isPaused is true.
-function rowPausedState(r) {
-  return r.isPaused && !r.onboardingPhase ? 'paused' : 'not_paused';
-}
 
 // One dropdown for every filterable column header. Written once so the four
 // filters stay visually identical and a fifth is a two-line change. The clear
 // button only appears once a value is chosen, matching the original
 // "Last applied by" control this was factored out of.
+// Attention alerts. Codes and severities are decided on the server
+// (utils/clientAlerts.js) so the panel, the row badges and any future digest
+// can never disagree; the client only supplies presentation.
+const ALERT_CODES = {
+  no_adds: {
+    title: 'No jobs added',
+    blurb: 'Active clients with nothing added in the last operator window or longer.',
+    tint: 'text-rose-700 bg-rose-50 border-rose-200',
+    chip: 'border-rose-300 bg-rose-50 text-rose-800'
+  },
+  not_applied: {
+    title: 'Saved but not applied',
+    blurb: 'Active clients with job cards waiting and nothing applied today.',
+    tint: 'text-amber-800 bg-amber-50 border-amber-200',
+    chip: 'border-amber-300 bg-amber-50 text-amber-900'
+  }
+};
+const ALERT_ORDER = ['no_adds', 'not_applied'];
+
+// Columns rendered by the table below. Every row — header, data, skeleton and
+// the two full-width placeholders — must agree on this number. It used to be
+// written inline as `isAdmin ? 19 : 18`, but no column is admin-conditional
+// (isAdmin only gates the summary strip and the Scrape All button), so the
+// non-admin branch silently centred the "No data" and "Loading more" rows
+// against the wrong width.
+const TABLE_COLUMN_COUNT = 21;
+
 function HeaderFilter({ label, value, onChange, options, title }) {
   return (
     // Stacked, not side by side: a label+select on one line forced every
@@ -190,12 +212,28 @@ export default function ClientJobAnalysis() {
   const [lastAppliedByFilter, setLastAppliedByFilter] = useState(''); // Filter for "Last applied by" operator name
   const [statusFilter, setStatusFilter] = useState('');   // '' | active | inactive
   const [phaseFilter, setPhaseFilter] = useState('');     // '' | new | paused | unpaused
-  const [pausedFilter, setPausedFilter] = useState('');   // '' | paused | not_paused
+  const [addFilter, setAddFilter] = useState('');         // '' | under | stale | met
+  const [addSortDir, setAddSortDir] = useState(null);     // null | 'worst' | 'best'
+  const [alertFilter, setAlertFilter] = useState('');     // '' | no_adds | not_applied
+  const [alertsOpen, setAlertsOpen] = useState(false);    // expanded client list
+  // Hidden for the rest of this browser session only. Deliberately sessionStorage
+  // and not localStorage: an operator who dismisses this on Monday must still be
+  // shown Tuesday's problems, otherwise the panel quietly stops working and
+  // nobody notices it stopped.
+  const [alertsMuted, setAlertsMuted] = useState(() => {
+    try { return sessionStorage.getItem('cja_alerts_muted') === '1'; } catch { return false; }
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [editingClientNumberEmail, setEditingClientNumberEmail] = useState(null);
   const [editingClientNumberValue, setEditingClientNumberValue] = useState('');
   const [savingClientNumber, setSavingClientNumber] = useState(false);
-  const [summaryCounts, setSummaryCounts] = useState({ active: 0, inactive: 0, new: 0, paused: 0, unpaused: 0 });
+  const [summaryCounts, setSummaryCounts] = useState({
+    active: 0, inactive: 0, new: 0, paused: 0, unpaused: 0,
+    // Jobs-added rollup for the live 22:00 IST window. underTarget counts only
+    // clients we actually owe work to (active, unpaused, not onboarding), so it
+    // never inflates with clients who legitimately get nothing added.
+    underTarget: 0, addedToday: 0, staleClients: 0
+  });
   const lastAppliedRef = useRef({}); // Canonical lastAppliedOperatorName from initial (no-date) load
 
   useEffect(() => {
@@ -668,7 +706,13 @@ export default function ClientJobAnalysis() {
     }
     if (statusFilter) filtered = filtered.filter(r => rowClientStatus(r) === statusFilter);
     if (phaseFilter) filtered = filtered.filter(r => rowPhase(r) === phaseFilter);
-    if (pausedFilter) filtered = filtered.filter(r => rowPausedState(r) === pausedFilter);
+    // 'under'  — below the daily add target, and we owe this client work
+    // 'stale'  — under target AND nothing added for a full window or more
+    // 'met'    — hit the target today
+    if (addFilter === 'under') filtered = filtered.filter(r => r.isUnderTarget);
+    else if (addFilter === 'stale') filtered = filtered.filter(r => r.isUnderTarget && (r.daysSinceLastAdd ?? 0) >= 1);
+    else if (addFilter === 'met') filtered = filtered.filter(r => !r.isUnderTarget);
+    if (alertFilter) filtered = filtered.filter(r => (r.alerts || []).some(a => a.code === alertFilter));
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(r => {
@@ -694,6 +738,19 @@ export default function ClientJobAnalysis() {
         }
         if (av !== bv) return sinceSortDir === 'asc' ? av - bv : bv - av;
       }
+      // Sorting by add shortfall outranks the date-driven Applied sort but not
+      // an explicit "Since 1st Apply" click, matching how sinceSortDir already
+      // wins: the most recently clicked header is the one the operator meant.
+      if (addSortDir) {
+        const av = Number(a?.addShortfall ?? 0);
+        const bv = Number(b?.addShortfall ?? 0);
+        if (av !== bv) return addSortDir === 'worst' ? bv - av : av - bv;
+        // Tie-break on silence, so two clients both 30 short are ordered by how
+        // long they have been ignored rather than arbitrarily.
+        const ad = a?.daysSinceLastAdd ?? 0;
+        const bd = b?.daysSinceLastAdd ?? 0;
+        if (ad !== bd) return addSortDir === 'worst' ? bd - ad : ad - bd;
+      }
       if (date) {
         const av = Number(a?.appliedOnDate || 0);
         const bv = Number(b?.appliedOnDate || 0);
@@ -711,7 +768,7 @@ export default function ClientJobAnalysis() {
     // Attach derived cap/status math once per data change so per-render row
     // output stays cheap.
     return sorted.map((r) => ({ ...r, _d: computeRowDerived(r) }));
-  }, [rows, date, sortDir, sinceSortDir, lastAppliedByFilter, statusFilter, phaseFilter, pausedFilter, searchQuery, getSortingNumber]);
+  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, searchQuery, getSortingNumber]);
 
   // ── Chunked rendering: mount ROW_CHUNK rows at a time, growing as a sentinel
   // scrolls into view. Bounds initial paint cost + DOM size for big tables. ──
@@ -737,6 +794,46 @@ export default function ClientJobAnalysis() {
 
   const isAdmin = userRole === 'admin';
 
+  // Flagged clients, computed from the UNFILTERED row set on purpose. If this
+  // read from processedRows, narrowing the table with any filter would make the
+  // headline count fall — which looks exactly like the problem going away.
+  const alertRows = useMemo(() => {
+    const flagged = (rows || []).filter((r) => (r.alerts || []).length > 0);
+    // Critical first, then most alerts, then longest silence. An operator reads
+    // the top of this list and stops, so the top has to be the worst.
+    const weight = (r) => (r.alerts || []).reduce((n, a) => n + (a.severity === 'critical' ? 10 : 1), 0);
+    return flagged.sort((a, b) =>
+      (weight(b) - weight(a)) ||
+      ((b.daysSinceLastAdd ?? 0) - (a.daysSinceLastAdd ?? 0)) ||
+      String(a.name || '').localeCompare(String(b.name || ''))
+    );
+  }, [rows]);
+
+  const alertCounts = useMemo(() => {
+    const out = { total: 0, critical: 0, no_adds: 0, not_applied: 0 };
+    for (const r of alertRows) {
+      for (const a of r.alerts || []) {
+        out.total += 1;
+        if (a.severity === 'critical') out.critical += 1;
+        if (a.code in out) out[a.code] += 1;
+      }
+    }
+    return out;
+  }, [alertRows]);
+
+  const muteAlerts = useCallback((next) => {
+    setAlertsMuted(next);
+    try { sessionStorage.setItem('cja_alerts_muted', next ? '1' : '0'); } catch { /* private mode */ }
+  }, []);
+
+  // Jump straight to one client: search narrows the table to them and the panel
+  // collapses so the row is actually on screen.
+  const focusClient = useCallback((email) => {
+    setSearchQuery(email);
+    setAlertFilter('');
+    setAlertsOpen(false);
+  }, []);
+
   return (
     <Layout>
       <div className="p-6 w-full">
@@ -758,6 +855,36 @@ export default function ClientJobAnalysis() {
             </span>
             <span className="text-sm font-medium text-gray-700">
               <span className="text-emerald-600 font-semibold">{summaryCounts.unpaused}</span> Unpaused
+            </span>
+            {/* Jobs-added rollup for the live 22:00 IST window. Clickable so the
+                headline number and the table filter can never disagree. */}
+            <span className="h-4 w-px bg-gray-300" aria-hidden="true" />
+            <button
+              type="button"
+              onClick={() => setAddFilter((prev) => (prev === 'under' ? '' : 'under'))}
+              title="Active, unpaused clients below their daily add target in the current 22:00 IST window. Click to filter the table."
+              className={`text-sm font-medium rounded-md px-2 py-0.5 border transition-colors ${
+                addFilter === 'under'
+                  ? 'border-red-400 bg-red-50 text-red-800'
+                  : 'border-transparent text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              <span className="text-red-600 font-semibold">{summaryCounts.underTarget ?? 0}</span> Under target
+            </button>
+            <button
+              type="button"
+              onClick={() => setAddFilter((prev) => (prev === 'stale' ? '' : 'stale'))}
+              title="Under target AND nothing added for a full window or more. Click to filter the table."
+              className={`text-sm font-medium rounded-md px-2 py-0.5 border transition-colors ${
+                addFilter === 'stale'
+                  ? 'border-red-400 bg-red-50 text-red-800'
+                  : 'border-transparent text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              <span className="text-red-700 font-semibold">{summaryCounts.staleClients ?? 0}</span> No adds 1d+
+            </button>
+            <span className="text-sm font-medium text-gray-700">
+              <span className="text-indigo-600 font-semibold">{summaryCounts.addedToday ?? 0}</span> Added today
             </span>
           </div>
         )}
@@ -817,13 +944,117 @@ export default function ClientJobAnalysis() {
             {/* <Link to="/call-scheduler" className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">Call Scheduler</Link> */}
           </div>
         </div>
+        {/* ── Attention panel ──────────────────────────────────────────────
+            Answers two questions the table could not: which active clients had
+            nothing added in the last day, and which have job cards sitting in
+            the saved column with nothing applied today. Rendered for every role,
+            not just admins — the operators are the ones who can act on it. */}
+        {alertRows.length > 0 && !alertsMuted && (
+          <div className={`mx-4 mt-3 rounded-lg border border-rose-200 bg-rose-50/60 overflow-hidden transition-opacity ${loading ? 'opacity-50' : ''}`}>
+            <div className="flex items-center gap-3 px-3 py-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setAlertsOpen((v) => !v)}
+                className="inline-flex items-center gap-1.5 text-sm font-semibold text-rose-900 hover:text-rose-700"
+                title={alertsOpen ? 'Collapse the client list' : 'Show which clients are affected'}
+              >
+                {alertsOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                <AlertTriangle className="w-4 h-4" />
+                {alertRows.length} client{alertRows.length === 1 ? '' : 's'} need attention
+              </button>
+
+              {ALERT_ORDER.filter((code) => alertCounts[code] > 0).map((code) => (
+                <button
+                  key={code}
+                  type="button"
+                  onClick={() => setAlertFilter((prev) => (prev === code ? '' : code))}
+                  title={`${ALERT_CODES[code].blurb} Click to filter the table.`}
+                  className={`px-2 py-0.5 text-xs font-medium rounded-full border transition-colors ${
+                    alertFilter === code
+                      ? ALERT_CODES[code].chip
+                      : 'border-transparent bg-white/70 text-slate-700 hover:bg-white'
+                  }`}
+                >
+                  {alertCounts[code]} {ALERT_CODES[code].title}
+                </button>
+              ))}
+
+              {alertCounts.critical > 0 && (
+                <span
+                  className="text-xs text-rose-800"
+                  title="Alerts that have already survived a full day of reminders without anyone acting."
+                >
+                  {alertCounts.critical} critical
+                </span>
+              )}
+
+              <button
+                type="button"
+                onClick={() => muteAlerts(true)}
+                title="Hide this panel until you next open the browser. It comes back on a new session so a dismissal can never turn it off permanently."
+                className="ml-auto inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-700"
+              >
+                <BellOff className="w-3.5 h-3.5" /> Hide for this session
+              </button>
+            </div>
+
+            {alertsOpen && (
+              <div className="max-h-72 overflow-y-auto border-t border-rose-200 bg-white/70 divide-y divide-rose-100">
+                {alertRows
+                  .filter((r) => !alertFilter || (r.alerts || []).some((a) => a.code === alertFilter))
+                  .map((r) => (
+                    <button
+                      key={r.email}
+                      type="button"
+                      onClick={() => focusClient(r.email)}
+                      title="Show only this client in the table"
+                      className="w-full text-left px-3 py-1.5 hover:bg-rose-50 flex items-start gap-3"
+                    >
+                      <span className="min-w-[190px] shrink-0">
+                        <span className="block text-xs font-semibold text-slate-800 truncate">
+                          {r.clientNumber != null ? `${r.clientNumber} · ` : ''}{r.name || r.email}
+                        </span>
+                        <span className="block text-[10px] text-slate-500 truncate">{r.email}</span>
+                      </span>
+                      <span className="flex flex-wrap gap-1.5 pt-0.5">
+                        {(r.alerts || []).map((a) => (
+                          <span
+                            key={a.code}
+                            title={a.detail}
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${ALERT_CODES[a.code]?.tint || 'text-slate-700 bg-slate-50 border-slate-200'} ${
+                              a.severity === 'critical' ? 'ring-1 ring-inset ring-rose-300' : ''
+                            }`}
+                          >
+                            {a.label}
+                          </span>
+                        ))}
+                      </span>
+                    </button>
+                  ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Muted: leave one quiet line so the panel can be brought back without
+            a reload, and so a hidden problem is never fully invisible. */}
+        {alertRows.length > 0 && alertsMuted && (
+          <div className="mx-4 mt-3 text-[11px] text-slate-500 flex items-center gap-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+            {alertRows.length} client{alertRows.length === 1 ? '' : 's'} need attention.
+            <button type="button" onClick={() => muteAlerts(false)} className="underline hover:text-slate-700">
+              Show
+            </button>
+          </div>
+        )}
+
         <div className="px-4 py-3 overflow-x-auto">
           <table className="w-full divide-y divide-gray-200 text-xs">
             <thead className="bg-slate-50">
               <tr className="align-top">
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700" title="Whether this client's Google mail is connected. Auto-detected; updates on Refresh.">Google Mail</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[70px] leading-tight" title="Whether this client's Google mail is connected. Auto-detected; updates on Refresh.">Google Mail</th>
+                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[96px]">
                   <HeaderFilter
                     label="Status"
                     value={statusFilter}
@@ -835,29 +1066,17 @@ export default function ClientJobAnalysis() {
                     ]}
                   />
                 </th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Country</th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[86px] leading-tight">Country</th>
+                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[98px]">
                   <HeaderFilter
-                    label="Pause/Unpause/New"
+                    label="Pause / Unpause / New"
                     value={phaseFilter}
                     onChange={setPhaseFilter}
-                    title="Filter by onboarding / pause phase"
+                    title="Filter by onboarding / pause phase. A paused client shows how long they have been paused directly under the control, so there is no separate Paused column."
                     options={[
                       { value: 'new', label: 'New' },
                       { value: 'paused', label: 'Paused' },
                       { value: 'unpaused', label: 'Unpaused' }
-                    ]}
-                  />
-                </th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-                  <HeaderFilter
-                    label="Paused"
-                    value={pausedFilter}
-                    onChange={setPausedFilter}
-                    title="Filter by whether the client is currently paused. Clients still in onboarding count as Not paused here, matching the badge in this column."
-                    options={[
-                      { value: 'paused', label: 'Paused' },
-                      { value: 'not_paused', label: 'Not paused' }
                     ]}
                   />
                 </th>
@@ -877,6 +1096,75 @@ export default function ClientJobAnalysis() {
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Dashboard Mgr</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Total Apps</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Saved</th>
+                <th
+                  className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-indigo-700 border-l border-indigo-200"
+                  title="Job cards ADDED for this client in the live operator window, against their daily target (targetJobCount, else 30 — the same number the push cap enforces as a ceiling). The window runs 22:00 IST to 22:00 IST, NOT midnight to midnight, so this always agrees with the counter the extension shows the operator. Ignores the date picker: the picker filters appliedDate, and there is no reliable per-day added history to filter on."
+                >
+                  <div className="flex flex-col items-start gap-1">
+                    <span className="whitespace-nowrap">Added Today</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAddSortDir((prev) => (prev === null ? 'worst' : prev === 'worst' ? 'best' : null))
+                        }
+                        title={
+                          addSortDir === null
+                            ? 'Sort by biggest shortfall first'
+                            : addSortDir === 'worst'
+                              ? 'Sorted biggest shortfall first — click for smallest'
+                              : 'Sorted smallest shortfall first — click to clear'
+                        }
+                        className={`px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal rounded-md border ${
+                          addSortDir
+                            ? 'border-indigo-400 bg-indigo-50 text-indigo-700'
+                            : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                        }`}
+                      >
+                        {addSortDir === 'best' ? '▲ Best' : addSortDir === 'worst' ? '▼ Worst' : '↕ Sort'}
+                      </button>
+                      {/* Inlined rather than <HeaderFilter>: that component stacks
+                          its own label above the select, and an empty label would
+                          leave a blank line pushing this select out of alignment
+                          with the sort button beside it. Styling is copied so the
+                          two controls still read as one set. */}
+                      <select
+                        value={addFilter}
+                        onChange={(e) => setAddFilter(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        title="Filter by whether this client hit their daily add target"
+                        className="w-[104px] max-w-full px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500 truncate"
+                      >
+                        <option value="">All</option>
+                        <option value="under">Under target</option>
+                        <option value="stale">No adds for 1d+</option>
+                        <option value="met">Target met</option>
+                      </select>
+                      {addFilter && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setAddFilter(''); }}
+                          className="px-1 py-0.5 text-[10px] leading-none text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300"
+                          title="Clear filter"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </th>
+                <th
+                  className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700"
+                  title="Job cards added in the PREVIOUS 22:00 IST window. Side by side with today, this is the day-over-day comparison: a client at 28 yesterday and 3 today is a very different problem from one at 3 on both days."
+                >
+                  Yday
+                </th>
+                <th
+                  className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 border-r border-indigo-200"
+                  title="Average job cards added per day across the last 7 CLOSED windows. Today is excluded on purpose — a window that is two hours old would drag the average down and make every client look like they are falling behind every morning."
+                >
+                  7d Avg
+                </th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Applied</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Interview</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Offer</th>
@@ -923,8 +1211,13 @@ export default function ClientJobAnalysis() {
                 </th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold">
-                      {date ? `Applied on ${convertToDMY(date)}` : 'Applied on Date'}
+                    <span
+                      className="font-semibold"
+                      title={date
+                        ? 'Applications stamped with the selected date.'
+                        : 'Applications stamped with today\'s IST date. With no date picked this column used to read 0 for every client, which was not a fact about anyone — it is the number the "saved but not applied" alert fires on.'}
+                    >
+                      {date ? `Applied on ${convertToDMY(date)}` : 'Applied Today'}
                     </span>
                     <button
                       type="button"
@@ -947,19 +1240,21 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-16" /></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-14" /></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-20" /></td>
-                    <td className="px-2 py-2"><div className="h-5 bg-amber-200/80 rounded animate-pulse w-14" /></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-16" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-20" /></td>
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-24" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-10 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    {/* Added Today / Yday / 7d Avg — the jobs-added columns. */}
+                    <td className="px-2 py-2"><div className="h-5 bg-indigo-200/70 rounded-full animate-pulse w-12 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
-                    {/* Removed by AI. The skeleton was already one cell short of the
-                        header row before this column existed. */}
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    {/* Removed by AI. */}
                     <td className="px-2 py-2"><div className="h-3.5 bg-amber-200/80 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-14 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-10 ml-auto" /></td>
@@ -967,10 +1262,10 @@ export default function ClientJobAnalysis() {
                 ))
               ) : processedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdmin ? 19 : 18} className="px-2 py-8 text-center text-gray-500 text-sm">
+                  <td colSpan={TABLE_COLUMN_COUNT} className="px-2 py-8 text-center text-gray-500 text-sm">
                     {searchQuery.trim()
                       ? `No clients match "${searchQuery}"`
-                      : (lastAppliedByFilter || statusFilter || phaseFilter || pausedFilter)
+                      : (lastAppliedByFilter || statusFilter || phaseFilter || addFilter || alertFilter)
                         ? 'No clients match the selected filters'
                         : 'No data'}
                   </td>
@@ -999,6 +1294,24 @@ export default function ClientJobAnalysis() {
                   <tr key={r.email + idx} className={rowColor}>
                     <td className="px-2 py-1">
                       <div className="flex items-center gap-1.5 max-w-[180px]">
+                        {/* The panel above is the summary; this is the same
+                            signal at the row, so a flagged client stays obvious
+                            once you scroll past the header. */}
+                        {(r.alerts || []).length > 0 && (
+                          // Wrapped in a span rather than putting title on the
+                          // icon: `title` on an inline <svg> is not a reliable
+                          // tooltip across browsers, SVG wants a <title> child.
+                          <span
+                            className="shrink-0 leading-none"
+                            title={(r.alerts || []).map((a) => `${a.label} — ${a.detail}`).join('\n')}
+                          >
+                            <AlertTriangle
+                              className={`w-3.5 h-3.5 ${
+                                (r.alerts || []).some((a) => a.severity === 'critical') ? 'text-rose-600' : 'text-amber-500'
+                              }`}
+                            />
+                          </span>
+                        )}
                         <div className="text-gray-900 font-medium truncate min-w-0 flex-1" title={r.email}>
                           {formatClientLabel(r)}
                         </div>
@@ -1009,12 +1322,12 @@ export default function ClientJobAnalysis() {
                       {(() => {
                         const em = String(r.email || '').toLowerCase();
                         if (mailConn.connected.has(em)) {
-                          return <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold bg-green-100 text-green-700" title="Google mail connected">Yes</span>;
+                          return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700" title="Google mail connected">Yes</span>;
                         }
                         if (mailConn.reconnect.has(em)) {
-                          return <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold bg-amber-100 text-amber-700" title="Connected before, but the Google token expired — reconnect needed">Reconnect</span>;
+                          return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700" title="Connected before, but the Google token expired — reconnect needed">Reconnect</span>;
                         }
-                        return <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold bg-red-100 text-red-700" title="No Google mail connected">No</span>;
+                        return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700" title="No Google mail connected">No</span>;
                       })()}
                     </td>
                     <td className="px-2 py-1">
@@ -1023,7 +1336,7 @@ export default function ClientJobAnalysis() {
                           value={normalizedClientStatus}
                           onChange={(e) => handleStatusChange(r.email, e.target.value)}
                           disabled={savingStatus.has(r.email)}
-                          className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${isClientRowActive ? 'bg-green-100 text-green-700 border-green-300' :
+                          className={`px-1.5 py-0.5 text-[11px] border rounded-md font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${isClientRowActive ? 'bg-green-100 text-green-700 border-green-300' :
                             'bg-red-100 text-red-700 border-red-300'
                             }`}
                         >
@@ -1031,13 +1344,13 @@ export default function ClientJobAnalysis() {
                           <option value="inactive">Inactive</option>
                         </select>
                       ) : r.status !== undefined && r.status !== null && String(r.status).trim() !== '' ? (
-                        <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${isClientRowActive ? 'bg-green-100 text-green-700' :
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${isClientRowActive ? 'bg-green-100 text-green-700' :
                           'bg-red-100 text-red-700'
                           }`}>
                           {isClientRowActive ? 'Active' : 'Inactive'}
                         </span>
                       ) : (
-                        <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold bg-green-100 text-green-700">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700">
                           Active
                         </span>
                       )}
@@ -1052,7 +1365,7 @@ export default function ClientJobAnalysis() {
                           }
                           onChange={(e) => handleCountryChange(r.email, e.target.value)}
                           disabled={savingCountry.has(r.email)}
-                          className="px-2 py-1 text-[11px] border border-slate-300 rounded-md bg-white shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed min-w-[88px]"
+                          className="px-1.5 py-0.5 text-[11px] border border-slate-300 rounded-md bg-white shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
                           title="Client region"
                         >
                           <option value="">—</option>
@@ -1068,6 +1381,13 @@ export default function ClientJobAnalysis() {
                       )}
                     </td>
                     <td className="px-2 py-1">
+                      {/* Phase control with the paused duration stacked under it.
+                          This used to be two columns — the control here and a
+                          separate "Paused" column repeating the same word plus a
+                          day count — which cost a full column of width to say
+                          "Paused" twice. The duration is the only part that was
+                          not already on screen, so only the duration survives. */}
+                      <div className="flex flex-col items-start gap-0.5">
                       {(() => {
                         const phaseValue = r.onboardingPhase ? 'new' : r.isPaused ? 'paused' : 'unpaused';
                         const phaseLabel = phaseValue === 'new' ? 'New' : phaseValue === 'paused' ? 'Paused' : 'Unpaused';
@@ -1076,7 +1396,7 @@ export default function ClientJobAnalysis() {
                             value={phaseValue}
                             onChange={(e) => handlePhasePauseChange(r.email, e.target.value)}
                             disabled={savingPause.has(r.email)}
-                            className={`px-2 py-1 text-[11px] border rounded-md text-xs font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${phaseValue === 'new' ? 'bg-slate-100 text-slate-700 border-slate-300' :
+                            className={`px-1.5 py-0.5 text-[11px] border rounded-md font-semibold shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${phaseValue === 'new' ? 'bg-slate-100 text-slate-700 border-slate-300' :
                               phaseValue === 'paused' ? 'bg-yellow-100 text-yellow-700 border-yellow-300' :
                                 'bg-green-50 text-green-700 border-green-200'
                               }`}
@@ -1086,7 +1406,7 @@ export default function ClientJobAnalysis() {
                             <option value="unpaused">Unpaused</option>
                           </select>
                         ) : (
-                          <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${phaseValue === 'new' ? 'bg-slate-100 text-slate-700' :
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${phaseValue === 'new' ? 'bg-slate-100 text-slate-700' :
                             phaseValue === 'paused' ? 'bg-yellow-100 text-yellow-700' :
                               'bg-green-50 text-green-700'
                             }`}>
@@ -1094,18 +1414,25 @@ export default function ClientJobAnalysis() {
                           </span>
                         );
                       })()}
-                    </td>
-                    <td className="px-2 py-1">
-                      {loading && r.isPaused && !r.onboardingPhase ? (
-                        <div className="h-4 w-12 rounded bg-amber-100 animate-pulse" />
-                      ) : r.isPaused && !r.onboardingPhase ? (
-                        <div className="flex flex-col gap-0.5">
-                          <span className="inline-flex w-fit text-[10px] font-semibold text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-200">Paused</span>
-                          <span className="text-[10px] text-amber-800">{r.pausedDays != null ? `${r.pausedDays}d` : '—'}</span>
-                        </div>
-                      ) : (
-                        <span className="text-gray-400">—</span>
+                      {/* Duration only, and only while actually paused. An
+                          onboarding client reads as "New" above, so showing a
+                          paused age for them would contradict the control. */}
+                      {r.isPaused && !r.onboardingPhase && (
+                        loading ? (
+                          <div className="h-3 w-10 rounded bg-amber-100 animate-pulse" />
+                        ) : (
+                          <span
+                            className="text-[10px] font-semibold text-amber-800"
+                            title={[
+                              r.pausedAt ? `Paused on ${new Date(r.pausedAt).toLocaleDateString()}` : null,
+                              r.pausedDays != null ? `${r.pausedDays} day${r.pausedDays === 1 ? '' : 's'} paused` : 'Pause date unknown'
+                            ].filter(Boolean).join(' · ')}
+                          >
+                            {r.pausedDays != null ? `${r.pausedDays}d paused` : 'paused'}
+                          </span>
+                        )
                       )}
+                      </div>
                     </td>
                     <td className="px-2 py-1">
                       {r.planType ? (
@@ -1184,6 +1511,41 @@ export default function ClientJobAnalysis() {
                       {exceeded && <span className="text-[10px] block text-red-500">Exceeded</span>}
                     </td>
                     <td className="px-2 py-1 text-right">{r.saved}</td>
+                    <td className="px-2 py-1 text-right border-l border-indigo-100">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${
+                          r.isUnderTarget
+                            ? 'bg-red-100 border border-red-300 text-red-700'
+                            : 'bg-emerald-100 border border-emerald-300 text-emerald-700'
+                        }`}
+                        title={[
+                          `${r.addedToday ?? 0} of ${r.dailyTarget ?? 30} added this window (${r.addFulfillmentPct ?? 0}%)`,
+                          r.isDefaultTarget ? 'No explicit target set for this client — using the default of 30' : null,
+                          r.addShortfall ? `${r.addShortfall} short` : 'Target met',
+                          r.addedTodayBy?.length ? `Added today by: ${r.addedTodayBy.join(', ')}` : 'Nobody has added for this client today',
+                          r.lastAddedAt ? `Last add ${new Date(r.lastAddedAt).toLocaleString()}` : 'No job card has ever been added'
+                        ].filter(Boolean).join(' · ')}
+                      >
+                        {r.addedToday ?? 0}/{r.dailyTarget ?? 30}
+                      </span>
+                      {/* Nothing added for a full window or more. This is the
+                          "no job cards for a day" case, and it is the one signal
+                          on this screen that used to be completely invisible. */}
+                      {r.isUnderTarget && (r.daysSinceLastAdd ?? 0) >= 1 && (
+                        <span
+                          className="block mt-0.5 text-[10px] font-semibold text-red-600"
+                          title={
+                            r.daysSinceLastAdd == null
+                              ? 'No job card has ever been added for this client'
+                              : `Nothing added for ${r.daysSinceLastAdd} day${r.daysSinceLastAdd === 1 ? '' : 's'}`
+                          }
+                        >
+                          {r.daysSinceLastAdd === 1 ? 'STALE 1d' : `STALE ${r.daysSinceLastAdd}d`}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1 text-right text-slate-600">{r.addedYesterday ?? 0}</td>
+                    <td className="px-2 py-1 text-right text-slate-500 border-r border-indigo-100">{r.added7dAvg ?? 0}</td>
                     <td className="px-2 py-1 text-right">{r.applied}</td>
                     <td className="px-2 py-1 text-right">{r.interviewing}</td>
                     <td className="px-2 py-1 text-right">{r.offer}</td>
@@ -1213,7 +1575,21 @@ export default function ClientJobAnalysis() {
                           {r.appliedOnDate}
                         </span>
                       ) : (
-                        r.appliedOnDate
+                        // Zero applications with a non-empty saved column is the
+                        // condition the alert fires on, so it is called out here
+                        // too rather than reading as an unremarkable 0.
+                        <span
+                          className={r.appliedToday === 0 && r.saved > 0 ? 'text-amber-700' : 'text-slate-700'}
+                          title={
+                            r.daysSinceLastApply == null
+                              ? `No application in the last ${r.applyLookbackDays ?? 14} days`
+                              : r.daysSinceLastApply === 0
+                                ? 'Applied today'
+                                : `Last application ${r.daysSinceLastApply} day${r.daysSinceLastApply === 1 ? '' : 's'} ago`
+                          }
+                        >
+                          {r.appliedToday ?? 0}
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -1222,7 +1598,7 @@ export default function ClientJobAnalysis() {
               {/* Sentinel: when scrolled near, mount the next chunk of rows. */}
               {visibleRows.length < processedRows.length && (
                 <tr ref={loadMoreRef}>
-                  <td colSpan={isAdmin ? 19 : 18} className="px-2 py-3 text-center text-[11px] text-gray-400">
+                  <td colSpan={TABLE_COLUMN_COUNT} className="px-2 py-3 text-center text-[11px] text-gray-400">
                     Loading more… ({visibleRows.length}/{processedRows.length})
                   </td>
                 </tr>
