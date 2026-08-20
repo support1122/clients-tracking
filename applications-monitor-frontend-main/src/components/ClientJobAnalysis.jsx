@@ -88,7 +88,7 @@ const ALERT_ORDER = ['no_adds', 'not_applied'];
 // (isAdmin only gates the summary strip and the Scrape All button), so the
 // non-admin branch silently centred the "No data" and "Loading more" rows
 // against the wrong width.
-const TABLE_COLUMN_COUNT = 21;
+const TABLE_COLUMN_COUNT = 20;
 
 function HeaderFilter({ label, value, onChange, options, title }) {
   return (
@@ -1153,12 +1153,21 @@ export default function ClientJobAnalysis() {
                     </div>
                   </div>
                 </th>
+                {/* Yday — HIDDEN. Job cards added in the PREVIOUS 22:00 IST
+                    window, i.e. the day-over-day comparison against Added Today:
+                    a client at 28 yesterday and 3 today is a different problem
+                    from one at 3 on both days. Commented out to save width, not
+                    removed. The backend still returns `addedYesterday` on every
+                    row, so restoring it is uncommenting these three blocks
+                    (header, cell, skeleton) and putting TABLE_COLUMN_COUNT back
+                    to 21. Search "Yday — HIDDEN" to find all three.
                 <th
                   className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700"
-                  title="Job cards added in the PREVIOUS 22:00 IST window. Side by side with today, this is the day-over-day comparison: a client at 28 yesterday and 3 today is a very different problem from one at 3 on both days."
+                  title="Job cards added in the PREVIOUS 22:00 IST window."
                 >
                   Yday
                 </th>
+                */}
                 <th
                   className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 border-r border-indigo-200"
                   title="Average job cards added per day across the last 7 CLOSED windows. Today is excluded on purpose — a window that is two hours old would drag the average down and make every client look like they are falling behind every morning."
@@ -1245,9 +1254,11 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-2"><div className="h-5 bg-gray-200 rounded animate-pulse w-24" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-10 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
-                    {/* Added Today / Yday / 7d Avg — the jobs-added columns. */}
+                    {/* Added Today / 7d Avg — the jobs-added columns. */}
                     <td className="px-2 py-2"><div className="h-5 bg-indigo-200/70 rounded-full animate-pulse w-12 ml-auto" /></td>
+                    {/* Yday — HIDDEN. See the matching note in the header.
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
+                    */}
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
@@ -1512,21 +1523,32 @@ export default function ClientJobAnalysis() {
                     </td>
                     <td className="px-2 py-1 text-right">{r.saved}</td>
                     <td className="px-2 py-1 text-right border-l border-indigo-100">
+                      {/* THREE states, not two. A paused, inactive or onboarding
+                          client is owed no jobs, so they have no target to miss
+                          — but they still read as isUnderTarget:false, which
+                          used to paint them the same green as a client who
+                          actually hit thirty. Green now means earned; grey means
+                          the target does not apply. */}
                       <span
                         className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${
-                          r.isUnderTarget
-                            ? 'bg-red-100 border border-red-300 text-red-700'
-                            : 'bg-emerald-100 border border-emerald-300 text-emerald-700'
+                          !r.addTargetTracked
+                            ? 'bg-slate-100 border border-slate-300 text-slate-500'
+                            : r.isUnderTarget
+                              ? 'bg-red-100 border border-red-300 text-red-700'
+                              : 'bg-emerald-100 border border-emerald-300 text-emerald-700'
                         }`}
                         title={[
+                          !r.addTargetTracked
+                            ? `No daily target applies — this client is ${r.status !== 'active' ? 'inactive' : r.onboardingPhase ? 'still onboarding' : 'paused'}.`
+                            : null,
                           `${r.addedToday ?? 0} of ${r.dailyTarget ?? 30} added this window (${r.addFulfillmentPct ?? 0}%)`,
                           r.isDefaultTarget ? 'No explicit target set for this client — using the default of 30' : null,
-                          r.addShortfall ? `${r.addShortfall} short` : 'Target met',
+                          !r.addTargetTracked ? null : r.addShortfall ? `${r.addShortfall} short` : 'Target met',
                           r.addedTodayBy?.length ? `Added today by: ${r.addedTodayBy.join(', ')}` : 'Nobody has added for this client today',
                           r.lastAddedAt ? `Last add ${new Date(r.lastAddedAt).toLocaleString()}` : 'No job card has ever been added'
                         ].filter(Boolean).join(' · ')}
                       >
-                        {r.addedToday ?? 0}/{r.dailyTarget ?? 30}
+                        {r.addedToday ?? 0}/{r.addTargetTracked ? (r.dailyTarget ?? 30) : '—'}
                       </span>
                       {/* Nothing added for a full window or more. This is the
                           "no job cards for a day" case, and it is the one signal
@@ -1544,7 +1566,9 @@ export default function ClientJobAnalysis() {
                         </span>
                       )}
                     </td>
+                    {/* Yday — HIDDEN. See the matching note in the header.
                     <td className="px-2 py-1 text-right text-slate-600">{r.addedYesterday ?? 0}</td>
+                    */}
                     <td className="px-2 py-1 text-right text-slate-500 border-r border-indigo-100">{r.added7dAvg ?? 0}</td>
                     <td className="px-2 py-1 text-right">{r.applied}</td>
                     <td className="px-2 py-1 text-right">{r.interviewing}</td>
