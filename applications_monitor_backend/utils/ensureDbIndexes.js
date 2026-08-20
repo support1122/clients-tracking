@@ -27,6 +27,12 @@ export async function ensureDbIndexes() {
     // Serves the client-job-analysis "overall counts" group ({userID, currentStatus})
     // as a covered index scan — no document fetch over the whole collection.
     JobModel.collection.createIndex({ userID: 1, currentStatus: 1 }),
+    // Serves the "jobs added per 22:00 IST window" aggregations in
+    // utils/clientAddStats.js. createdByRole is the leading field so the ops-only
+    // match is an index seek, and _id second so the window range bound
+    // ({ _id: { $gte: <window start ObjectId> } }) is satisfied inside the same
+    // scan instead of fetching every ops job ever pushed.
+    JobModel.collection.createIndex({ createdByRole: 1, _id: 1 }),
     UserModel.collection.createIndex({ email: 1 }, { unique: true }),
     UserModel.collection.createIndex({ isActive: 1 }),
     UserModel.collection.createIndex({ isActive: 1, onboardingSubRole: 1 }),

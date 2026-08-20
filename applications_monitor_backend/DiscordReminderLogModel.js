@@ -4,7 +4,12 @@ const DiscordReminderLogSchema = new mongoose.Schema(
   {
     reminderType: {
       type: String,
-      enum: ['job_card', 'zero_saved', 'manual'],
+      // 'add_shortfall' is the daily 21:30 IST report naming every active client
+      // under their add target. Adding it here is not optional: postDiscordReminder
+      // writes this log on BOTH the success and failure paths, so an unlisted
+      // value would fail schema validation and turn a delivered Discord message
+      // into a thrown error.
+      enum: ['job_card', 'zero_saved', 'add_shortfall', 'manual'],
       default: 'manual',
       index: true,
     },

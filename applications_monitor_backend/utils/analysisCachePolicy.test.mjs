@@ -2,6 +2,7 @@
 //
 // Guards two things that are invisible until they bite:
 //   * a cached removedByAI must never be served on a different IST day
+//   * a cached addedToday must never be served on a different 22:00-IST add window
 //   * an operator Refresh must never be answered from the stale cache
 import { istDayStamp, decideAnalysisCacheAction } from './analysisCachePolicy.js';
 
@@ -42,9 +43,31 @@ t('Refresh reuses a FRESH L2 (<=120s)    -> l2-fresh', decide({ forceFresh: true
 t('Refresh REFUSES a stale L2            -> compute',  decide({ forceFresh: true, entry: { val: val(TODAY), fresh: false } }), 'compute');
 t('Refresh on yesterday-fresh L2         -> compute',  decide({ forceFresh: true, entry: { val: val(YDAY), fresh: true } }), 'compute');
 
+console.log('\n--- the 22:00 IST add-window stamp ---');
+// Between 22:00 and midnight IST a NEW add window is open while istDay still
+// reads as today. An entry computed at 21:00 carries the previous window's
+// addedToday and must not be served, even though its istDay matches.
+const WIN_TODAY = '2026-07-10';
+const WIN_NEXT = '2026-07-11';
+const wval = (istDay, addWindowDay) => ({ istDay, addWindowDay, rows: [] });
+const wdecide = (o) => decideAnalysisCacheAction({ istDay: TODAY, addWindowDay: WIN_NEXT, ...o });
+
+t('L1 same istDay, same window     -> l1',       wdecide({ memHit: wval(TODAY, WIN_NEXT) }), 'l1');
+t('L1 same istDay, PREV window     -> compute',  wdecide({ memHit: wval(TODAY, WIN_TODAY) }), 'compute');
+t('L2 FRESH but PREV window        -> compute',  wdecide({ entry: { val: wval(TODAY, WIN_TODAY), fresh: true } }), 'compute');
+t('L2 stale, PREV window           -> compute',  wdecide({ entry: { val: wval(TODAY, WIN_TODAY), fresh: false } }), 'compute');
+t('L2 fresh, same window           -> l2-fresh', wdecide({ entry: { val: wval(TODAY, WIN_NEXT), fresh: true } }), 'l2-fresh');
+t('L2 stale, same window           -> l2-stale', wdecide({ entry: { val: wval(TODAY, WIN_NEXT), fresh: false } }), 'l2-stale');
+t('pre-upgrade entry, no window    -> compute',  wdecide({ entry: { val: val(TODAY), fresh: true } }), 'compute');
+t('Refresh + PREV window           -> compute',  wdecide({ forceFresh: true, entry: { val: wval(TODAY, WIN_TODAY), fresh: true } }), 'compute');
+// Caller that has not been upgraded yet passes no addWindowDay: old behaviour,
+// stamp ignored, so this file's first 16 assertions keep their exact meaning.
+t('caller omits addWindowDay       -> l1',       decide({ memHit: wval(TODAY, WIN_TODAY) }), 'l1');
+
 console.log('\n--- the pre-fix behaviour these replace ---');
 console.log('  old: stale L2 of ANY age was served on Refresh, then refreshed in the background');
 console.log('  old: a fresh L2 computed at 23:59 IST answered requests until 00:01 IST');
+console.log('  old: an entry computed at 21:59 IST served a stale addedToday until midnight');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
