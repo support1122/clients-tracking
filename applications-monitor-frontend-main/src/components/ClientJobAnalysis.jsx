@@ -1359,7 +1359,7 @@ export default function ClientJobAnalysis() {
                       {userRole === 'admin' ? (
                         <select
                           value={
-                            r.clientCountry === 'USA' || r.clientCountry === 'Canada'
+                            ['USA', 'Canada', 'UK'].includes(r.clientCountry)
                               ? r.clientCountry
                               : ''
                           }
@@ -1371,10 +1371,11 @@ export default function ClientJobAnalysis() {
                           <option value="">—</option>
                           <option value="USA">USA</option>
                           <option value="Canada">Canada</option>
+                          <option value="UK">UK</option>
                         </select>
                       ) : (
                         <span className="text-[11px] text-slate-700">
-                          {r.clientCountry === 'USA' || r.clientCountry === 'Canada'
+                          {['USA', 'Canada', 'UK'].includes(r.clientCountry)
                             ? r.clientCountry
                             : '—'}
                         </span>
