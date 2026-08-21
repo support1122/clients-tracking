@@ -3566,10 +3566,17 @@ app.post('/api/jobs/by-date', getJobsByDate);
  * JobDB `operatorName` is sometimes stored as an ops email (e.g. sarah@flashfirehq) instead of a display name.
  * Strip the domain for Client Job Analysis, todos API, and Discord reminders so UI matches the main dashboard intent.
  */
-function formatLastAppliedOperatorDisplayName(raw) {
+function formatLastAppliedOperatorDisplayName(raw, { keepUser = false } = {}) {
   if (raw == null || typeof raw !== 'string') return '';
   const t = raw.trim();
-  if (!t || t.toLowerCase() === 'user') return '';
+  if (!t) return '';
+  // "user" means the CLIENT applied it themselves. Two callers want opposite
+  // things from that, so it is a parameter rather than a fixed rule:
+  //   • Client Job Analysis wants to show it — a dash there reads as "nobody has
+  //     ever applied", which is wrong and hides an entire class of active client.
+  //   • runJobCardReminder must NOT, because it opens "Hi {name}, please apply"
+  //     and addressing the message to "User" is nonsense.
+  if (t.toLowerCase() === 'user') return keepUser ? 'user' : '';
   const at = t.indexOf('@');
   if (at > 0) {
     const local = t.slice(0, at).trim();
@@ -3588,10 +3595,10 @@ function lastAppliedActorFromTimeline(timeline) {
   return '';
 }
 
-function resolveLastAppliedOperatorDisplayName(job) {
+function resolveLastAppliedOperatorDisplayName(job, opts) {
   const fromTimeline = lastAppliedActorFromTimeline(job?.timeline);
   const raw = fromTimeline || (job?.operatorName || '');
-  return formatLastAppliedOperatorDisplayName(raw);
+  return formatLastAppliedOperatorDisplayName(raw, opts);
 }
 
 /** Recompute paused duration from row fields (used on cache hit so days stay current). */
@@ -3633,7 +3640,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         ...result,
         rows: result.rows.map((row) => ({
           ...row,
-          lastAppliedOperatorName: formatLastAppliedOperatorDisplayName(row.lastAppliedOperatorName || ''),
+          lastAppliedOperatorName: formatLastAppliedOperatorDisplayName(row.lastAppliedOperatorName || '', { keepUser: true }),
           pausedDays: freshPausedDaysFromRow(row)
         }))
       };
@@ -3773,12 +3780,21 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
               // itself, so "applied by Sathya" IS the timeline entry. Dropping
               // the appliedDate condition fixes the historical rows immediately,
               // with no backfill needed.
-              timeline: { $elemMatch: {
-                $regex: /applied\s+by\s/i,
-                $not: /applied\s+by\s+user\s*$/i
-              }}
+              // Any apply at all, including the client's own. The $not clause
+              // that used to sit here excluded "applied by user", so a client
+              // who applies for themselves showed a dash forever — indistinguishable
+              // from one nobody has ever touched. Whoever applied the last card
+              // is the answer; "user" is a valid answer.
+              timeline: { $elemMatch: { $regex: /applied\s+by\s/i } }
             }
           },
+          // Newest-CREATED job that has an apply entry. This is an approximation
+          // of "most recently applied" and it is the best one available: the only
+          // stored apply timestamp is appliedDate, a free-form string Mongo can
+          // order lexicographically at best, and it is null on a large slice of
+          // the collection (see UpdateChanges.shouldSetAppliedDate). ObjectIds
+          // are monotonic in creation time, so this is at least deterministic and
+          // always resolves to a real card.
           { $sort: { _id: -1 } },
           { $group: { _id: '$userID', timeline: { $first: '$timeline' } } },
           { $project: { _id: 0, userID: '$_id', timeline: 1 } }
@@ -3963,7 +3979,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const lastAppliedOperatorMap = new Map(
       lastAppliedAgg.map((r) => [
         (r.userID || '').toLowerCase(),
-        resolveLastAppliedOperatorDisplayName(r)
+        resolveLastAppliedOperatorDisplayName(r, { keepUser: true })
       ])
     );
     const jobUserIDs = Array.from(new Set([...overallMap.keys(), ...appliedMap.keys(), ...removedMap.keys()]));

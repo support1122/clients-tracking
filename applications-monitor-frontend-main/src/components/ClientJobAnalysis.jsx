@@ -20,12 +20,28 @@ const AUTH_HEADERS = () => ({
   Authorization: `Bearer ${localStorage.getItem('authToken') || ''}`
 });
 
-/** Capitalize first letter of operator name (e.g. sonali -> Sonali, raj deep -> Raj deep). */
+/**
+ * Present an operator name: "sonali" -> "Sonali", "priya sharma" -> "Priya Sharma".
+ *
+ * Was first-letter-only plus .toLowerCase() on everything after it, which
+ * capitalised the first word and then actively DAMAGED the rest: a correctly
+ * stored "Priya Sharma" came out as "Priya sharma". Each word is handled on its
+ * own now.
+ *
+ * The tail of a word is only lowercased when the word carries no deliberate
+ * casing of its own, so "SATHYA" still becomes "Sathya" while "McDonald" and
+ * "O'Brien" survive intact.
+ */
 function capitalizeOperatorName(name) {
   if (!name || typeof name !== 'string') return '';
   const t = name.trim();
   if (!t) return '';
-  return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+  return t.split(/\s+/).map((w) => {
+    if (!w) return w;
+    const rest = w.slice(1);
+    const flatten = /^[a-z]*$/.test(rest) || /^[A-Z]+$/.test(w);
+    return w.charAt(0).toUpperCase() + (flatten ? rest.toLowerCase() : rest);
+  }).join(' ');
 }
 
 /** Format client display as number-name-plan (e.g. 5711-akrati-executive). Optimal: single pass, handles missing fields. */
