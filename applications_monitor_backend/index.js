@@ -3696,9 +3696,14 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     // ── Phase 1: Run ALL aggregations + client query in parallel ──
     // The last-applied aggregation does a $sort over every applied job (the
     // heaviest stage), so it gets its own 5-min cache, backed cross-instance.
-    let cachedLastApplied = getAnalysisCache('__lastAppliedOperator__');
+    // Version is IN THE KEY, not compared after the read: this entry is a bare
+    // array with nowhere to hang a stamp, and a deploy that changes what the
+    // aggregation returns must not keep serving the previous shape for the rest
+    // of the TTL.
+    const lastAppliedKey = `__lastAppliedOperator__v${ANALYSIS_PAYLOAD_VERSION}`;
+    let cachedLastApplied = getAnalysisCache(lastAppliedKey);
     if (!cachedLastApplied) {
-      const pLA = await pGetAnalysisCache('__lastAppliedOperator__');
+      const pLA = await pGetAnalysisCache(lastAppliedKey);
       if (pLA && pLA.fresh) cachedLastApplied = pLA.val;
     }
     const [overall, appliedOnDate, removedOnDate, removedByAiOnDate, lastAppliedAgg, clientInfo, aiRemovedAgg, firstAppliedAgg, addStats, applyStats] = await Promise.all([
@@ -3753,7 +3758,21 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         : JobModel.aggregate([
           {
             $match: {
-              appliedDate: { $ne: null },
+              // Matched on the TIMELINE alone. appliedDate used to be required
+              // here as well, and that is what emptied this column: appliedDate
+              // is only stamped by UpdateChanges.shouldSetAppliedDate(), which
+              // compared the stored status against the literal string "saved".
+              // Every operator status write appends " by <name>", so once a card
+              // had been moved to Saved by a person its status read
+              // "saved by Sathya", the comparison could never match, and the
+              // stamp was skipped. Requiring it here dropped every one of those
+              // jobs even though their timeline plainly records who applied.
+              //
+              // The timeline entry is the authoritative answer to "who applied
+              // this" anyway: UpdateChanges pushes the attributed status string
+              // itself, so "applied by Sathya" IS the timeline entry. Dropping
+              // the appliedDate condition fixes the historical rows immediately,
+              // with no backfill needed.
               timeline: { $elemMatch: {
                 $regex: /applied\s+by\s/i,
                 $not: /applied\s+by\s+user\s*$/i
@@ -3859,8 +3878,8 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     // Cache last-applied operator separately with longer TTL (5 min)
     if (!cachedLastApplied) {
-      setAnalysisCache('__lastAppliedOperator__', lastAppliedAgg, LAST_APPLIED_CACHE_TTL);
-      pSetAnalysisCache('__lastAppliedOperator__', lastAppliedAgg, LAST_APPLIED_CACHE_TTL).catch(() => {});
+      setAnalysisCache(lastAppliedKey, lastAppliedAgg, LAST_APPLIED_CACHE_TTL);
+      pSetAnalysisCache(lastAppliedKey, lastAppliedAgg, LAST_APPLIED_CACHE_TTL).catch(() => {});
     }
 
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
