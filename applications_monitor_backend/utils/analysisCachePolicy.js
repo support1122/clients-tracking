@@ -50,8 +50,11 @@
  *      no longer requires appliedDate, which was null on every job an operator
  *      had moved through Saved. Same field, different (correct) values, so the
  *      version has to move or cached rows keep showing a dash.
+ *   3  lastAppliedOperatorName now also reports "user" when the CLIENT applied
+ *      the last card themselves. Those clients previously rendered a dash,
+ *      identical to a client nobody had ever applied for.
  */
-export const ANALYSIS_PAYLOAD_VERSION = 2;
+export const ANALYSIS_PAYLOAD_VERSION = 3;
 
 /** 'YYYY-MM-DD' for the current IST calendar day. */
 export function istDayStamp(nowMs = Date.now()) {
