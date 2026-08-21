@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Client Job Analysis — What's New</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm 14mm; }
+
+  :root {
+    --ink:      #16202c;
+    --ink-soft: #52627a;
+    --ink-mute: #8494a8;
+    --line:     #dfe5ed;
+    --accent:   #4338ca;
+    --red-bg:   #fee2e2; --red-br:  #fca5a5; --red-tx:  #b91c1c;
+    --grn-bg:   #d1fae5; --grn-br:  #6ee7b7; --grn-tx:  #047857;
+    --gry-bg:   #f1f5f9; --gry-br:  #cbd5e1; --gry-tx:  #64748b;
+    --amb-bg:   #fef3c7; --amb-br:  #fcd34d; --amb-tx:  #92400e;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: "Segoe UI", Inter, -apple-system, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    font-size: 10.5pt;
+    line-height: 1.55;
+    margin: 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  h1 { font-size: 26pt; line-height: 1.15; margin: 0 0 4pt; letter-spacing: -0.5pt; }
+  h2 {
+    font-size: 15pt; margin: 0 0 10pt; letter-spacing: -0.2pt;
+    padding-bottom: 5pt; border-bottom: 2px solid var(--accent);
+  }
+  h3 { font-size: 11.5pt; margin: 14pt 0 5pt; color: var(--ink); }
+  p  { margin: 0 0 8pt; }
+
+  .lede { font-size: 12pt; color: var(--ink-soft); margin: 0 0 4pt; }
+  .meta { font-size: 9pt; color: var(--ink-mute); }
+
+  /* Each numbered section starts a fresh page so nothing splits awkwardly. */
+  section { page-break-before: always; }
+  section:first-of-type { page-break-before: avoid; }
+  .nobreak { page-break-inside: avoid; }
+
+  .num {
+    display: inline-block; width: 21pt; height: 21pt; line-height: 21pt;
+    text-align: center; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    font-size: 11pt; font-weight: 700; margin-right: 7pt;
+    vertical-align: -3pt;
+  }
+
+  /* ── the client card ───────────────────────────────────────────── */
+  .client {
+    border: 1.5px solid var(--accent); border-radius: 8pt;
+    padding: 10pt 13pt; margin: 12pt 0 16pt; background: #f5f5ff;
+  }
+  .client .name { font-size: 13pt; font-weight: 700; }
+  .client .sub  { font-size: 9.5pt; color: var(--ink-soft); }
+
+  /* ── UI chips, drawn as they actually appear on screen ─────────── */
+  .chip {
+    display: inline-block; padding: 2pt 8pt; border-radius: 99pt;
+    font-size: 10pt; font-weight: 700; white-space: nowrap;
+  }
+  .chip.red  { background: var(--red-bg); border: 1px solid var(--red-br); color: var(--red-tx); }
+  .chip.grn  { background: var(--grn-bg); border: 1px solid var(--grn-br); color: var(--grn-tx); }
+  .chip.gry  { background: var(--gry-bg); border: 1px solid var(--gry-br); color: var(--gry-tx); }
+  .stale { display: block; font-size: 8.5pt; font-weight: 700; color: var(--red-tx); margin-top: 2pt; }
+
+  /* ── generic table ─────────────────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; margin: 9pt 0 12pt; font-size: 10pt; }
+  th {
+    text-align: left; font-size: 8pt; text-transform: uppercase; letter-spacing: 0.4pt;
+    color: var(--ink-soft); border-bottom: 1.5px solid var(--line);
+    padding: 5pt 7pt 4pt;
+  }
+  td { padding: 6pt 7pt; border-bottom: 1px solid #eef2f7; vertical-align: top; }
+  td.c, th.c { text-align: center; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  /* ── the screenshot-style row ──────────────────────────────────── */
+  .screen {
+    border: 1px solid var(--line); border-radius: 6pt; overflow: hidden;
+    margin: 10pt 0 12pt; font-size: 9pt;
+  }
+  .screen table { margin: 0; font-size: 9pt; }
+  .screen th { background: #f8fafc; padding: 5pt 6pt; font-size: 7pt; }
+  .screen td { padding: 7pt 6pt; text-align: center; }
+  .screen td.left { text-align: left; }
+
+  /* ── callouts ──────────────────────────────────────────────────── */
+  .note, .warn, .good {
+    border-left: 3.5pt solid; border-radius: 0 5pt 5pt 0;
+    padding: 8pt 12pt; margin: 10pt 0;
+  }
+  .note { border-color: var(--accent); background: #f5f5ff; }
+  .warn { border-color: #d97706;      background: #fffbeb; }
+  .good { border-color: #059669;      background: #ecfdf5; }
+  .note p:last-child, .warn p:last-child, .good p:last-child { margin-bottom: 0; }
+  .label { font-weight: 700; }
+
+  .discord {
+    background: #2b2d31; color: #dbdee1; border-radius: 6pt;
+    padding: 11pt 13pt; margin: 10pt 0; font-size: 9pt; line-height: 1.6;
+    font-family: "DejaVu Sans Mono", Consolas, monospace;
+  }
+  .discord .hdr { color: #f9a8a8; font-weight: 700; }
+  .discord .hl  { color: #fca5a5; font-weight: 700; }
+
+  code {
+    font-family: "DejaVu Sans Mono", Consolas, monospace;
+    background: #f1f5f9; padding: 1pt 4pt; border-radius: 3pt; font-size: 9pt;
+  }
+  pre {
+    background: #16202c; color: #e2e8f0; border-radius: 6pt;
+    padding: 10pt 12pt; font-size: 8.5pt; line-height: 1.5; overflow-x: auto;
+    font-family: "DejaVu Sans Mono", Consolas, monospace;
+  }
+
+  .maths {
+    font-family: "DejaVu Sans Mono", Consolas, monospace;
+    font-size: 11pt; text-align: center; padding: 10pt;
+    background: #f8fafc; border-radius: 6pt; margin: 10pt 0;
+  }
+
+  .banner {
+    border: 1px solid var(--red-br); background: #fff1f2;
+    border-radius: 7pt; padding: 9pt 12pt; margin: 10pt 0;
+  }
+  .banner .top { font-weight: 700; color: #881337; font-size: 10.5pt; }
+  .pill {
+    display: inline-block; background: #fff; border: 1px solid var(--red-br);
+    color: #9f1239; border-radius: 99pt; padding: 1.5pt 8pt;
+    font-size: 8.5pt; font-weight: 600; margin-left: 5pt;
+  }
+  .banner .row {
+    border-top: 1px solid #fecdd3; margin-top: 8pt; padding-top: 7pt; font-size: 9pt;
+  }
+  .tag {
+    display: inline-block; border-radius: 3pt; padding: 1pt 5pt;
+    font-size: 8pt; font-weight: 600; margin-right: 4pt;
+  }
+  .tag.r { background: var(--red-bg); color: var(--red-tx); border: 1px solid var(--red-br); }
+  .tag.a { background: var(--amb-bg); color: var(--amb-tx); border: 1px solid var(--amb-br); }
+
+  .two { display: flex; gap: 11pt; margin: 10pt 0; }
+  .two > div {
+    flex: 1; border: 1px solid var(--line); border-radius: 6pt; padding: 9pt 11pt;
+  }
+  .two h4 { margin: 0 0 6pt; font-size: 9pt; text-transform: uppercase;
+            letter-spacing: 0.4pt; color: var(--ink-mute); }
+
+  .tri { color: #d97706; font-weight: 700; }
+  .foot { margin-top: 14pt; padding-top: 8pt; border-top: 1px solid var(--line);
+          font-size: 8.5pt; color: var(--ink-mute); }
+</style>
+</head>
+<body>
+
+<h1>Client Job Analysis</h1>
+<p class="lede">What changed, what every number means, and how to read a row.</p>
+<p class="meta">One example client is used throughout, so all the numbers connect.</p>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section>
+<h2>Why we built this</h2>
+
+<p>Operators were adding fewer job cards to save time, and no screen anywhere showed it.</p>
+
+<p>The reason nobody caught it is that we had a <span class="label">ceiling</span> but no <span class="label">floor</span>.
+The system blocked job number 31 for a client, but never once asked why only 3 were added.</p>
+
+<p>It was actually worse than that. Both daily Discord reminders measured the wrong thing.</p>
+
+<table>
+  <thead><tr><th style="width:24%">Reminder</th><th>What it did</th><th style="width:32%">The side effect</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="label">8 PM</span><br><span class="meta">"please apply"</span></td>
+      <td>Fired whenever a client had saved cards waiting.</td>
+      <td>Add fewer cards, get nagged less.</td>
+    </tr>
+    <tr>
+      <td><span class="label">1:30 PM</span><br><span class="meta">"zero saved"</span></td>
+      <td>Fired only at <span class="label">exactly zero</span> saved cards, counted over all time.</td>
+      <td>One leftover card from three weeks ago switched it off forever.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="warn nobreak">
+  <p><span class="label">So adding less made Discord quieter, not louder.</span></p>
+  <p>The system was rewarding exactly the behaviour we wanted to stop. That is what these changes remove.</p>
+</div>
+
+<h3>Meet our example client</h3>
+<div class="client nobreak">
+  <div class="name">5905-aysha-professional</div>
+  <div class="sub">Active &nbsp;·&nbsp; Unpaused &nbsp;·&nbsp; Professional plan &nbsp;·&nbsp; daily target 30</div>
+</div>
+<p>Every number on the following pages belongs to this one client.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section>
+<h2><span class="num">1</span>The "Added Today" column</h2>
+
+<p>This is the headline number, and the one everything else hangs off.</p>
+
+<div class="screen nobreak">
+  <table>
+    <thead><tr><th class="c" style="width:34%">Added Today</th><th>Reading</th></tr></thead>
+    <tbody>
+      <tr><td><span class="chip red">19/30</span></td>
+          <td class="left"><span class="label">19 cards added today. Target is 30.</span> Eleven short.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>Left number is what was added. Right number is what was expected.</p>
+
+<h3>The three colours mean three different things</h3>
+
+<div class="screen nobreak">
+  <table>
+    <thead><tr><th class="c" style="width:24%">Badge</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td><span class="chip red">19/30</span></td>
+          <td class="left"><span class="label">Red.</span> Active client, below target. Someone needs to act.</td></tr>
+      <tr><td><span class="chip grn">30/30</span></td>
+          <td class="left"><span class="label">Green.</span> Active client, target met.</td></tr>
+      <tr><td><span class="chip gry">0/—</span></td>
+          <td class="left"><span class="label">Grey.</span> No target applies. The client is Paused, Inactive, or still Onboarding.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="note nobreak">
+  <p><span class="label">Grey is the important one.</span></p>
+  <p>A paused client with 0 added is not a failure, so it must not look like one.
+     It is not a success either, so it must not be green.
+     Hover the grey badge and it tells you which of the three reasons applies.</p>
+</div>
+
+<h3>"Today" does not mean midnight to midnight</h3>
+
+<p>The day runs <span class="label">10 PM to 10 PM IST</span>.</p>
+
+<p>That is not arbitrary. It is exactly the window the push cap already uses, so this number always
+matches the counter the extension shows the operator. If the two disagreed, nobody would trust either.</p>
+
+<div class="maths">a card added 10:30 PM Monday night &nbsp;→&nbsp; counts towards <b>Tuesday</b></div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section>
+<h2><span class="num">2</span>"STALE 3d"</h2>
+
+<div class="screen nobreak">
+  <table>
+    <thead><tr><th class="c" style="width:34%">Added Today</th><th>Reading</th></tr></thead>
+    <tbody>
+      <tr><td><span class="chip red">0/30</span><span class="stale">STALE 3d</span></td>
+          <td class="left"><span class="label">Nothing at all has been added for 3 days.</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>STALE is about <span class="label">silence</span>, not about being short.
+It only appears when a client has had a completely empty day or more.</p>
+
+<div class="screen nobreak">
+  <table>
+    <thead><tr><th class="c" style="width:28%">What you see</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td><span class="chip red">3/30</span></td>
+          <td class="left">Someone worked on them today, just not enough. No STALE.</td></tr>
+      <tr><td><span class="chip red">0/30</span><span class="stale">STALE 1d</span></td>
+          <td class="left">Nobody touched them today <span class="label">or</span> yesterday.</td></tr>
+      <tr><td><span class="chip red">0/30</span><span class="stale">STALE 6d</span></td>
+          <td class="left">This client has been forgotten for most of a week.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2 style="margin-top:22pt"><span class="num">3</span>"7d Avg"</h2>
+
+<p>Average cards added per day over the <span class="label">last 7 completed days</span>.
+Today is deliberately left out: a day that is only two hours old would drag the average down and make
+every client look bad every morning.</p>
+
+<p>Use it to answer one question: <span class="label">is today normal for this client?</span></p>
+
+<div class="two nobreak">
+  <div>
+    <h4>Added 3 &nbsp;·&nbsp; 7d avg 28</h4>
+    <p style="margin:0">Something broke <span class="label">today</span>. Yesterday was fine.</p>
+  </div>
+  <div>
+    <h4>Added 3 &nbsp;·&nbsp; 7d avg 4</h4>
+    <p style="margin:0">This client is neglected <span class="label">every</span> day.</p>
+  </div>
+</div>
+
+<p>Same shortfall. Completely different conversation.</p>
+
+<div class="note">
+  <p>There is also a <span class="label">Yday</span> column showing yesterday's count on its own.
+     It is currently switched off to save screen width.
+     Search <code>Yday — HIDDEN</code> in <code>ClientJobAnalysis.jsx</code> to bring it back.</p>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section>
+<h2><span class="num">4</span>The attention panel</h2>
+
+<p>A banner at the top of the page. It is the first thing you see.</p>
+
+<div class="banner nobreak">
+  <div class="top">&#9888; 14 clients need attention
+    <span class="pill">9 No jobs added</span>
+    <span class="pill">7 Saved but not applied</span>
+    <span class="pill">3 critical</span>
+  </div>
+  <div class="row">
+    <span class="label">5905 · Aysha Nijhawan</span> &nbsp;
+    <span class="tag r">No jobs added for 3 days</span>
+    <span class="tag a">17 saved, none applied today</span><br>
+    <span class="meta">aysha.nijhawan11@gmail.com</span>
+  </div>
+</div>
+
+<table>
+  <tbody>
+    <tr><td style="width:32%"><span class="label">Click a client</span></td><td>Filters the table down to just them.</td></tr>
+    <tr><td><span class="label">Click a pill</span></td><td>Filters the table to that problem.</td></tr>
+    <tr><td><span class="label">Hide for this session</span></td>
+        <td>Hides it until you next open the browser. It comes back tomorrow on purpose,
+            so dismissing it can never switch it off for good.</td></tr>
+  </tbody>
+</table>
+
+<p>There is also a small <span class="tri">&#9888;</span> next to the client name in the table itself,
+so a flagged client stays obvious once you scroll past the banner. Hover it to read why.</p>
+
+<h3>The two alerts</h3>
+
+<div class="screen nobreak">
+  <table>
+    <thead><tr><th style="width:30%">Alert</th><th>Fires when</th><th style="width:26%">Turns critical</th></tr></thead>
+    <tbody>
+      <tr><td class="left"><span class="label">No jobs added</span></td>
+          <td class="left">Nothing added for a full day or more.</td>
+          <td class="left">At 2 days. By then it survived a whole cycle of reminders and nobody acted.</td></tr>
+      <tr><td class="left"><span class="label">Saved but not applied</span></td>
+          <td class="left">Cards are waiting in the saved column and nothing was applied today.</td>
+          <td class="left">Once the last application was 2 or more days ago.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="good nobreak">
+  <p><span class="label">The second one is new information.</span></p>
+  <p>The old 8 PM reminder said "please apply" without ever checking whether anyone did.
+     A backlog could sit untouched for a week while Discord repeated the identical message every evening.</p>
+</div>
+
+<div class="note nobreak">
+  <p><span class="label">It stays quiet for clients we owe nothing.</span></p>
+  <p>Paused, Inactive and Onboarding clients never raise an alert.
+     They legitimately get nothing added, and flagging them would bury the real signal
+     and train everyone to ignore the panel.</p>
+</div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section>
+<h2><span class="num">5</span>Reading a full row</h2>
+
+<p>Here is our example client exactly as the table shows them.</p>
+
+<div class="screen nobreak">
+  <table>
+    <thead>
+      <tr>
+        <th class="left">Client</th><th>Saved</th><th>Added<br>Today</th><th>7d<br>Avg</th>
+        <th>Applied</th><th>Removed</th><th>Removed<br>by AI</th><th>Total<br>Apps</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="left"><span class="tri">&#9888;</span> <span class="label">5905-aysha</span></td>
+        <td>17</td>
+        <td><span class="chip red">19/30</span></td>
+        <td>11.1</td>
+        <td>117</td>
+        <td>53</td>
+        <td>2</td>
+        <td>135</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>"Added Today says 19 but Saved only says 17. Where did 2 go?"</h3>
+
+<p>They count different things.</p>
+
+<table>
+  <tbody>
+    <tr><td style="width:32%"><span class="label">Added Today (19)</span></td>
+        <td>Cards <span class="label">created</span> today, whatever happened to them afterwards.</td></tr>
+    <tr><td><span class="label">Saved (17)</span></td>
+        <td>Cards <span class="label">sitting right now</span> in the saved column.</td></tr>
+  </tbody>
+</table>
+
+<p>The answer is in the same row. <span class="label">Removed by AI: 2</span>, and that is also a today number.
+The AI pulled 2 of today's 19 straight back out, either an expired posting or an exclusion-list match.</p>
+
+<div class="maths">19 added today &nbsp;−&nbsp; 2 removed by AI today &nbsp;=&nbsp; <b>17 waiting in saved</b></div>
+
+<div class="good"><p>Nothing is wrong. The numbers agree.</p></div>
+
+<h3>"Total Apps says 135 but the columns add up to more."</h3>
+
+<p>Total Apps is <code>Saved + Applied + Interview + Offer + Rejected</code>.</p>
+
+<div class="maths">17 &nbsp;+&nbsp; 117 &nbsp;+&nbsp; 1 &nbsp;+&nbsp; 0 &nbsp;+&nbsp; 0 &nbsp;=&nbsp; <b>135</b></div>
+
+<p>The 53 <span class="label">Removed</span> are deliberately left out, so this client has actually had
+<span class="label">188 cards created</span> in their lifetime.</p>
+
+<h3>And the warning triangle?</h3>
+
+<p>17 cards are waiting and nothing went out today. That is the "saved but not applied" alert.
+The 117 applied is a lifetime figure spread over 13 days, not today's work.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section>
+<h2><span class="num">6</span>The 9:30 PM Discord report</h2>
+
+<p>A new daily message listing every active client who is short, worst first,
+naming who worked on them today.</p>
+
+<div class="discord nobreak">
+<span class="hdr">Add shortfall — 2026-08-20 (window closes 22:00 IST)</span><br>
+18 of 42 active clients are under target. 312 job cards added today.<br><br>
+• Rahul Sharma — 0/30 (0%) · today by: nobody · <span class="hl">no adds for 2d</span><br>
+• Aysha Nijhawan — 19/30 (63%) · today by: Priya<br>
+• Neha Verma — 22/30 (73%) · today by: Arjun, Kabir
+</div>
+
+<div class="note nobreak">
+  <p><span class="label">Why 9:30 PM and not later?</span></p>
+  <p>The day closes at 10 PM. Sending at 9:30 leaves half an hour to fix things.
+     A report that lands after the day is already lost just gets muted.</p>
+</div>
+
+<div class="warn nobreak">
+  <p><span class="label">To switch it on:</span> set <code>DISCORD_ADD_SHORTFALL</code> to a Discord webhook URL.</p>
+  <p>Use a <span class="label">separate channel</span> from the other two reminders.
+     This one is a scoreboard a team lead reads top to bottom, not a per-client nag.
+     Without that variable the report simply does not run; everything else works regardless.</p>
+</div>
+
+<h2 style="margin-top:22pt"><span class="num">7</span>The two old reminders, fixed</h2>
+
+<h3>1:30 PM "zero saved"</h3>
+<p>Used to fire only at exactly zero saved cards, counted over all time.
+It now <span class="label">also fires when nothing was added today</span>, however big the backlog is.</p>
+
+<h3>8 PM "please apply"</h3>
+<p>Now states the day's adds in the same breath:</p>
+
+<div class="discord nobreak">
+Hi Priya, there are 17 job card(s) in saved column for Aysha's dashboard, please apply.<br>
+<span class="hl">Added today: 19/30 — 11 short of target.</span>
+</div>
+
+<p>Clearing the backlog no longer reads as a finished day.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section>
+<h2><span class="num">8</span>Other changes on the page</h2>
+
+<h3>The duplicate "Paused" column is gone</h3>
+
+<div class="two nobreak">
+  <div>
+    <h4>Before — two columns</h4>
+    <p style="margin:0;font-size:9pt">
+      <span class="label">Pause/Unpause/New</span><br>[ Paused ▾ ]<br><br>
+      <span class="label">Paused</span><br>Paused<br>79d
+    </p>
+  </div>
+  <div>
+    <h4>After — one column</h4>
+    <p style="margin:0;font-size:9pt">
+      <span class="label">Pause / Unpause / New</span><br>[ Paused ▾ ]<br>
+      <span style="color:var(--amb-tx);font-weight:700">79d paused</span>
+    </p>
+  </div>
+</div>
+
+<p>The word "Paused" was printed twice. Only the day count was new information, so only it survived.
+Hover it for the exact date the pause started.</p>
+
+<p>The whole table also got narrower. Four columns on the left lost
+<span class="label">231 pixels</span> between them, measured in a real browser.</p>
+
+<h3>"Applied Today" now shows something useful</h3>
+
+<p>This column used to read "Applied on Date" and show <span class="label">0 for every client</span>
+when no date was picked, which told you nothing. It now shows the applications that actually went out today,
+and turns amber when it is 0 while cards are waiting.</p>
+
+<h3>Filters and sorting</h3>
+
+<table>
+  <tbody>
+    <tr><td style="width:32%"><span class="label">Sort</span> (Added Today header)</td>
+        <td>Cycles biggest shortfall first, smallest first, off.</td></tr>
+    <tr><td><span class="label">Dropdown</span> (Added Today header)</td>
+        <td>Under target &nbsp;·&nbsp; No adds for 1d+ &nbsp;·&nbsp; Target met</td></tr>
+    <tr><td><span class="label">Counters</span> (top of page)</td>
+        <td><code>14 Under target</code> &nbsp; <code>6 No adds 1d+</code> &nbsp; <code>312 Added today</code>
+            — the first two are clickable.</td></tr>
+  </tbody>
+</table>
+
+<h3>Fixed quietly along the way</h3>
+<ul>
+  <li>Two scheduled jobs claimed an IST time in their comments but passed no timezone,
+      so they silently depended on the server running in UTC. Now stated explicitly.</li>
+  <li>The page caches its data for speed, but the cache had no idea when we changed the code,
+      so newly added columns stayed blank until midnight. It now carries a version stamp
+      and refreshes the moment new code goes live.</li>
+  <li>A database index was added so the new counts do not slow the page down.</li>
+</ul>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════ -->
+<section>
+<h2>Quick reference</h2>
+
+<div class="screen nobreak">
+  <table>
+    <thead><tr><th class="c" style="width:26%">You see</th><th>It means</th></tr></thead>
+    <tbody>
+      <tr><td><span class="chip red">19/30</span></td><td class="left">Active client, below target</td></tr>
+      <tr><td><span class="chip grn">30/30</span></td><td class="left">Active client, target met</td></tr>
+      <tr><td><span class="chip gry">0/—</span></td><td class="left">Paused, Inactive or Onboarding. No target applies.</td></tr>
+      <tr><td><span class="stale" style="display:inline">STALE 3d</span></td>
+          <td class="left">Nothing added at all for 3 days</td></tr>
+      <tr><td><span class="label">7d Avg</span></td><td class="left">Daily average over the last 7 completed days</td></tr>
+      <tr><td><span class="tri">&#9888;</span></td><td class="left">This client has an open alert. Hover to read it.</td></tr>
+      <tr><td><span class="label">Day boundary</span></td><td class="left">10 PM to 10 PM IST, matching the push cap</td></tr>
+      <tr><td><span class="label">Target</span></td><td class="left">The client's own target, or 30 if none is set</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h3>Checking the raw data yourself</h3>
+
+<p>To see cards added per day straight from the database:</p>
+
+<pre>cd clients-tracking/applications_monitor_backend
+export $(grep -m1 ^MONGODB_URI .env)
+node scripts/check-add-rate.mjs 14</pre>
+
+<div class="warn nobreak">
+  <p><span class="label">A quiet day is not always someone slacking.</span></p>
+  <p>Three things can silently block adds: a client hitting their lifetime plan limit,
+     a database hiccup refusing pushes, or an expired extension session key.
+     The script reminds you of all three. Rule them out before drawing conclusions about effort.</p>
+</div>
+
+<p class="foot">Client Job Analysis &nbsp;·&nbsp; FlashFire operations &nbsp;·&nbsp; generated 20 August 2026</p>
+</section>
+
+</body>
+</html>

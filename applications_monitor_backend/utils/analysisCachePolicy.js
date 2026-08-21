@@ -46,8 +46,12 @@
  *   1  jobs-added columns (addedToday, addedYesterday, added7dAvg, dailyTarget,
  *      addShortfall, daysSinceLastAdd), apply recency (appliedToday,
  *      daysSinceLastApply), attention alerts, and addTargetTracked.
+ *   2  lastAppliedOperatorName is populated for far more clients: the aggregation
+ *      no longer requires appliedDate, which was null on every job an operator
+ *      had moved through Saved. Same field, different (correct) values, so the
+ *      version has to move or cached rows keep showing a dash.
  */
-export const ANALYSIS_PAYLOAD_VERSION = 1;
+export const ANALYSIS_PAYLOAD_VERSION = 2;
 
 /** 'YYYY-MM-DD' for the current IST calendar day. */
 export function istDayStamp(nowMs = Date.now()) {

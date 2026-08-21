@@ -33,6 +33,14 @@ export async function ensureDbIndexes() {
     // ({ _id: { $gte: <window start ObjectId> } }) is satisfied inside the same
     // scan instead of fetching every ops job ever pushed.
     JobModel.collection.createIndex({ createdByRole: 1, _id: 1 }),
+    // Duplicate-link lookup on the add paths in flashfire-dashboard-backend-main
+    // (Utils/jobLinkKey.js). Declared here as well because both services share
+    // the jobdbs collection and this is the explicit index manager — relying on
+    // the other repo's mongoose autoIndex would leave it missing wherever
+    // autoIndex is disabled. NOT unique: joblinkKey is '' for placeholder links,
+    // duplicates already exist, and a race should surface as a readable message
+    // rather than a raw E11000.
+    JobModel.collection.createIndex({ userID: 1, joblinkKey: 1 }),
     UserModel.collection.createIndex({ email: 1 }, { unique: true }),
     UserModel.collection.createIndex({ isActive: 1 }),
     UserModel.collection.createIndex({ isActive: 1, onboardingSubRole: 1 }),
