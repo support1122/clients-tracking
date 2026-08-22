@@ -41,6 +41,9 @@ export async function ensureDbIndexes() {
     // duplicates already exist, and a race should surface as a readable message
     // rather than a raw E11000.
     JobModel.collection.createIndex({ userID: 1, joblinkKey: 1 }),
+    // Shared-application-form guard: counts distinct employers per link across
+    // ALL clients, so userID cannot lead this one.
+    JobModel.collection.createIndex({ joblinkKey: 1 }),
     UserModel.collection.createIndex({ email: 1 }, { unique: true }),
     UserModel.collection.createIndex({ isActive: 1 }),
     UserModel.collection.createIndex({ isActive: 1, onboardingSubRole: 1 }),
