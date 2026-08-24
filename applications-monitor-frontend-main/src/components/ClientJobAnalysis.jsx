@@ -229,6 +229,7 @@ export default function ClientJobAnalysis() {
   const [statusFilter, setStatusFilter] = useState('');   // '' | active | inactive
   const [phaseFilter, setPhaseFilter] = useState('');     // '' | new | paused | unpaused
   const [addFilter, setAddFilter] = useState('');         // '' | under | stale | met
+  const [countryFilter, setCountryFilter] = useState(''); // '' | USA | Canada | UK | blank
   const [addSortDir, setAddSortDir] = useState(null);     // null | 'worst' | 'best'
   const [alertFilter, setAlertFilter] = useState('');     // '' | no_adds | not_applied
   const [alertsOpen, setAlertsOpen] = useState(false);    // expanded client list
@@ -713,6 +714,18 @@ export default function ClientJobAnalysis() {
     return 0;
   }, []);
 
+  // Country counts computed from all rows (not filtered) so the badges always show totals
+  const countryCounts = useMemo(() => {
+    const counts = { USA: 0, Canada: 0, UK: 0, blank: 0 };
+    for (const r of rows) {
+      if (r.clientCountry === 'USA') counts.USA++;
+      else if (r.clientCountry === 'Canada') counts.Canada++;
+      else if (r.clientCountry === 'UK') counts.UK++;
+      else counts.blank++;
+    }
+    return counts;
+  }, [rows]);
+
   // Memoize filtered + sorted rows: active first, then by clientNumber ascending (same as Client Onboarding)
   const processedRows = useMemo(() => {
     let filtered = rows;
@@ -729,6 +742,8 @@ export default function ClientJobAnalysis() {
     else if (addFilter === 'stale') filtered = filtered.filter(r => r.isUnderTarget && (r.daysSinceLastAdd ?? 0) >= 1);
     else if (addFilter === 'met') filtered = filtered.filter(r => !r.isUnderTarget);
     if (alertFilter) filtered = filtered.filter(r => (r.alerts || []).some(a => a.code === alertFilter));
+    if (countryFilter === 'blank') filtered = filtered.filter(r => !r.clientCountry);
+    else if (countryFilter) filtered = filtered.filter(r => r.clientCountry === countryFilter);
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(r => {
@@ -784,7 +799,7 @@ export default function ClientJobAnalysis() {
     // Attach derived cap/status math once per data change so per-render row
     // output stays cheap.
     return sorted.map((r) => ({ ...r, _d: computeRowDerived(r) }));
-  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, searchQuery, getSortingNumber]);
+  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, countryFilter, searchQuery, getSortingNumber]);
 
   // ── Chunked rendering: mount ROW_CHUNK rows at a time, growing as a sentinel
   // scrolls into view. Bounds initial paint cost + DOM size for big tables. ──
@@ -902,6 +917,26 @@ export default function ClientJobAnalysis() {
             <span className="text-sm font-medium text-gray-700">
               <span className="text-indigo-600 font-semibold">{summaryCounts.addedToday ?? 0}</span> Added today
             </span>
+            <span className="h-4 w-px bg-gray-300" aria-hidden="true" />
+            {[
+              { key: 'USA', label: 'USA', color: 'text-blue-600' },
+              { key: 'Canada', label: 'Canada', color: 'text-red-500' },
+              { key: 'UK', label: 'UK', color: 'text-purple-600' },
+              { key: 'blank', label: 'Blank', color: 'text-gray-400' },
+            ].map(({ key, label, color }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setCountryFilter((prev) => (prev === key ? '' : key))}
+                className={`text-sm font-medium rounded-md px-2 py-0.5 border transition-colors ${
+                  countryFilter === key
+                    ? 'border-indigo-400 bg-indigo-50 text-indigo-800'
+                    : 'border-transparent text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                <span className={`font-semibold ${color}`}>{countryCounts[key]}</span> {label}
+              </button>
+            ))}
           </div>
         )}
 
@@ -1082,7 +1117,19 @@ export default function ClientJobAnalysis() {
                     ]}
                   />
                 </th>
-                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[86px] leading-tight">Country</th>
+                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[86px] leading-tight">
+                  <HeaderFilter
+                    label="Country"
+                    value={countryFilter}
+                    onChange={setCountryFilter}
+                    options={[
+                      { value: 'USA', label: `USA (${countryCounts.USA})` },
+                      { value: 'Canada', label: `Canada (${countryCounts.Canada})` },
+                      { value: 'UK', label: `UK (${countryCounts.UK})` },
+                      { value: 'blank', label: `Blank (${countryCounts.blank})` },
+                    ]}
+                  />
+                </th>
                 <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[98px]">
                   <HeaderFilter
                     label="Pause / Unpause / New"
@@ -1292,7 +1339,7 @@ export default function ClientJobAnalysis() {
                   <td colSpan={TABLE_COLUMN_COUNT} className="px-2 py-8 text-center text-gray-500 text-sm">
                     {searchQuery.trim()
                       ? `No clients match "${searchQuery}"`
-                      : (lastAppliedByFilter || statusFilter || phaseFilter || addFilter || alertFilter)
+                      : (lastAppliedByFilter || statusFilter || phaseFilter || addFilter || alertFilter || countryFilter)
                         ? 'No clients match the selected filters'
                         : 'No data'}
                   </td>
