@@ -1569,16 +1569,28 @@ export default function ClientJobAnalysis() {
                       {/* Nothing added for a full window or more. This is the
                           "no job cards for a day" case, and it is the one signal
                           on this screen that used to be completely invisible. */}
-                      {r.isUnderTarget && (r.daysSinceLastAdd ?? 0) >= 1 && (
+                      {r.isUnderTarget && (r.daysSinceLastAdd == null || r.daysSinceLastAdd >= 1) && (
                         <span
-                          className="block mt-0.5 text-[10px] font-semibold text-red-600"
+                          className={`block mt-0.5 text-[10px] font-semibold ${
+                            r.daysSinceLastAdd == null ? 'text-rose-700' : 'text-red-600'
+                          }`}
                           title={
                             r.daysSinceLastAdd == null
                               ? 'No job card has ever been added for this client'
                               : `Nothing added for ${r.daysSinceLastAdd} day${r.daysSinceLastAdd === 1 ? '' : 's'}`
                           }
                         >
-                          {r.daysSinceLastAdd === 1 ? 'STALE 1d' : `STALE ${r.daysSinceLastAdd}d`}
+                          {/* daysSinceLastAdd is null for a client who has NEVER
+                              had a card added — the worst case on this screen.
+                              The old guard read `(r.daysSinceLastAdd ?? 0) >= 1`,
+                              so null collapsed to 0 and the badge never rendered
+                              for exactly those clients. The tooltip below it
+                              already had a branch for null, which could not run. */}
+                          {r.daysSinceLastAdd == null
+                            ? 'NEVER ADDED'
+                            : r.daysSinceLastAdd === 1
+                              ? 'STALE 1d'
+                              : `STALE ${r.daysSinceLastAdd}d`}
                         </span>
                       )}
                     </td>
