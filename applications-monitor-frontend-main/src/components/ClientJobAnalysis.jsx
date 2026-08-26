@@ -230,6 +230,7 @@ export default function ClientJobAnalysis() {
   const [phaseFilter, setPhaseFilter] = useState('');     // '' | new | paused | unpaused
   const [addFilter, setAddFilter] = useState('');         // '' | under | stale | met
   const [countryFilter, setCountryFilter] = useState(''); // '' | USA | Canada | UK | blank
+  const [dashboardMgrFilter, setDashboardMgrFilter] = useState('');
   const [addSortDir, setAddSortDir] = useState(null);     // null | 'worst' | 'best'
   const [alertFilter, setAlertFilter] = useState('');     // '' | no_adds | not_applied
   const [alertsOpen, setAlertsOpen] = useState(false);    // expanded client list
@@ -744,6 +745,10 @@ export default function ClientJobAnalysis() {
     if (alertFilter) filtered = filtered.filter(r => (r.alerts || []).some(a => a.code === alertFilter));
     if (countryFilter === 'blank') filtered = filtered.filter(r => !r.clientCountry);
     else if (countryFilter) filtered = filtered.filter(r => r.clientCountry === countryFilter);
+    if (dashboardMgrFilter) {
+      const filterLower = dashboardMgrFilter.toLowerCase();
+      filtered = filtered.filter(r => (r.dashboardTeamLeadName || '').toLowerCase() === filterLower);
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(r => {
@@ -799,7 +804,7 @@ export default function ClientJobAnalysis() {
     // Attach derived cap/status math once per data change so per-render row
     // output stays cheap.
     return sorted.map((r) => ({ ...r, _d: computeRowDerived(r) }));
-  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, countryFilter, searchQuery, getSortingNumber]);
+  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, countryFilter, dashboardMgrFilter, searchQuery, getSortingNumber]);
 
   // ── Chunked rendering: mount ROW_CHUNK rows at a time, growing as a sentinel
   // scrolls into view. Bounds initial paint cost + DOM size for big tables. ──
@@ -1156,7 +1161,15 @@ export default function ClientJobAnalysis() {
                     }))}
                   />
                 </th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Dashboard Mgr</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                  <HeaderFilter
+                    label="Dashboard Mgr"
+                    value={dashboardMgrFilter}
+                    onChange={setDashboardMgrFilter}
+                    title="Filter by dashboard manager"
+                    options={dashboardSelectOptions.map((name) => ({ value: name, label: name }))}
+                  />
+                </th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Total Apps</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Saved</th>
                 <th
