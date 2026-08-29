@@ -126,6 +126,15 @@ import {
 // Stored statuses vary ("Applied", "applied", "Offer Extended", "rejected by client" etc.),
 // so anchor to the start of the string and rely on the prefix.
 const MILESTONE_COUNT_STATUS_RE = /^(applied|interview|offer|reject)/i;
+
+// `currentStatus` is free text: the dashboard appends an attribution suffix, so
+// a card reads "saved by Sathya" or "applied by Ops", not a bare status word.
+// Comparing it with === therefore counts only the handful of rows that never
+// got a suffix - which is why the monitor showed 3 saved while the client's
+// own Job Tracker showed 19. The client dashboard buckets with
+// startsWith('saved') and flashfire-dashboard-backend's classifyStatus() uses
+// /^saved/i; this matches both.
+const SAVED_STATUS_RE = /^saved/i;
 function milestoneCountFilter(userEmail) {
   return {
     userID: userEmail,
@@ -3146,7 +3155,7 @@ const getClientStatistics = async (req, res) => {
           { $group: { _id: '$userID', count: { $sum: 1 } } }
         ]),
         JobModel.aggregate([
-          { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: 'saved' } },
+          { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: SAVED_STATUS_RE } },
           { $group: { _id: '$userID', count: { $sum: 1 } } }
         ])
       ]);
@@ -3171,7 +3180,7 @@ const getClientStatistics = async (req, res) => {
         { $group: { _id: '$userID', count: { $sum: 1 } } }
       ]),
       JobModel.aggregate([
-        { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: 'saved' } },
+        { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: SAVED_STATUS_RE } },
         { $group: { _id: '$userID', count: { $sum: 1 } } }
       ])
     ]);
@@ -3207,7 +3216,7 @@ const getSavedJobCounts = async (req, res) => {
     for (const userEmail of userEmails) {
       const savedCount = await JobModel.countDocuments({
         userID: userEmail,
-        currentStatus: 'saved'
+        currentStatus: SAVED_STATUS_RE
       });
 
       savedCounts[userEmail] = savedCount;
@@ -8611,6 +8620,11 @@ async function runZeroSavedJobReminder() {
       const emptyColumn = saved === 0;
       const nothingAddedToday = addStat.addedToday === 0;
       if (!emptyColumn && !nothingAddedToday) continue;
+      // A client already at their daily target cannot receive more today —
+      // dailyCapGuard blocks add number target+1 using this same targetJobCount.
+      // Asking for cards the system refuses is an alert nobody can action, and
+      // unactionable alerts are what train a channel to be muted.
+      if (addStat.addedToday >= addStat.dailyTarget) continue;
 
       const clientName = clientNameMap.get(email) || email;
       const adderRow = lastAdderMap.get(email);
@@ -8625,9 +8639,16 @@ async function runZeroSavedJobReminder() {
         : addStat.daysSinceLastAdd >= 1
           ? ` (nothing added for ${addStat.daysSinceLastAdd} day${addStat.daysSinceLastAdd === 1 ? '' : 's'})`
           : '';
+      // Always state what WAS added this window. The old empty-column line read
+      // "have zero jobs in their dashboard", which is wrong twice over: it
+      // describes the SAVED QUEUE, not the dashboard (these clients routinely
+      // hold hundreds of applied cards — Shubh Kamdar had 2118 the day he was
+      // pinged for having "zero"), and it reads as "you have done nothing" to
+      // an operator who had already added eight and applied all eight.
+      const progress = `${addStat.addedToday}/${addStat.dailyTarget} added this window`;
       const message = emptyColumn
-        ? `${clientName} have zero jobs in their dashboard please add jobs — last job cards added by: ${adderLabel}${silence}`
-        : `${clientName} has had 0 job cards added today (target ${addStat.dailyTarget}, ${saved} still sitting in saved) — last job cards added by: ${adderLabel}${silence}`;
+        ? `${clientName}: saved queue is empty — nothing left to apply to (${progress}). Please add job cards — last added by: ${adderLabel}${silence}`
+        : `${clientName}: no job cards added this window (target ${addStat.dailyTarget}, ${saved} still sitting in saved) — last added by: ${adderLabel}${silence}`;
 
       try {
         await postDiscordReminder(DISCORD_ZERO_SAVED_WEBHOOK, message, '[Zero Saved Reminder]', {
@@ -9285,7 +9306,7 @@ dbReady
         console.log('📬 [JobCard Reminder] Cron scheduled for 8:00 PM IST daily');
       }
 
-      // Zero saved jobs reminder: 1:00 PM IST daily
+      // Zero saved jobs reminder: 1:30 PM IST daily
 if (DISCORD_ZERO_SAVED_WEBHOOK) {
   cron.schedule('30 13 * * *', runZeroSavedJobReminder, { timezone: 'Asia/Kolkata' });
   console.log('📬 [Zero Saved Reminder] Cron scheduled for 1:30 PM IST daily');
