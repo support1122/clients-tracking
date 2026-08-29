@@ -208,6 +208,10 @@ export default function ClientAiSummary({ clientEmail }) {
         }
     }
 
+    // The build runs 90-150s server-side (resume fetch + two OpenAI passes) —
+    // longer than Cloudflare's ~100s origin timeout, so /build-ai-summary is
+    // async: it returns 202 "building" and we poll /ai-summary-status until it
+    // leaves "building". Give up after ~6 min so the button can't spin forever.
     async function buildSummary() {
         setBuilding(true);
         setError(null);
@@ -223,8 +227,34 @@ export default function ClientAiSummary({ clientEmail }) {
                 showError(`Build failed: ${body?.error || `HTTP ${res.status}`}${step} — ${body?.message || ''}`);
                 return;
             }
-            showMessage(`Summary built (${body.wordCount} words, ${body.source}).`, 'ok');
-            // Reload profile to get fresh aiSummary + meta.
+
+            // 202 accepted — poll for completion.
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+            const deadline = Date.now() + 6 * 60 * 1000;
+            let final = null;
+            while (Date.now() < deadline) {
+                await sleep(5000);
+                const sres = await fetch(
+                    `${DASHBOARD_BASE}/ai-summary-status?email=${encodeURIComponent(clientEmail.toLowerCase())}`,
+                );
+                const sbody = await sres.json().catch(() => null);
+                if (!sres.ok || !sbody?.success) continue; // transient — keep polling
+                if (sbody.status === 'building') continue;
+                final = sbody;
+                break;
+            }
+
+            if (!final) {
+                showError('Build is taking longer than expected. Click ↻ Refresh in a minute to check.');
+                return;
+            }
+            if (final.status === 'error') {
+                const e = final.lastError || {};
+                const step = e.step ? ` [step: ${e.step}]` : '';
+                showError(`Build failed: ${e.error || 'UNKNOWN'}${step} — ${e.message || ''}`);
+                return;
+            }
+            showMessage(`Summary built (${final.wordCount} words, ${final.source}).`, 'ok');
             await loadProfile();
             setEditing(false);
         } catch (e) {
