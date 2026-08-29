@@ -126,6 +126,15 @@ import {
 // Stored statuses vary ("Applied", "applied", "Offer Extended", "rejected by client" etc.),
 // so anchor to the start of the string and rely on the prefix.
 const MILESTONE_COUNT_STATUS_RE = /^(applied|interview|offer|reject)/i;
+
+// `currentStatus` is free text: the dashboard appends an attribution suffix, so
+// a card reads "saved by Sathya" or "applied by Ops", not a bare status word.
+// Comparing it with === therefore counts only the handful of rows that never
+// got a suffix - which is why the monitor showed 3 saved while the client's
+// own Job Tracker showed 19. The client dashboard buckets with
+// startsWith('saved') and flashfire-dashboard-backend's classifyStatus() uses
+// /^saved/i; this matches both.
+const SAVED_STATUS_RE = /^saved/i;
 function milestoneCountFilter(userEmail) {
   return {
     userID: userEmail,
@@ -3146,7 +3155,7 @@ const getClientStatistics = async (req, res) => {
           { $group: { _id: '$userID', count: { $sum: 1 } } }
         ]),
         JobModel.aggregate([
-          { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: 'saved' } },
+          { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: SAVED_STATUS_RE } },
           { $group: { _id: '$userID', count: { $sum: 1 } } }
         ])
       ]);
@@ -3171,7 +3180,7 @@ const getClientStatistics = async (req, res) => {
         { $group: { _id: '$userID', count: { $sum: 1 } } }
       ]),
       JobModel.aggregate([
-        { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: 'saved' } },
+        { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: SAVED_STATUS_RE } },
         { $group: { _id: '$userID', count: { $sum: 1 } } }
       ])
     ]);
@@ -3207,7 +3216,7 @@ const getSavedJobCounts = async (req, res) => {
     for (const userEmail of userEmails) {
       const savedCount = await JobModel.countDocuments({
         userID: userEmail,
-        currentStatus: 'saved'
+        currentStatus: SAVED_STATUS_RE
       });
 
       savedCounts[userEmail] = savedCount;
