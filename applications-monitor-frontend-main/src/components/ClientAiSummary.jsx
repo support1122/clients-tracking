@@ -211,7 +211,11 @@ export default function ClientAiSummary({ clientEmail }) {
     // The build runs 90-150s server-side (resume fetch + two OpenAI passes) —
     // longer than Cloudflare's ~100s origin timeout, so /build-ai-summary is
     // async: it returns 202 "building" and we poll /ai-summary-status until it
-    // leaves "building". Give up after ~6 min so the button can't spin forever.
+    // leaves "building". The server caps one build at SUMMARY_BUILD_BUDGET_MS
+    // (8 min) and flags an abandoned build at 9.5 min, so wait a little past
+    // that — the server's own verdict always lands first.
+    const POLL_TIMEOUT_MS = 10.5 * 60 * 1000;
+
     async function buildSummary() {
         setBuilding(true);
         setError(null);
@@ -228,9 +232,14 @@ export default function ClientAiSummary({ clientEmail }) {
                 return;
             }
 
-            // 202 accepted — poll for completion.
+            // 202 accepted — poll for completion. `since` is the moment the
+            // server accepted this build; a "done" whose builtAt predates it
+            // belongs to an EARLIER build, so it is not our result — accepting
+            // it would report the previous run's word count and reload the old
+            // summary as if the rebuild had finished.
+            const since = new Date(body.buildStartedAt || body.requestedAt || Date.now()).getTime();
             const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-            const deadline = Date.now() + 6 * 60 * 1000;
+            const deadline = Date.now() + POLL_TIMEOUT_MS;
             let final = null;
             while (Date.now() < deadline) {
                 await sleep(5000);
@@ -240,6 +249,11 @@ export default function ClientAiSummary({ clientEmail }) {
                 const sbody = await sres.json().catch(() => null);
                 if (!sres.ok || !sbody?.success) continue; // transient — keep polling
                 if (sbody.status === 'building') continue;
+                if (sbody.status === 'done') {
+                    const builtAt = sbody.builtAt ? new Date(sbody.builtAt).getTime() : 0;
+                    // 2s of slack for clock skew between the app server and Mongo.
+                    if (!builtAt || builtAt < since - 2000) continue; // stale "done" — keep waiting
+                }
                 final = sbody;
                 break;
             }
@@ -348,6 +362,15 @@ export default function ClientAiSummary({ clientEmail }) {
     const summary = profile?.aiSummary || '';
     const meta = profile?.aiSummaryMeta || {};
     const builtAt = meta.builtAt ? new Date(meta.builtAt).toLocaleString() : null;
+    // A build fired by one of the auto triggers (job removal, resume attach,
+    // profile save, cron sweep) — not by the Rebuild button in this tab. The
+    // page would otherwise show the stale brief with no hint that a new one is
+    // on its way, which reads as "the rebuild did nothing". 9.5 min matches the
+    // server's abandoned-build cutoff.
+    const autoBuildRunning = !building
+        && meta.status === 'building'
+        && !!meta.buildStartedAt
+        && Date.now() - new Date(meta.buildStartedAt).getTime() < 9.5 * 60 * 1000;
     // Newest client removal reason — /get-profile returns the full
     // removalFeedback history (newest first, written by the dashboard's
     // UpdateChanges on every reasoned removal).
@@ -564,6 +587,11 @@ export default function ClientAiSummary({ clientEmail }) {
                             </button>
                         </div>
                     </div>
+                    {autoBuildRunning && (
+                        <div className="px-5 py-2 text-xs font-medium text-purple-800 bg-purple-50 border-b border-purple-200">
+                            ⏳ A rebuild is running for this client right now (started {new Date(meta.buildStartedAt).toLocaleTimeString()}). The summary below is the previous version — click ↻ to reload when it finishes.
+                        </div>
+                    )}
                     {!summary ? (
                         <div className="px-5 py-8 text-slate-500 italic">
                             No summary yet. Click <strong>↻ Rebuild</strong> to generate one from the candidate's profile + resume.
