@@ -210,6 +210,13 @@ export default function ClientJobAnalysis() {
     failing: new Set(),
     noPaymentEmail: new Set()
   });
+  // Google-mail connection, shown as a small second dot in the same cell. It is
+  // a different question from "can we reach them": this is whether we can still
+  // READ their inbox, which is what produces the interview and offer alerts in
+  // the first place. Losing sight of it was how a dead token could go unnoticed.
+  const [mailConn, setMailConn] = useState({ connected: new Set(), reconnect: new Set() });
+  // Column legend, opened from the header. Closed by default so it costs no space.
+  const [deliveryLegendOpen, setDeliveryLegendOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sortDir, setSortDir] = useState('desc');
   // Sort on "Since 1st Apply": null = default ordering (active first, then
@@ -318,19 +325,38 @@ export default function ClientJobAnalysis() {
     }
   }, [convertToDMY]);
 
-  // Load Mattermost readiness (separate, lightweight). Non-blocking: a failure
-  // just leaves the column blank rather than breaking the table.
+  // Load Mattermost readiness AND Google-mail connection (separate, lightweight
+  // endpoints, fetched together). Non-blocking and independent: if one fails the
+  // other still renders, rather than blanking the whole column.
   const loadMailConnection = useCallback(async () => {
+    const toSet = (v) => new Set((v || []).map((e) => String(e).toLowerCase()));
+
+    const [mm, gm] = await Promise.allSettled([
+      fetch(`${API_BASE}/api/clients/mattermost-status`, { headers: AUTH_HEADERS() }),
+      fetch(`${API_BASE}/api/clients/mail-connection`, { headers: AUTH_HEADERS() })
+    ]);
+
     try {
-      const res = await fetch(`${API_BASE}/api/clients/mattermost-status`, { headers: AUTH_HEADERS() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) return;
-      const toSet = (v) => new Set((v || []).map((e) => String(e).toLowerCase()));
-      setMmConn({
-        withWebhook: toSet(data.withWebhook),
-        failing: toSet(data.failing),
-        noPaymentEmail: toSet(data.noPaymentEmail)
-      });
+      if (mm.status === 'fulfilled' && mm.value.ok) {
+        const data = await mm.value.json().catch(() => ({}));
+        setMmConn({
+          withWebhook: toSet(data.withWebhook),
+          failing: toSet(data.failing),
+          noPaymentEmail: toSet(data.noPaymentEmail)
+        });
+      }
+    } catch {
+      /* non-blocking */
+    }
+
+    try {
+      if (gm.status === 'fulfilled' && gm.value.ok) {
+        const data = await gm.value.json().catch(() => ({}));
+        setMailConn({
+          connected: toSet(data.connected),
+          reconnect: toSet(data.reconnect)
+        });
+      }
     } catch {
       /* non-blocking */
     }
@@ -1113,12 +1139,101 @@ export default function ClientJobAnalysis() {
           </div>
         )}
 
+        {/* Delivery legend. Collapsed by default so the table keeps its space;
+            opened from the "?" in the Delivery header. Spelling the states out
+            in one place beats a tooltip per badge that nobody hovers. */}
+        {deliveryLegendOpen && (
+          <div className="mx-4 mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-700">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-semibold uppercase tracking-wide text-slate-600">
+                What the Delivery column means
+              </span>
+              <button
+                type="button"
+                onClick={() => setDeliveryLegendOpen(false)}
+                className="text-slate-400 hover:text-slate-700"
+                aria-label="Close legend"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <div className="mb-1 font-semibold text-slate-600">
+                  Badge - can we REACH the client?
+                </div>
+                <ul className="space-y-1">
+                  <li className="flex items-start gap-2">
+                    <span className="mt-px inline-flex shrink-0 items-center rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">Yes</span>
+                    <span>Mattermost webhook saved, and its last delivery actually worked.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="mt-px inline-flex shrink-0 items-center rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">Hook only</span>
+                    <span>Webhook works, but there is no payment email, so the email half cannot send.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="mt-px inline-flex shrink-0 items-center rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">Reconnect</span>
+                    <span>A webhook is saved but its last real delivery failed. Re-check the URL in Operations &gt; Client Reminders.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="mt-px inline-flex shrink-0 items-center rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">No hook</span>
+                    <span>No Mattermost webhook. Email still reaches them.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="mt-px inline-flex shrink-0 items-center rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">None</span>
+                    <span><strong>Nothing can reach this client.</strong> No webhook and no payment email.</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div>
+                <div className="mb-1 font-semibold text-slate-600">
+                  Dot - can we READ their inbox?
+                </div>
+                <p className="mb-1.5 text-slate-600">
+                  This is what detects interviews, assignments and offers. It is a different
+                  question from whether we can reach them.
+                </p>
+                <ul className="space-y-1">
+                  <li className="flex items-start gap-2">
+                    <span className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full bg-green-500" />
+                    <span>Google mail connected.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+                    <span><strong>Reconnect needed.</strong> It was connected but the Google token expired, so we have stopped seeing their mail.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="mt-1 inline-block h-2 w-2 shrink-0 rounded-full bg-red-400" />
+                    <span>Never connected. We cannot detect their interviews or offers at all.</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="px-4 py-3 overflow-x-auto">
           <table className="w-full divide-y divide-gray-200 text-xs">
             <thead className="bg-slate-50">
               <tr className="align-top">
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
-                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[70px] leading-tight" title="Where this client's automated updates can be delivered. Yes = Mattermost webhook saved and its last delivery worked. Reconnect = saved but the last delivery failed. No hook = no webhook. None = no webhook AND no payment email, so nothing can reach them. Updates on Refresh.">Mattermost</th>
+                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[86px] leading-tight">
+                  <span className="inline-flex items-center gap-1">
+                    <span>Delivery</span>
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryLegendOpen((v) => !v)}
+                      aria-expanded={deliveryLegendOpen}
+                      aria-label="What do these badges mean?"
+                      title="What do these badges mean?"
+                      className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-slate-400 text-[9px] font-bold leading-none text-slate-500 hover:border-slate-600 hover:text-slate-700"
+                    >
+                      ?
+                    </button>
+                  </span>
+                </th>
                 <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[96px]">
                   <HeaderFilter
                     label="Status"
@@ -1416,26 +1531,54 @@ export default function ClientJobAnalysis() {
                     </td>
                     <td className="px-2 py-1">
                       {(() => {
-                        // One badge, four states, no extra width. The severe
-                        // case is "None": no webhook AND no payment email means
-                        // nothing we send can reach this client at all, which is
-                        // worth surfacing louder than a missing webhook alone.
+                        // TWO signals in one cell, because they answer two
+                        // different questions and losing either one hides a real
+                        // failure:
+                        //   the word badge - can we REACH this client (Mattermost
+                        //     webhook + payment email)
+                        //   the G dot      - can we still READ their inbox, which
+                        //     is what produces the interview and offer alerts
+                        // The dot is 8px, so the second signal costs no width.
                         const em = String(r.email || '').toLowerCase();
                         const hasHook = mmConn.withWebhook.has(em);
                         const isFailing = mmConn.failing.has(em);
                         const noPay = mmConn.noPaymentEmail.has(em);
                         const cls = 'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold';
 
+                        let badge;
                         if (hasHook && !isFailing) {
-                          return <span className={`${cls} bg-green-100 text-green-700`} title={noPay ? 'Mattermost webhook connected. No payment email on file, so email cannot be sent.' : 'Mattermost webhook connected and its last delivery succeeded'}>{noPay ? 'Hook only' : 'Yes'}</span>;
+                          badge = <span className={`${cls} bg-green-100 text-green-700`} title={noPay ? 'Mattermost webhook connected and working. No payment email on file, so the email half cannot send.' : 'Mattermost webhook connected and its last delivery succeeded.'}>{noPay ? 'Hook only' : 'Yes'}</span>;
+                        } else if (hasHook && isFailing) {
+                          badge = <span className={`${cls} bg-amber-100 text-amber-700`} title="A webhook is saved but its last real delivery failed. Re-check the URL in Operations > Client Reminders.">Reconnect</span>;
+                        } else if (noPay) {
+                          badge = <span className={`${cls} bg-red-100 text-red-700`} title="No Mattermost webhook AND no payment email. Nothing we send can reach this client at all.">None</span>;
+                        } else {
+                          badge = <span className={`${cls} bg-red-100 text-red-700`} title="No Mattermost webhook saved. Email still works.">No hook</span>;
                         }
-                        if (hasHook && isFailing) {
-                          return <span className={`${cls} bg-amber-100 text-amber-700`} title="A webhook is saved but its last delivery failed. Re-check the URL in Operations > Client Reminders.">Reconnect</span>;
-                        }
-                        if (noPay) {
-                          return <span className={`${cls} bg-red-100 text-red-700`} title="No Mattermost webhook AND no payment email. Nothing we send can reach this client.">None</span>;
-                        }
-                        return <span className={`${cls} bg-red-100 text-red-700`} title="No Mattermost webhook saved. Email still works.">No hook</span>;
+
+                        const gConnected = mailConn.connected.has(em);
+                        const gReconnect = mailConn.reconnect.has(em);
+                        const gTone = gConnected
+                          ? 'bg-green-500'
+                          : gReconnect
+                            ? 'bg-amber-500'
+                            : 'bg-red-400';
+                        const gTitle = gConnected
+                          ? 'Google mail connected. We can read this inbox for interview, assignment and offer mails.'
+                          : gReconnect
+                            ? 'Google mail was connected but the token expired. RECONNECT needed, or we stop seeing their interview and offer mails.'
+                            : 'No Google mail connected. We cannot detect interviews, assignments or offers for this client.';
+
+                        return (
+                          <span className="inline-flex items-center gap-1">
+                            {badge}
+                            <span
+                              className={`inline-block h-2 w-2 shrink-0 rounded-full ${gTone}`}
+                              title={gTitle}
+                              aria-label={gTitle}
+                            />
+                          </span>
+                        );
                       })()}
                     </td>
                     <td className="px-2 py-1">
