@@ -1,5 +1,6 @@
 import { sendGmailEmail } from "./gmailSender.js";
 import { getPlanLabel } from "./planCaps.js";
+import { postMilestoneToMattermost } from "./clientMattermost.js";
 
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "support@flashfirejobs.com";
 const WEBSITE_URL   = process.env.WEBSITE_URL   || "https://www.flashfirejobs.com";
@@ -156,7 +157,7 @@ export async function sendMilestoneEmail({ client, type, snapshot = {}, mileston
     percent: ctx.planCap ? Math.round((ctx.currentCount / ctx.planCap) * 100) : 0
   };
 
-  return sendGmailEmail({
+  const result = await sendGmailEmail({
     to: toEmail,
     subject,
     html,
@@ -166,4 +167,18 @@ export async function sendMilestoneEmail({ client, type, snapshot = {}, mileston
     snapshot: logSnapshot,
     meta: { milestoneType: type, milestoneKey }
   });
+
+  // Mirror it into the client's Mattermost channel. Fire-and-forget on purpose:
+  // the email is the product promise and its result is what this function
+  // returns, so a webhook that is missing, misconfigured or down must never
+  // change the outcome the caller sees or throw into the milestone sweep.
+  postMilestoneToMattermost({
+    client,
+    subject,
+    dashboardUrl: "https://portal.flashfirejobs.com"
+  }).catch((err) => {
+    console.warn(`[Milestone] mattermost mirror failed for ${client.email}:`, err?.message || err);
+  });
+
+  return result;
 }

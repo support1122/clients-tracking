@@ -4799,6 +4799,62 @@ const getRevenueStats = async (req, res) => {
 // email OR ownerEmail matches their account email; "reconnect" when their only
 // mailbox has a dead Google token (gmailpollstates.authErrorAt, written by the
 // dashboard mail poller).
+// Mattermost + payment-email readiness per client, for the MATTERMOST column
+// on Client Job Analysis.
+//
+// The webhook is stored by the DASHBOARD service on `clientreminderconfigs`
+// (Operations > Client Reminders). Read raw rather than through a model: that
+// schema belongs to the other service and duplicating it here is how the two
+// silently diverge. Two projected fields cannot drift.
+//
+// `failing` is derived from the delivery history the reminder worker writes, so
+// "connected" here means a webhook that actually delivered, not merely one that
+// somebody pasted in. A webhook that 404s looks identical to a good one until
+// you look at what happened when it was last used.
+app.get('/api/clients/mattermost-status', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+
+    const configs = await db
+      .collection('clientreminderconfigs')
+      .find({}, { projection: { clientEmail: 1, mattermostWebhookUrl: 1, history: { $slice: 10 } } })
+      .toArray();
+
+    const withWebhook = [];
+    const failing = [];
+
+    for (const c of configs) {
+      const email = String(c.clientEmail || '').toLowerCase();
+      if (!email) continue;
+      const hook = String(c.mattermostWebhookUrl || '').trim();
+      if (!hook) continue;
+      withWebhook.push(email);
+
+      // Newest-first history. The first row that actually attempted Mattermost
+      // is the verdict; rows for email-only sends say nothing about the hook.
+      const attempt = (Array.isArray(c.history) ? c.history : []).find(
+        (h) => h && h.mattermost && h.mattermost.attempted === true
+      );
+      if (attempt && attempt.mattermost.ok !== true) failing.push(email);
+    }
+
+    // Payment email lives on the client record this service owns.
+    const clients = await db
+      .collection('dashboardtrackings')
+      .find({}, { projection: { email: 1, paymentEmail: 1 } })
+      .toArray();
+    const noPaymentEmail = clients
+      .filter((c) => !String(c.paymentEmail || '').trim())
+      .map((c) => String(c.email || '').toLowerCase())
+      .filter(Boolean);
+
+    res.json({ withWebhook, failing, noPaymentEmail });
+  } catch (e) {
+    console.error('mattermost-status error', e?.message || e);
+    res.status(500).json({ error: 'mattermost_status_failed' });
+  }
+});
+
 app.get('/api/clients/mail-connection', async (req, res) => {
   try {
     const db = mongoose.connection.db;

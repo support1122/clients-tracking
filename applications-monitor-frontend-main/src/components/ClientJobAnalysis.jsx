@@ -200,9 +200,16 @@ const ROW_CHUNK = 80;
 export default function ClientJobAnalysis() {
   const [date, setDate] = useState('');
   const [rows, setRows] = useState([]);
-  // Google-mail connection status per client email (for the "Google Mail" column).
+  // Mattermost readiness per client email (for the "Mattermost" column).
   // Loaded separately from the heavy analysis endpoint; refreshed on load + Refresh.
-  const [mailConn, setMailConn] = useState({ connected: new Set(), reconnect: new Set() });
+  //   withWebhook   - a webhook URL is saved for this client
+  //   failing       - saved, but its last real delivery attempt errored
+  //   noPaymentEmail- no payment email on file, so the email half cannot send
+  const [mmConn, setMmConn] = useState({
+    withWebhook: new Set(),
+    failing: new Set(),
+    noPaymentEmail: new Set()
+  });
   const [loading, setLoading] = useState(false);
   const [sortDir, setSortDir] = useState('desc');
   // Sort on "Since 1st Apply": null = default ordering (active first, then
@@ -311,16 +318,18 @@ export default function ClientJobAnalysis() {
     }
   }, [convertToDMY]);
 
-  // Load Google-mail connection status (separate, lightweight). Non-blocking:
-  // a failure just leaves the column blank rather than breaking the table.
+  // Load Mattermost readiness (separate, lightweight). Non-blocking: a failure
+  // just leaves the column blank rather than breaking the table.
   const loadMailConnection = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/clients/mail-connection`, { headers: AUTH_HEADERS() });
+      const res = await fetch(`${API_BASE}/api/clients/mattermost-status`, { headers: AUTH_HEADERS() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) return;
-      setMailConn({
-        connected: new Set((data.connected || []).map((e) => String(e).toLowerCase())),
-        reconnect: new Set((data.reconnect || []).map((e) => String(e).toLowerCase()))
+      const toSet = (v) => new Set((v || []).map((e) => String(e).toLowerCase()));
+      setMmConn({
+        withWebhook: toSet(data.withWebhook),
+        failing: toSet(data.failing),
+        noPaymentEmail: toSet(data.noPaymentEmail)
       });
     } catch {
       /* non-blocking */
@@ -1109,7 +1118,7 @@ export default function ClientJobAnalysis() {
             <thead className="bg-slate-50">
               <tr className="align-top">
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
-                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[70px] leading-tight" title="Whether this client's Google mail is connected. Auto-detected; updates on Refresh.">Google Mail</th>
+                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[70px] leading-tight" title="Where this client's automated updates can be delivered. Yes = Mattermost webhook saved and its last delivery worked. Reconnect = saved but the last delivery failed. No hook = no webhook. None = no webhook AND no payment email, so nothing can reach them. Updates on Refresh.">Mattermost</th>
                 <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[96px]">
                   <HeaderFilter
                     label="Status"
@@ -1407,14 +1416,26 @@ export default function ClientJobAnalysis() {
                     </td>
                     <td className="px-2 py-1">
                       {(() => {
+                        // One badge, four states, no extra width. The severe
+                        // case is "None": no webhook AND no payment email means
+                        // nothing we send can reach this client at all, which is
+                        // worth surfacing louder than a missing webhook alone.
                         const em = String(r.email || '').toLowerCase();
-                        if (mailConn.connected.has(em)) {
-                          return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700" title="Google mail connected">Yes</span>;
+                        const hasHook = mmConn.withWebhook.has(em);
+                        const isFailing = mmConn.failing.has(em);
+                        const noPay = mmConn.noPaymentEmail.has(em);
+                        const cls = 'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold';
+
+                        if (hasHook && !isFailing) {
+                          return <span className={`${cls} bg-green-100 text-green-700`} title={noPay ? 'Mattermost webhook connected. No payment email on file, so email cannot be sent.' : 'Mattermost webhook connected and its last delivery succeeded'}>{noPay ? 'Hook only' : 'Yes'}</span>;
                         }
-                        if (mailConn.reconnect.has(em)) {
-                          return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700" title="Connected before, but the Google token expired — reconnect needed">Reconnect</span>;
+                        if (hasHook && isFailing) {
+                          return <span className={`${cls} bg-amber-100 text-amber-700`} title="A webhook is saved but its last delivery failed. Re-check the URL in Operations > Client Reminders.">Reconnect</span>;
                         }
-                        return <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700" title="No Google mail connected">No</span>;
+                        if (noPay) {
+                          return <span className={`${cls} bg-red-100 text-red-700`} title="No Mattermost webhook AND no payment email. Nothing we send can reach this client.">None</span>;
+                        }
+                        return <span className={`${cls} bg-red-100 text-red-700`} title="No Mattermost webhook saved. Email still works.">No hook</span>;
                       })()}
                     </td>
                     <td className="px-2 py-1">
