@@ -1525,6 +1525,18 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1">
                       {r.planType ? (
                         <div className="flex flex-col gap-1">
+                          {/* The plan badge and the payment on the same client
+                              document have to agree. When they don't, say so on
+                              the row — a silent badge is how an Executive label
+                              sat on top of a Professional payment. */}
+                          {r.planMismatch && (
+                            <span
+                              className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-red-700 bg-red-100 border border-red-300 px-1.5 py-0.5 rounded"
+                              title={`Plan does not match the payment on this client: ${r.planMismatch}`}
+                            >
+                              ⚠ Payment mismatch
+                            </span>
+                          )}
                           <span className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-semibold ${r.planType.toLowerCase() === 'executive' ? 'bg-purple-100 text-purple-700' :
                             r.planType.toLowerCase() === 'professional' ? 'bg-blue-100 text-blue-700' :
                               r.planType.toLowerCase() === 'ignite' ? 'bg-orange-100 text-orange-700' :
@@ -1534,6 +1546,14 @@ export default function ClientJobAnalysis() {
                             {r.planType.charAt(0).toUpperCase() + r.planType.slice(1)}
                           </span>
                           <div className="flex flex-col gap-0.5">
+                            {r.planPrice != null && (
+                              <span className={`text-[10px] font-medium ${r.planMismatch ? 'text-red-700' : 'text-slate-500'}`}>
+                                Plan price: {r.planPrice}
+                                {r.planPriceExpected != null && r.planPriceExpected !== r.planPrice
+                                  ? ` (expected ${r.planPriceExpected})`
+                                  : ''}
+                              </span>
+                            )}
                             {addonLimit > 0 && (
                               <span className="text-[10px] text-blue-600 font-medium">
                                 Addon: +{addonLimit}

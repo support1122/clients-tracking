@@ -1418,7 +1418,10 @@ const JobDetailModal = React.memo(({
                             // Collapsed summary has to answer "did they all go
                             // out?" without expanding — so name the problem,
                             // don't just count.
-                            const all = onboardingMail?.steps || [];
+                            // Out-of-plan rows (inPlan === false) are history,
+                            // not outstanding work — counting them makes a
+                            // fully-delivered client read as "1/2 sent".
+                            const all = (onboardingMail?.steps || []).filter((s) => s.inPlan !== false);
                             const sent = all.filter((s) => s.sent).length;
                             const failed = all.filter((s) => s.state === 'failed').length;
                             const base = `${sent}/${all.length} sent`;
@@ -1513,27 +1516,41 @@ const JobDetailModal = React.memo(({
 
                       <ol className="relative border-l-2 border-orange-200 ml-2 space-y-4">
                         {(onboardingMail.steps || []).map((s) => {
-                          const dotColor = s.sent
-                            ? 'bg-green-500 ring-green-100'
-                            : s.state === 'failed'
-                              ? 'bg-rose-500 ring-rose-100'
-                              : 'bg-gray-300 ring-gray-100';
-                          const badge = s.sent
-                            ? 'bg-green-100 text-green-700'
-                            : s.state === 'failed'
-                              ? 'bg-rose-100 text-rose-700'
-                              : s.state === 'not-scheduled'
-                                ? 'bg-gray-100 text-gray-500'
-                                : 'bg-amber-100 text-amber-700';
-                          const badgeText = s.sent
-                            ? 'Sent'
-                            : s.state === 'failed'
-                              ? 'Failed'
-                              : s.state === 'not-scheduled'
-                                ? 'Not scheduled'
-                                : 'Pending';
+                          // inPlan === false means the client's plan does not
+                          // include this email (a Prime client and the LinkedIn
+                          // optimisation, say). Older backends omit the field,
+                          // so only an explicit false counts.
+                          const outOfPlan = s.inPlan === false;
+                          const dotColor = outOfPlan
+                            ? 'bg-gray-300 ring-gray-100'
+                            : s.sent
+                              ? 'bg-green-500 ring-green-100'
+                              : s.state === 'failed'
+                                ? 'bg-rose-500 ring-rose-100'
+                                : 'bg-gray-300 ring-gray-100';
+                          const badge = outOfPlan
+                            ? 'bg-gray-100 text-gray-500'
+                            : s.sent
+                              ? 'bg-green-100 text-green-700'
+                              : s.state === 'failed'
+                                ? 'bg-rose-100 text-rose-700'
+                                : s.state === 'not-scheduled'
+                                  ? 'bg-gray-100 text-gray-500'
+                                  : 'bg-amber-100 text-amber-700';
+                          const badgeText = outOfPlan
+                            ? (s.sent ? 'Sent · not in plan' : 'Not in plan')
+                            : s.sent
+                              ? 'Sent'
+                              : s.state === 'failed'
+                                ? 'Failed'
+                                : s.state === 'not-scheduled'
+                                  ? 'Not scheduled'
+                                  : 'Pending';
                           const busy = sendingOnboardingStep === s.key;
-                          const canSend = isAdmin && onboardingMail.delivery?.canSend;
+                          // Never offer to send an email the plan doesn't cover
+                          // — that button is how an out-of-plan email goes out
+                          // by hand after the automatic sender stopped it.
+                          const canSend = isAdmin && onboardingMail.delivery?.canSend && !outOfPlan;
                           return (
                             <li key={s.key} className="ml-4 pl-2">
                               <span className={`absolute -left-[7px] flex items-center justify-center w-3 h-3 rounded-full ring-4 ${dotColor}`} />
@@ -1541,8 +1558,11 @@ const JobDetailModal = React.memo(({
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="min-w-0">
                                     <div className="text-xs font-bold text-gray-900">{s.label}</div>
-                                    {!s.sent && s.reason && (
-                                      <div className="text-[11px] text-gray-500 mt-0.5">{s.reason}</div>
+                                    {(outOfPlan || !s.sent) && s.reason && (
+                                      <div className={`text-[11px] mt-0.5 ${outOfPlan ? 'text-amber-700' : 'text-gray-500'}`}>
+                                        {s.reason}
+                                        {outOfPlan && onboardingMail.planType ? ` (${onboardingMail.planType})` : ''}
+                                      </div>
                                     )}
                                     {!s.sent && !s.reason && s.sendAt && (
                                       <div className="text-[11px] text-gray-500 mt-0.5">
