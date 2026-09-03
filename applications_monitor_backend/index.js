@@ -33,6 +33,7 @@ import { upload } from './utils/cloudinary.js';
 import { uploadFile } from './utils/storageService.js';
 import { encrypt } from './utils/CryptoHelper.js';
 import { NewUserModel } from './schema_models/UserModel.js';
+import { PLAN_PRICES, normalisePlanType, planWriteFields, planPaymentMismatch, applyPlanToClientUpdate } from './utils/planCaps.js';
 import { ClientTodosModel } from './ClientTodosModel.js';
 import {
   createOnboardingJobPayload,
@@ -311,14 +312,12 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
     }
 
     if (type === 'upgrade' && planTarget) {
-      const planPrices = { ignite: 199, professional: 349, executive: 599, prime: 119 };
-      const planTypeLower = planTarget.toLowerCase();
-      const planPrice = planPrices[planTypeLower];
-      if (!planPrice) {
+      const planFields = planWriteFields(planTarget);
+      if (!planFields) {
         console.error(`Stripe webhook: unknown plan ${planTarget}`);
         return res.status(200).json({ received: true, warning: 'unknown plan' });
       }
-      const capitalizedPlan = planTypeLower.charAt(0).toUpperCase() + planTypeLower.slice(1);
+      const { planType: planTypeLower, planPrice, planLabel: capitalizedPlan } = planFields;
       const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£,\s]/g, '') || '0');
       const currentPlanPrice = existingClient.planPrice || 0;
       const newAmountPaid = currentAmountPaid + (planPrice - currentPlanPrice);
@@ -688,7 +687,7 @@ const getAllJobs = async (req, res) => {
 const getAllClients = async (req, res) => {
   try {
     const clients = await ClientModel.find()
-      .select('email name clientNumber status planType planPrice jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons createdAt updatedAt')
+      .select('email name clientNumber status planType planPrice jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons upgradePayments amountPaid createdAt updatedAt')
       .lean();
     res.status(200).json({ clients });
   } catch (error) {
@@ -972,7 +971,6 @@ export const createOrUpdateClient = async (req, res) => {
     } = req.body;
 
     const emailLower = email.toLowerCase();
-    const planPrices = { ignite: 199, professional: 349, executive: 599, prime: 119 };
     const dashboardManager = dashboardTeamLeadName;
 
     // Normalize + validate paymentEmail (milestone recipient). Empty is OK
@@ -983,17 +981,19 @@ export const createOrUpdateClient = async (req, res) => {
       return res.status(400).json({ error: 'Invalid Payment Email format', code: 'bad_payment_email' });
     }
 
-    const capitalizedPlan = planType && planType.trim()
-      ? (planType.trim().toLowerCase() === "ignite"
-        ? "Ignite"
-        : planType.trim().toLowerCase() === "professional"
-          ? "Professional"
-          : planType.trim().toLowerCase() === "executive"
-            ? "Executive"
-            : planType.trim().toLowerCase() === "prime"
-              ? "Prime"
-              : null)
-      : null;
+    // One resolution of the plan for BOTH collections. planFields is null when
+    // the request carried no plan (or an unknown one); every write below then
+    // falls back to the same DEFAULT_PLAN rather than each picking its own —
+    // the tracking row used to default to "ignite" while the user row defaulted
+    // to "Free Trial", so a client registered without a plan started life with
+    // the badge saying Ignite (250 applications) and the cap enforcing 160.
+    const planFields = planWriteFields(planType);
+    const capitalizedPlan = planFields?.planLabel || null;
+    const DEFAULT_PLAN = planWriteFields('ignite'); // matches the ClientModel schema default
+    const resolvedPlan = planFields || DEFAULT_PLAN;
+    if (!planFields && planType) {
+      console.warn(`[clients] unknown planType "${planType}" for ${emailLower} — defaulting to ${DEFAULT_PLAN.planLabel}`);
+    }
 
     // Resolve currency: use explicit value from body first, then detect from amountPaid prefix
     const currencySymbolMap = { "$": "USD", "₹": "INR", "£": "GBP", "CAD": "CAD" };
@@ -1022,7 +1022,7 @@ export const createOrUpdateClient = async (req, res) => {
     if (!existingUser && hasNameForNewUser) {
       const newUserData = {
         ...userData,
-        planType: capitalizedPlan || "Free Trial",
+        planType: resolvedPlan.planLabel,
       };
       let newUser;
       try {
@@ -1065,8 +1065,8 @@ export const createOrUpdateClient = async (req, res) => {
         applicationStartDate: applicationStartDate || " ",
         dashboardInternName: dashboardInternName || " ",
         dashboardTeamLeadName,
-        planType: planType?.toLowerCase() || "ignite",
-        planPrice: planPrices[planType?.toLowerCase()] || 199,
+        planType: resolvedPlan.planType,
+        planPrice: resolvedPlan.planPrice,
         onboardingDate: onboardingDate || new Date().toISOString(),
         whatsappGroupMade: whatsappGroupMade ?? false,
         whatsappGroupMadeDate: whatsappGroupMadeDate || " ",
@@ -1147,6 +1147,7 @@ export const createOrUpdateClient = async (req, res) => {
     if (!existingUser) {
       const clientUpdate = { ...req.body };
       delete clientUpdate.currentPath;
+      applyPlanToClientUpdate(clientUpdate);
       await mergePausedAtIntoClientUpdate(emailLower, clientUpdate);
       await ClientModel.updateOne(
         { email: emailLower },
@@ -1198,6 +1199,7 @@ export const createOrUpdateClient = async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(clientUpdate, 'paymentEmail')) {
       clientUpdate.paymentEmail = paymentEmailNorm;
     }
+    const updatePlanFields = applyPlanToClientUpdate(clientUpdate);
     await mergePausedAtIntoClientUpdate(emailLower, clientUpdate);
     await ClientModel.updateOne(
       { email: emailLower },
@@ -1221,8 +1223,14 @@ export const createOrUpdateClient = async (req, res) => {
     if (dashboardManager !== undefined && dashboardManager !== null) {
       updateFields.dashboardManager = dashboardManager;
     }
-    if (capitalizedPlan) {
-      updateFields.planType = capitalizedPlan;
+    // Mirror the plan to users.planType. This is not cosmetic: the badge reads
+    // dashboardtrackings.planType while the application cap is enforced off
+    // users.planType, so letting one move without the other means the screen
+    // and the limit disagree. Prefer the plan actually written to the tracking
+    // document over the one derived from the raw body.
+    const planLabelForUser = updatePlanFields?.planLabel || capitalizedPlan;
+    if (planLabelForUser) {
+      updateFields.planType = planLabelForUser;
     }
     if (Object.keys(updateFields).length > 0) {
       await NewUserModel.updateOne(
@@ -1363,24 +1371,11 @@ const upgradeClientPlan = async (req, res) => {
     }
 
     const emailLower = email.toLowerCase();
-    const planPrices = { ignite: 199, professional: 349, executive: 599, prime: 119 };
-    const planTypeLower = planType.toLowerCase();
-
-    if (!planPrices[planTypeLower]) {
+    const planFields = planWriteFields(planType);
+    if (!planFields) {
       return res.status(400).json({ success: false, error: 'Invalid plan type' });
     }
-
-    const capitalizedPlan = planTypeLower === 'ignite'
-      ? 'Ignite'
-      : planTypeLower === 'professional'
-        ? 'Professional'
-        : planTypeLower === 'executive'
-          ? 'Executive'
-          : planTypeLower === 'prime'
-            ? 'Prime'
-            : 'Free Trial';
-
-    const planPrice = planPrices[planTypeLower];
+    const { planType: planTypeLower, planPrice, planLabel: capitalizedPlan } = planFields;
     const currentDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
 
     const existingClient = await ClientModel.findOne({ email: emailLower }).lean();
@@ -3810,7 +3805,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         ], { allowDiskUse: true }),
       // 5) Client info — runs in parallel with aggregations (no dependency)
       ClientModel.find({})
-        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt clientCountry')
+        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt clientCountry amountPaid upgradePayments')
         .lean(),
       // 6) AI-REMOVED per client, lifetime + today. Jobs the AI actually moved to
       //    the Removed column, never jobs it merely FLAGGED — a flag leaves the
@@ -4031,7 +4026,13 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       addonLimit: (c.addons || []).reduce((sum, a) => {
         const v = parseInt(a.type || a.addonType || 0, 10);
         return sum + (isNaN(v) ? 0 : v);
-      }, 0)
+      }, 0),
+      amountPaid: c.amountPaid ?? null,
+      upgradePayments: Array.isArray(c.upgradePayments) ? c.upgradePayments : [],
+      // Non-null when the plan on this document disagrees with its own payment
+      // fields. Computed server-side so the screen and any future report can
+      // never apply two different definitions of "mismatch".
+      planMismatch: planPaymentMismatch(c)
     }]));
 
     const referralMap = new Map();
@@ -4081,6 +4082,10 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         clientNumber: client.clientNumber ?? null,
         planType: client.planType || null,
         planPrice: client.planPrice || null,
+        planPriceExpected: PLAN_PRICES[normalisePlanType(client.planType)] ?? null,
+        planMismatch: client.planMismatch ?? null,
+        amountPaid: client.amountPaid ?? null,
+        upgradePayments: client.upgradePayments || [],
         status: client.status || null,
         jobStatus: client.jobStatus || null,
         operationsName: client.operationsName || '',
