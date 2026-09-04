@@ -42,6 +42,31 @@ import {
   selectValueMatchingOption
 } from '../../utils/dashboardManagerSelect.js';
 
+// Why a client has no milestone schedule, in operator language. The backend
+// names the cause (milestoneBlockReason); this is only the wording.
+const MILESTONE_BLOCK_COPY = {
+  no_tracking_record: {
+    summary: 'No tracking record',
+    title: 'This client has no record in Client Job Analysis',
+    detail: 'Milestone emails and this timeline are both computed from the tracking collection (dashboardtrackings). The plan shown in the ticket header lives on the ticket itself, so it can say "Ignite" while no tracking record exists at all. Until one does, the milestone job never sees this client and no email can fire.'
+  },
+  no_plan_set: {
+    summary: 'No plan on record',
+    title: 'The tracking record has no plan',
+    detail: 'The client exists in Client Job Analysis but carries no plan, so there is nothing to compute thresholds from. Set the plan there and this timeline fills in.'
+  },
+  unknown_plan: {
+    summary: 'Unrecognised plan',
+    title: 'The plan on record is not one we sell',
+    detail: 'The tracking record stores a plan value that has no milestone schedule. Correct it to Prime, Ignite, Professional or Executive in Client Job Analysis.'
+  }
+};
+
+const MILESTONE_DELIVERY_BLOCKER_COPY = {
+  client_not_active: 'The tracking record is not active, and the milestone job only scans active clients. These rows will stay Pending until it is.',
+  no_payment_email: 'No Payment Email is set, so every milestone send is skipped. Add one in the INFO panel.'
+};
+
 const JobDetailModal = React.memo(({
   selectedJob,
   user,
@@ -105,6 +130,12 @@ const JobDetailModal = React.memo(({
   const [milestoneAddonApps, setMilestoneAddonApps] = useState(0);
   const [milestoneReferralApps, setMilestoneReferralApps] = useState(0);
   const [sendingPendingMilestone, setSendingPendingMilestone] = useState(false);
+  // Why the schedule is empty, and why a non-empty one still won't send. Both
+  // come from the email-logs endpoint so the panel can name the problem instead
+  // of disappearing, which is what it used to do on an empty schedule.
+  const [milestoneBlockReason, setMilestoneBlockReason] = useState(null);
+  const [milestoneDeliveryBlockers, setMilestoneDeliveryBlockers] = useState([]);
+  const [creatingTrackingRecord, setCreatingTrackingRecord] = useState(false);
   const [resendingLogId, setResendingLogId] = useState(null);
   // Onboarding email sequence (base résumé / cover letter / LinkedIn) — lives
   // in the dashboard backend's OnboardingMailState, not in this app's DB.
@@ -235,6 +266,8 @@ const JobDetailModal = React.memo(({
       setMilestoneBaseCap(Number(data?.baseCap) || 0);
       setMilestoneAddonApps(Number(data?.addonApplications) || 0);
       setMilestoneReferralApps(Number(data?.referralApplications) || 0);
+      setMilestoneBlockReason(data?.milestoneBlockReason || null);
+      setMilestoneDeliveryBlockers(Array.isArray(data?.milestoneDeliveryBlockers) ? data.milestoneDeliveryBlockers : []);
     } catch (err) {
       if (emailLogsClientRef.current !== key) return;
       if (err.status === 401) handleAuthFailure();
@@ -244,6 +277,38 @@ const JobDetailModal = React.memo(({
       if (emailLogsClientRef.current === key) setEmailLogsLoading(false);
     }
   }, []);
+
+  // One-click repair for `no_tracking_record`: seed the dashboardtrackings
+  // document from the ticket. Admin-only on the server too — the button is a
+  // convenience, not the gate.
+  const createTrackingRecord = useCallback(async () => {
+    const jobId = selectedJob?._id;
+    const clientEmail = selectedJob?.clientEmail;
+    if (!jobId || !clientEmail) return;
+    setCreatingTrackingRecord(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/onboarding/jobs/${jobId}/create-tracking-record`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...AUTH_HEADERS() },
+        body: JSON.stringify({})
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toastUtils.error(body?.error || `Failed (HTTP ${res.status})`);
+        return;
+      }
+      toastUtils.success(
+        body.created
+          ? `Tracking record created — ${body.planType} (${body.planCap} applications)`
+          : 'Tracking record already existed'
+      );
+      await fetchEmailLogs(clientEmail, { force: true });
+    } catch (err) {
+      toastUtils.error(err?.message || 'Network error');
+    } finally {
+      setCreatingTrackingRecord(false);
+    }
+  }, [selectedJob?._id, selectedJob?.clientEmail, fetchEmailLogs]);
 
   const savePaymentEmail = useCallback(async () => {
     const clientEmail = selectedJob?.clientEmail;
@@ -427,6 +492,7 @@ const JobDetailModal = React.memo(({
   useEffect(() => {
     if (!selectedJob?.clientEmail) {
       setEmailLogs([]); setPaymentEmailValue(''); setPaymentEmailDraft(''); setMilestoneSchedule([]); setMilestonePlanCap(0); setMilestonePlanType('');
+      setMilestoneBlockReason(null); setMilestoneDeliveryBlockers([]);
       setOnboardingMail(null); setOnboardingMailError(null);
       return;
     }
@@ -1190,7 +1256,7 @@ const JobDetailModal = React.memo(({
                         {paymentEmailValue || <span className="text-gray-400 italic font-sans text-xs">not set — milestone emails will be skipped</span>}
                       </div>
                     )}
-                    <p className="text-[10px] text-gray-500 mt-1">Recipient for resume-ready, applications-started, and 30/50/75/100% milestone emails.</p>
+                    <p className="text-[10px] text-gray-500 mt-1">Recipient for the resume-ready, applications-started and per-plan count milestone emails (Ignite 250, Professional 250/500, Executive 350/700/1200).</p>
                   </div>
                 </div>
               </CollapsibleSection>
@@ -1289,14 +1355,59 @@ const JobDetailModal = React.memo(({
                 </CollapsibleSection>
               )}
 
-              {/* Milestone Timeline — visible all stages */}
-              {milestoneSchedule.length > 0 && (
+              {/* Milestone Timeline — visible all stages.
+                  Rendered even when the schedule is empty. It used to vanish on
+                  an empty array, which made "this client has no tracking record"
+                  and "milestones are broken" look identical: a missing panel
+                  with nothing to act on. Now it names the cause and, for admins,
+                  offers the repair. */}
+              {selectedJob?.clientEmail && !emailLogsLoading && !emailLogsError && (
                 <CollapsibleSection
                   id="milestones"
                   icon={History}
                   title="Milestone Timeline"
-                  summary={`${milestoneSchedule.filter((m) => m.sent).length}/${milestoneSchedule.length} sent`}
+                  summary={milestoneSchedule.length > 0
+                    ? `${milestoneSchedule.filter((m) => m.sent).length}/${milestoneSchedule.length} sent`
+                    : (MILESTONE_BLOCK_COPY[milestoneBlockReason]?.summary || 'Not set up')}
                 >
+                  {milestoneSchedule.length === 0 ? (() => {
+                    const copy = MILESTONE_BLOCK_COPY[milestoneBlockReason] || {
+                      summary: 'Not set up',
+                      title: 'No milestone schedule for this client',
+                      detail: 'Nothing to show yet.'
+                    };
+                    return (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                        <div className="flex items-start gap-2.5">
+                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-amber-900">{copy.title}</div>
+                            <p className="text-[11px] text-amber-800 leading-relaxed mt-1">{copy.detail}</p>
+                            {selectedJob?.planType && (
+                              <p className="text-[11px] text-amber-800 leading-relaxed mt-2">
+                                The ticket says <strong>{selectedJob.planType}</strong>. Creating the record below copies that plan across.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        {milestoneBlockReason === 'no_tracking_record' && isAdmin && (
+                          <div className="mt-3 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={createTrackingRecord}
+                              disabled={creatingTrackingRecord}
+                              title="Create the dashboardtrackings record for this client using the ticket's plan"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {creatingTrackingRecord ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                              {creatingTrackingRecord ? 'Creating…' : 'Create tracking record'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })() : (
+                  <>
                   <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
                     <div className="flex items-center gap-2 flex-wrap">
                       {milestonePlanType && (
@@ -1397,6 +1508,20 @@ const JobDetailModal = React.memo(({
                       );
                     })}
                   </ol>
+                  {milestoneDeliveryBlockers.length > 0 && (
+                    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="text-[11px] text-amber-800 leading-relaxed space-y-1">
+                          {milestoneDeliveryBlockers.map((b) => (
+                            <div key={b}>{MILESTONE_DELIVERY_BLOCKER_COPY[b] || b}</div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  </>
+                  )}
                 </CollapsibleSection>
               )}
 

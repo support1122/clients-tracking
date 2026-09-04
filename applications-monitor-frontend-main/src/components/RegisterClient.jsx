@@ -724,7 +724,7 @@ const RegisterClient = () => {
                       />
                     </div>
                     {errors.paymentEmail && <p className="text-red-500 text-xs mt-1">{errors.paymentEmail}</p>}
-                    <p className="text-[11px] text-gray-500 mt-1">Where milestone emails (resume ready, applications started, 30/50/75/100%) will be delivered.</p>
+                    <p className="text-[11px] text-gray-500 mt-1">Where milestone emails (resume ready, applications started, and the per-plan count milestones) will be delivered.</p>
                   </div>
 
                   {/* Client ID */}

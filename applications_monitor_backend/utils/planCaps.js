@@ -117,8 +117,15 @@ export const PLAN_MILESTONES = {
   ]
 };
 
+// Every plan lookup goes through normalisePlanType so PLAN_ALIASES applies
+// here too. These used to do a raw lowercase index, which meant a document
+// storing the legacy label "Free Trial" silently resolved to no milestones and
+// a cap of 0 — the client vanished from the milestone timeline and never got an
+// email, with nothing logged. ClientModel's enum normally blocks that value,
+// but the update paths run with runValidators:false, so it can still land.
 export function getPlanMilestones(planType) {
-  return PLAN_MILESTONES[String(planType || '').toLowerCase()] || [];
+  const key = normalisePlanType(planType);
+  return key ? PLAN_MILESTONES[key] : [];
 }
 
 export const PLAN_LABELS = {
@@ -129,13 +136,16 @@ export const PLAN_LABELS = {
 };
 
 export function getPlanCap(planType) {
-  if (!planType) return 0;
-  return PLAN_CAPS[String(planType).toLowerCase()] || 0;
+  const key = normalisePlanType(planType);
+  return key ? PLAN_CAPS[key] : 0;
 }
 
 export function getPlanLabel(planType) {
-  if (!planType) return "";
-  return PLAN_LABELS[String(planType).toLowerCase()] || planType;
+  const key = normalisePlanType(planType);
+  if (key) return PLAN_LABELS[key];
+  // Unknown value: echo it back rather than blanking it, so an operator can see
+  // what is actually stored on the document instead of an empty badge.
+  return planType ? String(planType) : "";
 }
 
 // ─── Effective-cap helpers ───
