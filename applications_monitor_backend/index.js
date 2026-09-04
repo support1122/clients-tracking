@@ -5505,7 +5505,7 @@ app.get('/api/clients/:email/email-logs', verifyToken, async (req, res) => {
     const [logs, total, client] = await Promise.all([
       ClientEmailLogModel.find({ clientEmail: emailLower }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       ClientEmailLogModel.countDocuments({ clientEmail: emailLower }),
-      ClientModel.findOne({ email: emailLower }).select('paymentEmail planType milestonesNotified addons').lean()
+      ClientModel.findOne({ email: emailLower }).select('paymentEmail planType status milestonesNotified addons').lean()
     ]);
     const planType = client?.planType || '';
     // Effective cap = base + addons + referral bonus, matching the cron so
@@ -5521,6 +5521,28 @@ app.get('/api/clients/:email/email-logs', verifyToken, async (req, res) => {
       at: client?.milestonesNotified?.[m.key]?.at || null,
       count: client?.milestonesNotified?.[m.key]?.count || 0
     }));
+    // Why the schedule is empty, when it is. The UI used to hide the whole
+    // Milestone Timeline on an empty array, so "this client has no tracking
+    // record" and "milestones are broken" looked identical: a blank panel with
+    // nothing to act on. Naming the cause is the difference between an operator
+    // fixing it in one click and filing a ticket.
+    const milestoneBlockReason = milestones.length
+      ? null
+      : !client
+        ? 'no_tracking_record'
+        : !planType
+          ? 'no_plan_set'
+          : 'unknown_plan';
+
+    // The milestone cron only ever looks at active clients that have a
+    // paymentEmail (see runSendPreviousMilestones), so a schedule can be
+    // perfectly valid and still never fire. Surface both so the panel can say
+    // so instead of showing rows that will sit on "Pending" forever.
+    const clientStatus = client?.status || '';
+    const milestoneDeliveryBlockers = [];
+    if (client && clientStatus !== 'active') milestoneDeliveryBlockers.push('client_not_active');
+    if (client && !(client.paymentEmail || '').trim()) milestoneDeliveryBlockers.push('no_payment_email');
+
     res.json({
       total,
       logs,
@@ -5530,7 +5552,11 @@ app.get('/api/clients/:email/email-logs', verifyToken, async (req, res) => {
       baseCap: getPlanCap(planType),
       addonApplications: planCap - getPlanCap(planType) - referralAdded,
       referralApplications: referralAdded,
-      milestoneSchedule: milestones
+      milestoneSchedule: milestones,
+      trackingRecordFound: !!client,
+      clientStatus,
+      milestoneBlockReason,
+      milestoneDeliveryBlockers
     });
   } catch (e) {
     console.error('[email-logs] error:', e?.message);
@@ -5585,6 +5611,131 @@ app.post('/api/onboarding/jobs/:id/admin-read', verifyToken, markAdminRead);
 app.post('/api/onboarding/jobs/:id/request-move', verifyToken, requestMove);
 app.post('/api/onboarding/jobs/:id/approve-move', verifyToken, approveMove);
 app.post('/api/onboarding/jobs/:id/reject-move', verifyToken, rejectMove);
+
+// Repair: create the missing dashboardtrackings record for an onboarding
+// ticket. Milestone emails and the Milestone Timeline both read ClientModel,
+// while the ticket carries its own free-text planType — so a ticket can say
+// "Ignite Plan" in its header while the collection the milestones are computed
+// from has no document at all. When that happens the client is invisible to the
+// milestone cron (it only scans ClientModel) and no email ever fires. This turns
+// the repair into one click instead of a hand-edit in Mongo.
+//
+// Idempotent: if the tracking record already exists it is left completely alone
+// and reported back as `created: false`.
+app.post('/api/onboarding/jobs/:id/create-tracking-record', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const job = await OnboardingJobModel.findById(req.params.id).lean();
+    if (!job) return res.status(404).json({ error: 'onboarding job not found' });
+
+    const emailLower = String(job.clientEmail || '').toLowerCase().trim();
+    if (!emailLower) return res.status(400).json({ error: 'ticket has no clientEmail' });
+
+    const existing = await ClientModel.findOne({ email: emailLower })
+      .select('email planType planPrice status paymentEmail').lean();
+    if (existing) {
+      return res.json({
+        created: false,
+        reason: 'already_exists',
+        email: existing.email,
+        planType: existing.planType || '',
+        status: existing.status || '',
+        paymentEmail: existing.paymentEmail || ''
+      });
+    }
+
+    // Never guess the plan. The ticket's planType is free text with a
+    // 'Professional' schema default, so an unrecognised value here means the
+    // ticket itself is wrong and an operator has to say what the client bought.
+    const planSource = req.body?.planType || job.planType;
+    const planFields = planWriteFields(planSource);
+    if (!planFields) {
+      return res.status(400).json({
+        error: `unrecognised plan "${planSource || ''}" — pass planType explicitly`,
+        code: 'bad_plan',
+        validPlans: Object.keys(PLAN_PRICES)
+      });
+    }
+
+    const paymentEmail = String(req.body?.paymentEmail || '').toLowerCase().trim();
+    if (paymentEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(paymentEmail)) {
+      return res.status(400).json({ error: 'invalid paymentEmail', code: 'bad_payment_email' });
+    }
+
+    const name = String(job.clientName || '').trim();
+    if (!name) return res.status(400).json({ error: 'ticket has no clientName' });
+
+    // Reuse the ticket's client number when it has one so the two records agree;
+    // otherwise take the next from the shared counter.
+    const CLIENT_NUMBER_FLOOR = 5809;
+    let clientNumber = parseInt(String(job.clientNumber ?? '').trim(), 10);
+    if (Number.isNaN(clientNumber) || clientNumber < CLIENT_NUMBER_FLOOR) {
+      clientNumber = await getNextClientNumber();
+    } else {
+      await ClientCounterModel.findOneAndUpdate(
+        { _id: 'client_number' },
+        { $max: { lastNumber: clientNumber } },
+        { upsert: true }
+      );
+    }
+
+    const nowIST = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+    let created;
+    try {
+      created = await ClientModel.create({
+        email: emailLower,
+        name,
+        clientNumber,
+        planType: planFields.planType,
+        planPrice: planFields.planPrice,
+        status: 'active',
+        paymentEmail,
+        dashboardInternName: job.operatorName || ' ',
+        dashboardTeamLeadName: job.dashboardManagerName || ' ',
+        onboardingDate: nowIST,
+        updatedAt: nowIST
+      });
+    } catch (err) {
+      // Concurrent repair from two operators: the unique index on email wins,
+      // and the outcome the caller wanted is already true.
+      if (err?.code === 11000) return res.json({ created: false, reason: 'already_exists', email: emailLower });
+      throw err;
+    }
+
+    // users.planType is the value the daily application cap is enforced from,
+    // while dashboardtrackings.planType drives the badge and the milestones.
+    // Writing one without the other is the drift planWriteFields exists to stop.
+    await NewUserModel.updateOne({ email: emailLower }, { $set: { planType: planFields.planLabel } });
+
+    try {
+      await addClientActionToJobMoveHistory(emailLower, 'tracking_record_created', {
+        email: req.user?.email || 'unknown',
+        name: req.user?.name || '',
+        meta: { planType: planFields.planType, planPrice: planFields.planPrice, clientNumber, paymentEmail: paymentEmail || null }
+      });
+    } catch (e) {
+      console.error('[create-tracking-record] move history append failed:', e?.message);
+    }
+
+    const milestones = computeClientMilestones(created.toObject(), 0).map((m) => ({
+      key: m.key, type: m.type, threshold: m.threshold, sent: false, at: null, count: 0
+    }));
+
+    res.json({
+      created: true,
+      email: emailLower,
+      name,
+      clientNumber,
+      planType: planFields.planType,
+      planPrice: planFields.planPrice,
+      paymentEmail,
+      planCap: getPlanCap(planFields.planType),
+      milestoneSchedule: milestones
+    });
+  } catch (e) {
+    console.error('[create-tracking-record] error:', e?.message);
+    res.status(500).json({ error: 'failed to create tracking record' });
+  }
+});
 
 // Onboarding attachment upload (R2 or Cloudinary) - R2: onboarding-assets/images|pdf|others
 app.post('/api/upload/onboarding-attachment', verifyToken, fileUpload.single('file'), async (req, res) => {
