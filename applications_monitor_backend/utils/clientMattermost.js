@@ -53,34 +53,93 @@ function mmEscape(v) {
   return String(v ?? "").replace(/([\\`*_{}[\]()<>#+\-.!|~])/g, "\\$1");
 }
 
+const DEFAULT_DASHBOARD_URL = "https://portal.flashfirejobs.com";
+
+function fmt(n) {
+  return Number(n || 0).toLocaleString("en-US");
+}
+
+/**
+ * The channel message for one milestone. Pure, so it is unit-testable.
+ *
+ * Carries the numbers the client actually asks about ("how many so far?",
+ * "is my plan done?") because that is the whole point of a channel ping. It
+ * does NOT argue about quotas or percentages beyond the plan count itself.
+ *
+ * @param {object} a
+ * @param {"started"|"count_milestone"|"completed"} a.type
+ * @param {string} [a.name]
+ * @param {string} [a.planLabel]
+ * @param {number} [a.planCap]
+ * @param {number} [a.currentCount]
+ * @param {number} [a.threshold]
+ * @param {string} [a.subject]       email subject, the fallback heading
+ * @param {string} [a.dashboardUrl]
+ * @returns {string}
+ */
+export function buildMilestoneMattermostText({
+  type,
+  name,
+  planLabel,
+  planCap,
+  currentCount,
+  threshold,
+  subject,
+  dashboardUrl
+} = {}) {
+  const who = mmEscape(String(name || "").trim() || "there");
+  const plan = mmEscape(planLabel || "your");
+  const cap = Number(planCap) || 0;
+  const count = Number(currentCount) || 0;
+  const step = Number(threshold) || 0;
+
+  let heading;
+  let body;
+  if (type === "started") {
+    heading = "Your resume is ready and applications are going out";
+    body = cap
+      ? `Hi ${who}, your new resume is done and we have started sending applications today. Your ${plan} plan covers **${fmt(cap)}** roles.`
+      : `Hi ${who}, your new resume is done and we have started sending applications today.`;
+  } else if (type === "count_milestone") {
+    heading = `${fmt(step)} applications submitted`;
+    body = cap
+      ? `Hi ${who}, we have crossed **${fmt(step)} applications** on your ${plan} plan (${fmt(count)} of ${fmt(cap)} so far). Replies usually start around this stage, so keep an eye on your inbox and LinkedIn.`
+      : `Hi ${who}, we have crossed **${fmt(step)} applications** on your ${plan} plan. Replies usually start around this stage, so keep an eye on your inbox and LinkedIn.`;
+  } else if (type === "completed") {
+    heading = `All ${fmt(cap || step)} applications done`;
+    body = `Hi ${who}, that is a wrap on all **${fmt(cap || step)} applications** under your ${plan} plan. We are now tracking replies and lining up interviews.`;
+  } else {
+    heading = subject || "An update from FlashFire";
+    body = "We have just emailed you about this.";
+  }
+
+  const lines = [`#### ${mmEscape(heading)}`, "", body, "", "We have also emailed you the details."];
+  const url = String(dashboardUrl || DEFAULT_DASHBOARD_URL).trim();
+  if (url) lines.push("", `[Open your dashboard](${url})`);
+  return lines.join("\n");
+}
+
 /**
  * Post one milestone to the client's channel.
  *
- * Deliberately terse: the email carries the detail, this is the nudge that
- * makes them go read it. No plan cap, no percentages - a channel post arguing
- * about quota is a support thread waiting to happen.
- *
+ * @param {object} a
+ * @param {object} a.client          tracking record; `email` is the lookup key
+ * @param {string} [a.type]          started | count_milestone | completed
+ * @param {object} [a.ctx]           {name, planLabel, planCap, currentCount, threshold}
+ * @param {string} [a.subject]       email subject, used only as a fallback heading
+ * @param {string} [a.dashboardUrl]
  * @returns {Promise<{ok: boolean, skipped?: string, error?: string}>}
  */
-export async function postMilestoneToMattermost({ client, subject, dashboardUrl }) {
+export async function postMilestoneToMattermost({ client, type, ctx = {}, subject, dashboardUrl }) {
   const clientEmail = String(client?.email || "").trim().toLowerCase();
   if (!clientEmail) return { ok: false, skipped: "no_client_email" };
 
   const webhookUrl = await webhookForClient(clientEmail);
   if (!isValidWebhookUrl(webhookUrl)) return { ok: false, skipped: "no_webhook" };
 
-  const lines = [
-    `#### ${mmEscape(subject || "An update from FlashFire")}`,
-    "",
-    "We have just emailed you about this.",
-    dashboardUrl ? `\n[Open your dashboard](${dashboardUrl})` : ""
-  ].filter(Boolean);
+  const text = buildMilestoneMattermostText({ type, subject, dashboardUrl, ...ctx });
 
-  const res = await sendToMattermost({
-    webhookUrl,
-    text: lines.join("\n"),
-    username: "FlashFire"
-  });
+  const res = await sendToMattermost({ webhookUrl, text, username: "FlashFire" });
 
   if (!res.ok) {
     // sendToMattermost has already redacted the webhook out of the message.

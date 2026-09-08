@@ -1700,9 +1700,30 @@ const JobDetailModal = React.memo(({
                                   </span>
                                 </div>
                                 {s.sent && s.sentAt && (
-                                  <div className="text-[10px] text-gray-500 mt-1.5">
-                                    {new Date(s.sentAt).toLocaleString()}
-                                    {s.attempts > 1 ? ` · ${s.attempts} attempts` : ''}
+                                  <div className="text-[10px] text-gray-500 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                                    <span>
+                                      {new Date(s.sentAt).toLocaleString()}
+                                      {s.attempts > 1 ? ` · ${s.attempts} attempts` : ''}
+                                    </span>
+                                    {/* Mattermost mirror of this email. Older backends omit
+                                        the field; a skip (no webhook saved) renders nothing
+                                        because there was nothing to attempt. */}
+                                    {s.mattermost?.state === 'sent' && (
+                                      <span
+                                        className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full"
+                                        title={`Posted to the client's Mattermost channel${s.mattermost.at ? ` at ${new Date(s.mattermost.at).toLocaleString()}` : ''}`}
+                                      >
+                                        Mattermost ✓
+                                      </span>
+                                    )}
+                                    {s.mattermost?.state === 'failed' && (
+                                      <span
+                                        className="text-[10px] text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-full"
+                                        title={s.mattermost.error || 'Mattermost post failed'}
+                                      >
+                                        Mattermost failed
+                                      </span>
+                                    )}
                                   </div>
                                 )}
                                 {!s.sent && s.error && (

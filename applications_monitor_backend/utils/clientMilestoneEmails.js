@@ -168,17 +168,23 @@ export async function sendMilestoneEmail({ client, type, snapshot = {}, mileston
     meta: { milestoneType: type, milestoneKey }
   });
 
-  // Mirror it into the client's Mattermost channel. Fire-and-forget on purpose:
-  // the email is the product promise and its result is what this function
-  // returns, so a webhook that is missing, misconfigured or down must never
-  // change the outcome the caller sees or throw into the milestone sweep.
-  postMilestoneToMattermost({
-    client,
-    subject,
-    dashboardUrl: "https://portal.flashfirejobs.com"
-  }).catch((err) => {
-    console.warn(`[Milestone] mattermost mirror failed for ${client.email}:`, err?.message || err);
-  });
+  // Mirror it into the client's Mattermost channel, only once the email was
+  // accepted: a failed send stays unsent and the sweep retries it, so posting
+  // on failure would ping the channel again on every retry. Fire-and-forget
+  // on purpose: the email is the product promise and its result is what this
+  // function returns, so a webhook that is missing, misconfigured or down
+  // must never change the outcome the caller sees or throw into the sweep.
+  if (result?.success) {
+    postMilestoneToMattermost({
+      client,
+      type,
+      ctx,
+      subject,
+      dashboardUrl: DASHBOARD_URL
+    }).catch((err) => {
+      console.warn(`[Milestone] mattermost mirror failed for ${client.email}:`, err?.message || err);
+    });
+  }
 
   return result;
 }
