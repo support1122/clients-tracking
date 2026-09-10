@@ -1,8 +1,9 @@
-import React, { Suspense } from 'react';
+import React from 'react';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
+import { Lazy } from './components/RouteFallback.jsx';
 
 // Log unhandled promise rejections with clear prefix. Many "message channel closed" errors come from
 // browser extensions (ad blockers, React DevTools, etc.), not from app code. Filter by [App] to see real errors.
@@ -30,15 +31,8 @@ const OperatorsPerformanceReport = React.lazy(() => import('./components/Operato
 const ExtensionJobsReport = React.lazy(() => import('./components/ExtensionJobsReport.jsx'));
 const ClientOnboarding = React.lazy(() => import('./components/ClientOnboarding.jsx'));
 const AdminSummariesPage = React.lazy(() => import('./components/AdminSummariesPage.jsx'));
+const AutoExtensionReport = React.lazy(() => import('./components/AutoExtensionReport.jsx'));
 
-// Minimal fallback shown while a route chunk loads
-const RouteFallback = () => (
-  <div className="flex items-center justify-center h-64">
-    <div className="w-8 h-8 border-4 border-orange-400 border-t-transparent rounded-full animate-spin" />
-  </div>
-);
-
-const Lazy = ({ children }) => <Suspense fallback={<RouteFallback />}>{children}</Suspense>;
 
 const router = createBrowserRouter([
   {
@@ -60,7 +54,8 @@ const router = createBrowserRouter([
       { path: '/client-onboarding', element: <Lazy><ClientOnboarding /></Lazy> },
       { path: '/operators-performance-report', element: <Lazy><OperatorsPerformanceReport /></Lazy> },
       { path: '/extension-jobs-report', element: <Lazy><ExtensionJobsReport /></Lazy> },
-      { path: '/ai-summaries', element: <Lazy><AdminSummariesPage /></Lazy> }
+      { path: '/ai-summaries', element: <Lazy><AdminSummariesPage /></Lazy> },
+      { path: '/auto-extension', element: <Lazy><AutoExtensionReport /></Lazy> }
     ]
   }
 ]);

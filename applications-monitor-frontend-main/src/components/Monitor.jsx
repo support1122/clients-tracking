@@ -2267,6 +2267,17 @@ const inactiveClients = clientsPostFilter.filter(c => c.status?.toLowerCase() ==
                 >
                   AI Summaries
                 </button>
+                {/* Autopilot run report. Admin only - it exposes every client's
+                    scrape numbers and can trigger a run, so unlike the tabs
+                    above it is gated by an explicit allow, not a deny-list. */}
+                {navUser?.role === 'admin' && (
+                  <button
+                    onClick={() => navigate('/auto-extension')}
+                    className="px-3 py-2 text-sm bg-slate-800 text-white rounded-lg hover:bg-slate-900 transition-colors font-medium"
+                  >
+                    Auto Extension
+                  </button>
+                )}
               </>
             );
           })()}
