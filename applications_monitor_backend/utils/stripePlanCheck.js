@@ -16,7 +16,7 @@
 import Stripe from 'stripe';
 import { normalisePlanType } from './planCaps.js';
 
-const MAX_SESSIONS = 500;
+const MAX_SESSIONS = 2000;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 let _cache = null;
@@ -116,6 +116,11 @@ export async function getStripePaymentMap(stripeSecret) {
     _cache = await fetchStripeSessionMap(stripeSecret);
     _cacheAt = now;
     console.log(`[stripePlanCheck] fetched ${_cache.size} stripe session records`);
+    // Debug: log specific emails we care about
+    const debugEmails = ['shreya.bhise@gmail.com', 'shrutipandey.01@gmail.com', 'bhiseshreeya438@gmail.com', 'shrutipan.0101@gmail.com'];
+    for (const em of debugEmails) {
+      console.log(`[stripePlanCheck] ${em}:`, _cache.has(em) ? JSON.stringify(_cache.get(em)) : 'NOT FOUND');
+    }
     return _cache;
   } catch (err) {
     console.error('[stripePlanCheck] failed to fetch stripe data:', err?.message || err);
