@@ -98,6 +98,12 @@ function rowPlanKey(r) {
 // (utils/clientAlerts.js) so the panel, the row badges and any future digest
 // can never disagree; the client only supplies presentation.
 const ALERT_CODES = {
+  stripe_mismatch: {
+    title: 'Plan mismatch',
+    blurb: 'Client registered on a different plan than what they paid for on Stripe.',
+    tint: 'text-red-700 bg-red-50 border-red-200',
+    chip: 'border-red-300 bg-red-50 text-red-800'
+  },
   no_adds: {
     title: 'No jobs added',
     blurb: 'Active clients with nothing added in the last operator window or longer.',
@@ -111,7 +117,7 @@ const ALERT_CODES = {
     chip: 'border-amber-300 bg-amber-50 text-amber-900'
   }
 };
-const ALERT_ORDER = ['no_adds', 'not_applied'];
+const ALERT_ORDER = ['stripe_mismatch', 'no_adds', 'not_applied'];
 
 // Columns rendered by the table below. Every row — header, data, skeleton and
 // the two full-width placeholders — must agree on this number. It used to be
@@ -265,7 +271,7 @@ export default function ClientJobAnalysis() {
   // column and had no way to be filtered on, so it belongs in this dropdown.
   const [planFilter, setPlanFilter] = useState('');
   const [addSortDir, setAddSortDir] = useState(null);     // null | 'worst' | 'best'
-  const [alertFilter, setAlertFilter] = useState('');     // '' | no_adds | not_applied
+  const [alertFilter, setAlertFilter] = useState('');     // '' | stripe_mismatch | no_adds | not_applied
   const [alertsOpen, setAlertsOpen] = useState(false);    // expanded client list
   // Hidden for the rest of this browser session only. Deliberately sessionStorage
   // and not localStorage: an operator who dismisses this on Monday must still be
@@ -911,7 +917,7 @@ export default function ClientJobAnalysis() {
   }, [rows]);
 
   const alertCounts = useMemo(() => {
-    const out = { total: 0, critical: 0, no_adds: 0, not_applied: 0 };
+    const out = { total: 0, critical: 0, stripe_mismatch: 0, no_adds: 0, not_applied: 0 };
     for (const r of alertRows) {
       for (const a of r.alerts || []) {
         out.total += 1;
