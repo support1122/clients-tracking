@@ -20,11 +20,11 @@ import toast from 'react-hot-toast';
 
 // The dashboard backend, same env var the AI Summary panel already uses.
 const DASHBOARD_BASE = (import.meta.env.VITE_DASHBOARD_BASE || 'http://localhost:8086').replace(/\/+$/, '');
-// Writes are shared-secret gated server-side (Middlewares/RequireOpsKey.js).
-// This ships in the bundle, exactly like the operations key the Operations tab
-// already prompts for — it stops a stray unauthenticated POST, not a
-// determined reader of the JS.
-const OPS_KEY = import.meta.env.VITE_OPS_KEY || 'flashfire@2025';
+// No ops key is sent from here on purpose. Vite inlines env vars at build
+// time, so shipping OPS_SECRET_KEY in this bundle would publish the same key
+// that guards /operations/reminders/*, which can email clients. The queue and
+// cancel routes are therefore open server-side, like the other portal-facing
+// dashboard routes; the routes only the autopilot calls stay gated.
 
 const WINDOWS = [
   { days: 1, label: 'Today' },
@@ -210,7 +210,7 @@ export default function AutoExtensionReport() {
     try {
       const res = await fetch(`${DASHBOARD_BASE}/autopilot/queue`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-ops-key': OPS_KEY },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           clientEmail: email,
           clientName: row.clientName || '',
@@ -237,8 +237,7 @@ export default function AutoExtensionReport() {
     if (event) event.stopPropagation();
     try {
       const res = await fetch(`${DASHBOARD_BASE}/autopilot/queue/${request._id}/cancel`, {
-        method: 'POST',
-        headers: { 'x-ops-key': OPS_KEY }
+        method: 'POST'
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.message || `HTTP ${res.status}`);
