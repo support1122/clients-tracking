@@ -22,6 +22,7 @@
 export const ALERT = {
   NO_ADDS: 'no_adds',
   NOT_APPLIED: 'not_applied',
+  STRIPE_MISMATCH: 'stripe_mismatch',
 };
 
 /** A client is only owed work when they are active, unpaused and past onboarding. */
@@ -44,6 +45,20 @@ export function owesWork(row) {
 export function deriveClientAlerts(row) {
   if (!owesWork(row)) return [];
   const alerts = [];
+
+  // ── Stripe plan mismatch ─────────────────────────────────────────────────
+  // Fires for ALL active clients regardless of owesWork — a wrong plan is a
+  // billing issue that matters even for paused clients, but we keep it inside
+  // the owesWork guard so it doesn't flood the panel with paused/inactive rows.
+  const sc = row?.stripePlanCheck;
+  if (sc && sc.status === 'mismatch') {
+    alerts.push({
+      code: ALERT.STRIPE_MISMATCH,
+      severity: 'critical',
+      label: `Plan mismatch: registered ${sc.registeredPlan}, paid for ${sc.stripePlan}`,
+      detail: `Client registered as ${sc.registeredPlan?.toUpperCase()} but Stripe shows they paid for ${sc.stripePlan?.toUpperCase()} (${sc.stripeCurrency} ${sc.stripeAmount}) via ${sc.matchedEmail}.`,
+    });
+  }
 
   // ── Nothing added ────────────────────────────────────────────────────────
   // daysSinceLastAdd is measured in whole 22:00 IST operator windows, so 1 means
@@ -101,7 +116,7 @@ export function deriveClientAlerts(row) {
  * @param {object[]} rows  rows that already carry an `alerts` array
  */
 export function summariseAlerts(rows) {
-  const out = { total: 0, clients: 0, critical: 0, byCode: { [ALERT.NO_ADDS]: 0, [ALERT.NOT_APPLIED]: 0 } };
+  const out = { total: 0, clients: 0, critical: 0, byCode: { [ALERT.NO_ADDS]: 0, [ALERT.NOT_APPLIED]: 0, [ALERT.STRIPE_MISMATCH]: 0 } };
   for (const r of rows || []) {
     const list = Array.isArray(r?.alerts) ? r.alerts : [];
     if (!list.length) continue;
