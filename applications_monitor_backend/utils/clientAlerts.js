@@ -43,15 +43,15 @@ export function owesWork(row) {
  * @returns {{code: string, severity: 'critical'|'warning', label: string, detail: string}[]}
  */
 export function deriveClientAlerts(row) {
-  if (!owesWork(row)) return [];
   const alerts = [];
 
   // ── Stripe plan mismatch ─────────────────────────────────────────────────
-  // Fires for ALL active clients regardless of owesWork — a wrong plan is a
-  // billing issue that matters even for paused clients, but we keep it inside
-  // the owesWork guard so it doesn't flood the panel with paused/inactive rows.
+  // Fires for ALL active clients — paused or not — because a billing mismatch
+  // is not a work-delivery issue and must not be silenced by the owesWork guard.
+  // Inactive clients are excluded so the panel stays focused on real clients.
+  const isActive = String(row?.status || '') === 'active';
   const sc = row?.stripePlanCheck;
-  if (sc && sc.status === 'mismatch') {
+  if (isActive && sc && sc.status === 'mismatch') {
     alerts.push({
       code: ALERT.STRIPE_MISMATCH,
       severity: 'critical',
@@ -59,6 +59,8 @@ export function deriveClientAlerts(row) {
       detail: `Client registered as ${sc.registeredPlan?.toUpperCase()} but Stripe checkout shows "${sc.stripePlanDesc}" via ${sc.matchedEmail}.`,
     });
   }
+
+  if (!owesWork(row)) return alerts;
 
   // ── Nothing added ────────────────────────────────────────────────────────
   // daysSinceLastAdd is measured in whole 22:00 IST operator windows, so 1 means
