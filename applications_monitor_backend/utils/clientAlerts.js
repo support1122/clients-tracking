@@ -56,7 +56,7 @@ export function deriveClientAlerts(row) {
       code: ALERT.STRIPE_MISMATCH,
       severity: 'critical',
       label: `Plan mismatch: registered ${sc.registeredPlan}, paid for ${sc.stripePlan}`,
-      detail: `Client registered as ${sc.registeredPlan?.toUpperCase()} but Stripe shows they paid for ${sc.stripePlan?.toUpperCase()} (${sc.stripeCurrency} ${sc.stripeAmount}) via ${sc.matchedEmail}.`,
+      detail: `Client registered as ${sc.registeredPlan?.toUpperCase()} but Stripe checkout shows "${sc.stripePlanDesc}" via ${sc.matchedEmail}.`,
     });
   }
 
