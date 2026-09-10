@@ -75,8 +75,23 @@ function rowPhase(r) {
   return r.onboardingPhase ? 'new' : r.isPaused ? 'paused' : 'unpaused';
 }
 
-// One dropdown for every filterable column header. Written once so the four
-// filters stay visually identical and a fifth is a two-line change. The clear
+// Canonical plan bucket for the PLAN column filter. Deliberately uses the same
+// substring matching as computeRowDerived's cap math, so a row can never be
+// hidden by a filter that disagrees with the limit printed on it. Anything that
+// matches nothing lands in 'other' rather than being quietly folded into a real
+// plan. An unrecognised value is a data problem worth being able to select.
+function rowPlanKey(r) {
+  const plan = String(r.planType || '').trim().toLowerCase();
+  if (!plan) return 'blank';
+  if (plan.includes('prime')) return 'prime';
+  if (plan.includes('ignite')) return 'ignite';
+  if (plan.includes('professional')) return 'professional';
+  if (plan.includes('executive')) return 'executive';
+  return 'other';
+}
+
+// One dropdown for every filterable column header. Written once so every filter
+// stays visually identical and the next one is a two-line change. The clear
 // button only appears once a value is chosen, matching the original
 // "Last applied by" control this was factored out of.
 // Attention alerts. Codes and severities are decided on the server
@@ -245,6 +260,10 @@ export default function ClientJobAnalysis() {
   const [addFilter, setAddFilter] = useState('');         // '' | under | stale | met
   const [countryFilter, setCountryFilter] = useState(''); // '' | USA | Canada | UK | blank
   const [dashboardMgrFilter, setDashboardMgrFilter] = useState('');
+  // '' | prime | ignite | professional | executive | blank | other | mismatch.
+  // 'mismatch' is not a plan: the ⚠ Payment mismatch badge renders in this same
+  // column and had no way to be filtered on, so it belongs in this dropdown.
+  const [planFilter, setPlanFilter] = useState('');
   const [addSortDir, setAddSortDir] = useState(null);     // null | 'worst' | 'best'
   const [alertFilter, setAlertFilter] = useState('');     // '' | no_adds | not_applied
   const [alertsOpen, setAlertsOpen] = useState(false);    // expanded client list
@@ -762,6 +781,15 @@ export default function ClientJobAnalysis() {
     return counts;
   }, [rows]);
 
+  const planCounts = useMemo(() => {
+    const counts = { prime: 0, ignite: 0, professional: 0, executive: 0, blank: 0, other: 0, mismatch: 0 };
+    for (const r of rows) {
+      counts[rowPlanKey(r)]++;
+      if (r.planMismatch) counts.mismatch++;
+    }
+    return counts;
+  }, [rows]);
+
   // Memoize filtered + sorted rows: active first, then by clientNumber ascending (same as Client Onboarding)
   const processedRows = useMemo(() => {
     let filtered = rows;
@@ -784,6 +812,8 @@ export default function ClientJobAnalysis() {
       const filterLower = dashboardMgrFilter.toLowerCase();
       filtered = filtered.filter(r => (r.dashboardTeamLeadName || '').toLowerCase() === filterLower);
     }
+    if (planFilter === 'mismatch') filtered = filtered.filter(r => !!r.planMismatch);
+    else if (planFilter) filtered = filtered.filter(r => rowPlanKey(r) === planFilter);
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(r => {
@@ -839,7 +869,7 @@ export default function ClientJobAnalysis() {
     // Attach derived cap/status math once per data change so per-render row
     // output stays cheap.
     return sorted.map((r) => ({ ...r, _d: computeRowDerived(r) }));
-  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, countryFilter, dashboardMgrFilter, searchQuery, getSortingNumber]);
+  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, countryFilter, dashboardMgrFilter, planFilter, searchQuery, getSortingNumber]);
 
   // ── Chunked rendering: mount ROW_CHUNK rows at a time, growing as a sentinel
   // scrolls into view. Bounds initial paint cost + DOM size for big tables. ──
@@ -1272,7 +1302,25 @@ export default function ClientJobAnalysis() {
                     ]}
                   />
                 </th>
-                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Plan</th>
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[118px]">
+                  <HeaderFilter
+                    label="Plan"
+                    value={planFilter}
+                    onChange={setPlanFilter}
+                    title="Filter by plan, or isolate the clients whose plan disagrees with the payment on their record"
+                    options={[
+                      { value: 'prime', label: `Prime (${planCounts.prime})` },
+                      { value: 'ignite', label: `Ignite (${planCounts.ignite})` },
+                      { value: 'professional', label: `Professional (${planCounts.professional})` },
+                      { value: 'executive', label: `Executive (${planCounts.executive})` },
+                      { value: 'blank', label: `Blank (${planCounts.blank})` },
+                      // Only worth offering when such rows exist. An always-on
+                      // "Other (0)" is noise in a dropdown this narrow.
+                      ...(planCounts.other > 0 ? [{ value: 'other', label: `Other (${planCounts.other})` }] : []),
+                      ...(planCounts.mismatch > 0 ? [{ value: 'mismatch', label: `⚠ Payment mismatch (${planCounts.mismatch})` }] : []),
+                    ]}
+                  />
+                </th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                   <HeaderFilter
                     label="Last applied by"
@@ -1476,7 +1524,7 @@ export default function ClientJobAnalysis() {
                   <td colSpan={TABLE_COLUMN_COUNT} className="px-2 py-8 text-center text-gray-500 text-sm">
                     {searchQuery.trim()
                       ? `No clients match "${searchQuery}"`
-                      : (lastAppliedByFilter || statusFilter || phaseFilter || addFilter || alertFilter || countryFilter)
+                      : (lastAppliedByFilter || statusFilter || phaseFilter || addFilter || alertFilter || countryFilter || dashboardMgrFilter || planFilter)
                         ? 'No clients match the selected filters'
                         : 'No data'}
                   </td>
