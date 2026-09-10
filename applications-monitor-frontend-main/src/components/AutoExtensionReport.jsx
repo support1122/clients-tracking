@@ -442,7 +442,9 @@ export default function AutoExtensionReport() {
         <strong>Pushed</strong> is how many of those reached the client&apos;s dashboard.{' '}
         <strong>Rejected</strong> is the rest — AI skips, duplicates, blocked cards and errors.
         Scrape queues a run; the autopilot picks it up within about half a minute and it
-        takes roughly 20 minutes to finish.
+        takes roughly 20 minutes to finish. A run stops at the client&apos;s <strong>daily cap</strong>,
+        which manual operator pushes share — so a client an operator already worked by hand
+        may only have a few slots left, and a short run is correct rather than broken.
       </p>
 
       {selected ? (
@@ -534,7 +536,7 @@ function ClientRunDetail({ row, detail, loading, onClose, onScrape, live, queuei
                       <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Captured</th>
                       <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Pushed</th>
                       <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Rejected</th>
-                      <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Cap</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500" title="The client's daily cap (ProfileModel.targetJobCount). Manual operator pushes spend the same allowance; it resets at 22:00 IST.">Daily cap</th>
                       <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Minutes</th>
                       <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">How it ended</th>
                     </tr>
