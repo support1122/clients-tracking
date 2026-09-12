@@ -34,7 +34,6 @@ import { uploadFile } from './utils/storageService.js';
 import { encrypt } from './utils/CryptoHelper.js';
 import { NewUserModel } from './schema_models/UserModel.js';
 import { PLAN_PRICES, normalisePlanType, planWriteFields, planPaymentMismatch, applyPlanToClientUpdate } from './utils/planCaps.js';
-import { getStripePaymentMap, checkClientStripePlan } from './utils/stripePlanCheck.js';
 import { ClientTodosModel } from './ClientTodosModel.js';
 import {
   createOnboardingJobPayload,
@@ -3806,7 +3805,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         ], { allowDiskUse: true }),
       // 5) Client info — runs in parallel with aggregations (no dependency)
       ClientModel.find({})
-        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt clientCountry amountPaid upgradePayments paymentEmail crmEmail')
+        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt clientCountry amountPaid upgradePayments')
         .lean(),
       // 6) AI-REMOVED per client, lifetime + today. Jobs the AI actually moved to
       //    the Removed column, never jobs it merely FLAGGED — a flag leaves the
@@ -3902,12 +3901,6 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       setAnalysisCache(lastAppliedKey, lastAppliedAgg, LAST_APPLIED_CACHE_TTL);
       pSetAnalysisCache(lastAppliedKey, lastAppliedAgg, LAST_APPLIED_CACHE_TTL).catch(() => {});
     }
-
-    // Stripe plan cross-check map — fetched once per 5 min, never throws.
-    const stripeSecret = process.env.STRIPE_SECRET_KEY;
-    const stripePaymentMap = stripeSecret
-      ? await getStripePaymentMap(stripeSecret).catch(() => new Map())
-      : new Map();
 
     const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
     // email -> { at: Date, days: number } for the client's FIRST application.
@@ -4015,8 +4008,6 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       clientNumber: c.clientNumber,
       planType: c.planType,
       planPrice: c.planPrice,
-      paymentEmail: c.paymentEmail || '',
-      crmEmail: c.crmEmail || '',
       status: c.status,
       jobStatus: c.jobStatus,
       operationsName: c.operationsName || '',
@@ -4038,10 +4029,10 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       }, 0),
       amountPaid: c.amountPaid ?? null,
       upgradePayments: Array.isArray(c.upgradePayments) ? c.upgradePayments : [],
-      // Internal plan consistency check (planType vs planPrice on same document).
-      planMismatch: planPaymentMismatch(c),
-      // Stripe cross-check: compare registered planType against what they paid on Stripe.
-      stripePlanCheck: checkClientStripePlan(c, stripePaymentMap)
+      // Non-null when the plan on this document disagrees with its own payment
+      // fields. Computed server-side so the screen and any future report can
+      // never apply two different definitions of "mismatch".
+      planMismatch: planPaymentMismatch(c)
     }]));
 
     const referralMap = new Map();
@@ -4093,9 +4084,6 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         planPrice: client.planPrice || null,
         planPriceExpected: PLAN_PRICES[normalisePlanType(client.planType)] ?? null,
         planMismatch: client.planMismatch ?? null,
-        stripePlanCheck: client.stripePlanCheck ?? null,
-        paymentEmail: client.paymentEmail || '',
-        crmEmail: client.crmEmail || '',
         amountPaid: client.amountPaid ?? null,
         upgradePayments: client.upgradePayments || [],
         status: client.status || null,
@@ -6396,6 +6384,14 @@ const getOperationsPerformanceReport = async (req, res) => {
       {
         $addFields: {
           _statusLower: { $toLower: { $ifNull: ['$currentStatus', ''] } },
+          _isCountedStatus: {
+            $or: [
+              { $regexMatch: { input: { $toLower: { $ifNull: ['$currentStatus', ''] } }, regex: 'applied' } },
+              { $regexMatch: { input: { $toLower: { $ifNull: ['$currentStatus', ''] } }, regex: 'reject' } },
+              { $regexMatch: { input: { $toLower: { $ifNull: ['$currentStatus', ''] } }, regex: 'interview' } },
+              { $regexMatch: { input: { $toLower: { $ifNull: ['$currentStatus', ''] } }, regex: 'offer' } }
+            ]
+          },
           _isIncompleteColumn: {
             $or: [
               { $regexMatch: { input: { $toLower: { $ifNull: ['$currentStatus', ''] } }, regex: 'applied' } },
@@ -6409,7 +6405,7 @@ const getOperationsPerformanceReport = async (req, res) => {
       {
         $group: {
           _id: '$operatorEmail',
-          appliedCount: { $sum: 1 },
+          appliedCount: { $sum: { $cond: ['$_isCountedStatus', 1, 0] } },
           notDownloadedCount: {
             $sum: {
               $cond: [
