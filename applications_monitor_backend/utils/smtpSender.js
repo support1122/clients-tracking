@@ -51,14 +51,19 @@ function getTransporter() {
  * @param {string} [a.html]
  * @param {string} [a.text]
  * @param {Object} [a.attachment] - { filename, mimetype, content (Buffer) }
+ * @param {Object} [a.headers]    - extra headers, e.g. List-Unsubscribe
  * @returns {Promise<{ messageId: string }>}
  */
-export async function sendViaSmtp({ to, subject, html, text, attachment }) {
+export async function sendViaSmtp({ to, subject, html, text, attachment, headers }) {
   const fromEmail = smtpFromEmail();
   const fromName = process.env.SMTP_FROM_NAME || "";
   const from = fromName ? `"${fromName}" <${fromEmail}>` : fromEmail;
 
   const mail = { from, to, subject, html, text };
+  // Spread as a plain object so nodemailer writes each one verbatim. This is
+  // how List-Unsubscribe / List-Unsubscribe-Post reach the provider, which is
+  // what turns Gmail's own "Unsubscribe" button on.
+  if (headers && typeof headers === "object" && Object.keys(headers).length) mail.headers = { ...headers };
   if (attachment) {
     mail.attachments = [{
       filename: attachment.filename,
