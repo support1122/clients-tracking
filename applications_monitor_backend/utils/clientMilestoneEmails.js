@@ -1,12 +1,13 @@
 import { sendGmailEmail } from "./gmailSender.js";
 import { getPlanLabel } from "./planCaps.js";
 import { postMilestoneToMattermost } from "./clientMattermost.js";
+import { unsubscribeLink, unsubscribeHeaders, UNSUB_STREAMS } from "./unsubscribe.js";
 
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "support@flashfirejobs.com";
 const WEBSITE_URL   = process.env.WEBSITE_URL   || "https://www.flashfirejobs.com";
 const DASHBOARD_URL = process.env.DASHBOARD_URL || "https://portal.flashfirejobs.com/";
 
-function shell({ kicker, title, bodyHtml }) {
+function shell({ kicker, title, bodyHtml, unsubUrl }) {
   const year = new Date().getFullYear();
   return `<!DOCTYPE html>
 <html>
@@ -56,8 +57,11 @@ function shell({ kicker, title, bodyHtml }) {
     <!-- Legal -->
     <div style="text-align:center;padding:14px 8px 4px;font-size:11px;color:#9ca3af;line-height:1.6;">
       © ${year} FlashFire. All rights reserved.<br>
-      You're getting this because your FlashFire plan is active.
-      If you'd rather not receive these milestone updates, just reply with "unsubscribe" and we'll stop.
+      You're getting this because your FlashFire plan is active.${
+        unsubUrl
+          ? `<br><a href="${unsubUrl}" style="color:#9ca3af;text-decoration:underline;">Unsubscribe from these updates</a>`
+          : ""
+      }
     </div>
   </div>
 </body>
@@ -83,12 +87,13 @@ function progressBlock({ planLabel, currentCount, planCap }) {
 
 // Build the email per type.
 function buildEmail(type, ctx) {
-  const { name, planLabel, planCap, currentCount, threshold } = ctx;
+  const { name, planLabel, planCap, currentCount, threshold, unsubUrl } = ctx;
 
   if (type === 'started') {
     return {
       subject: "Your resume is ready and applications are going out",
       html: shell({
+        unsubUrl,
         kicker: "FLASHFIRE PORTAL",
         title: "Resume done. Applications going out.",
         bodyHtml: `
@@ -103,6 +108,7 @@ function buildEmail(type, ctx) {
     return {
       subject: `${threshold} applications in. Quick update.`,
       html: shell({
+        unsubUrl,
         kicker: "FLASHFIRE PORTAL",
         title: `${threshold} applications submitted`,
         bodyHtml: `
@@ -118,6 +124,7 @@ function buildEmail(type, ctx) {
     return {
       subject: `All ${planCap} applications done. ${planLabel} plan wrapped.`,
       html: shell({
+        unsubUrl,
         kicker: "FLASHFIRE PORTAL",
         title: "All applications are out the door",
         bodyHtml: `
@@ -140,7 +147,11 @@ export async function sendMilestoneEmail({ client, type, snapshot = {}, mileston
   }
 
   const planLabel = getPlanLabel(client.planType);
+  // Opting out here stops the recurring reports, not the interview/offer
+  // alerts - those are the job search itself and have their own stream.
+  const unsub = unsubscribeLink(toEmail, UNSUB_STREAMS.REMINDERS);
   const ctx = {
+    unsubUrl: unsub.url,
     name: client.name || "there",
     planLabel,
     planCap: snapshot.planCap || 0,
@@ -161,6 +172,9 @@ export async function sendMilestoneEmail({ client, type, snapshot = {}, mileston
     to: toEmail,
     subject,
     html,
+    // RFC 8058: turns Gmail's own Unsubscribe button on. One-click POST is
+    // only claimed for an https link - see utils/unsubscribe.js.
+    headers: unsubscribeHeaders(toEmail, UNSUB_STREAMS.REMINDERS),
     category: "milestone",
     type: milestoneKey || type,
     clientEmail: client.email,
@@ -188,3 +202,7 @@ export async function sendMilestoneEmail({ client, type, snapshot = {}, mileston
 
   return result;
 }
+
+// Exported for utils/unsubscribe.test.mjs, which checks every milestone
+// variant carries the opt-out link. Not part of the sending API.
+export const __testables = { buildEmail };

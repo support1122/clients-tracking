@@ -26,7 +26,7 @@ function encodeFilename(filename) {
   return filename;
 }
 
-function buildMime({ from, to, subject, html, text, attachment }) {
+function buildMime({ from, to, subject, html, text, attachment, headers }) {
   const boundary = `----=_FF_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const altBoundary = `----=_FFalt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const encSubject = encodeRfc2047Header(subject);
@@ -36,6 +36,16 @@ function buildMime({ from, to, subject, html, text, attachment }) {
     `Subject: ${encSubject}`,
     `MIME-Version: 1.0`
   ];
+
+  // Extra headers (List-Unsubscribe and friends) go before Content-Type, which
+  // must stay last because the body is appended straight after it. CR/LF is
+  // stripped from both halves: a newline in a header value would let a crafted
+  // value inject headers of its own, or terminate the header block early.
+  for (const [name, value] of Object.entries(headers || {})) {
+    const n = String(name).replace(/[\r\n:]/g, "").trim();
+    const v = String(value).replace(/[\r\n]/g, " ").trim();
+    if (n && v) lines.push(`${n}: ${v}`);
+  }
 
   const altPart = (() => {
     const inner = [];
@@ -87,14 +97,14 @@ export async function getActiveGmailSender() {
   return GmailUser.findOne({}).sort({ updatedAt: -1, createdAt: -1 });
 }
 
-async function sendViaGmailRaw(user, { to, subject, html, text, attachment }) {
+async function sendViaGmailRaw(user, { to, subject, html, text, attachment, headers }) {
   const oauth = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET
   );
   oauth.setCredentials({ refresh_token: user.refreshToken });
   const gmail = google.gmail({ version: "v1", auth: oauth });
-  const mime = buildMime({ from: user.email, to, subject, html, text, attachment });
+  const mime = buildMime({ from: user.email, to, subject, html, text, attachment, headers });
   const raw = Buffer.from(mime)
     .toString("base64")
     .replace(/\+/g, "-")
@@ -125,6 +135,7 @@ export async function sendGmailEmail({
   html,
   text,
   attachment = null,
+  headers = null,
   category = "other",
   type,
   clientEmail,
@@ -167,9 +178,9 @@ export async function sendGmailEmail({
 
   try {
     if (useSmtp) {
-      await sendViaSmtp({ to: recipient, subject, html, text, attachment });
+      await sendViaSmtp({ to: recipient, subject, html, text, attachment, headers });
     } else {
-      await sendViaGmailRaw(sender, { to: recipient, subject, html, text, attachment });
+      await sendViaGmailRaw(sender, { to: recipient, subject, html, text, attachment, headers });
     }
     await ClientEmailLogModel.create({ ...logBase, status: "success" });
     console.log(`[GmailSender] sent ${category}/${type} to ${recipient} from ${fromEmail} via ${useSmtp ? "smtp" : "oauth"}`);
@@ -188,3 +199,7 @@ export async function sendGmailEmail({
     return { success: false, error: msg };
   }
 }
+
+// Exported for the header-injection test in utils/unsubscribe.test.mjs. Not
+// part of the sending API - build a message through sendGmailEmail().
+export const __testables = { buildMime };
