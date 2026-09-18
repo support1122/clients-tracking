@@ -93,6 +93,7 @@ import {
   pClearAnalysisCache
 } from './utils/persistentAnalysisCache.js';
 import { istDayStamp, decideAnalysisCacheAction, ANALYSIS_PAYLOAD_VERSION } from './utils/analysisCachePolicy.js';
+import { JOBRIGHT_CLIENT_EMAILS } from './data/jobrightClients.js';
 import { addWindowDayStamp } from './utils/addWindow.js';
 import { computeClientAddStats, emptyAddStat } from './utils/clientAddStats.js';
 import { computeClientApplyStats, emptyApplyStat, APPLY_LOOKBACK_DAYS } from './utils/clientApplyStats.js';
@@ -3805,7 +3806,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         ], { allowDiskUse: true }),
       // 5) Client info — runs in parallel with aggregations (no dependency)
       ClientModel.find({})
-        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt clientCountry amountPaid upgradePayments')
+        .select('email name clientNumber planType planPrice status jobStatus operationsName dashboardTeamLeadName isPaused onboardingPhase addons pausedAt clientCountry amountPaid upgradePayments jobrightCreated')
         .lean(),
       // 6) AI-REMOVED per client, lifetime + today. Jobs the AI actually moved to
       //    the Removed column, never jobs it merely FLAGGED — a flag leaves the
@@ -4032,7 +4033,11 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       // Non-null when the plan on this document disagrees with its own payment
       // fields. Computed server-side so the screen and any future report can
       // never apply two different definitions of "mismatch".
-      planMismatch: planPaymentMismatch(c)
+      planMismatch: planPaymentMismatch(c),
+      // Set only by GET /scripts/jobrightsync. Coerced here so a document written
+      // before the field existed arrives as false rather than undefined, which
+      // the UI would otherwise have to treat as a third state.
+      jobrightCreated: c.jobrightCreated === true
     }]));
 
     const referralMap = new Map();
@@ -4103,6 +4108,10 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         firstAppliedAt: firstAppliedMap.get(email.toLowerCase())?.at?.toISOString() ?? null,
         daysSinceFirstApplication: firstAppliedMap.get(email.toLowerCase())?.days ?? null,
         dashboardTeamLeadName: client.dashboardTeamLeadName || '',
+        // Whether a JobRight account exists for this client. False covers both
+        // "synced and not on the list" and "never synced". Operationally the
+        // same thing: somebody still has to create it.
+        jobrightCreated: client.jobrightCreated === true,
         lastAppliedOperatorName: lastAppliedOperatorMap.get(email.toLowerCase()) || '',
         referrals: referralMeta.referrals || [],
         referralApplicationsAdded: referralMeta.referralApplicationsAdded || 0,
@@ -5563,6 +5572,74 @@ app.get('/api/clients/:email/email-logs', verifyToken, async (req, res) => {
     res.status(500).json({ error: 'failed to load email logs' });
   }
 });
+// ── JobRight sync ──
+//
+// Marks every client on data/jobrightClients.js as having a JobRight account.
+// Additive by design: a client absent from the list is left untouched and keeps
+// whatever it already had, so re-running with a shortened list can never wipe a
+// flag. Clients nobody has ever synced keep the schema default of false, which
+// is what paints the red J in Client Job Analysis.
+//
+// A plain GET with no auth, meant to be run once by opening it in a browser:
+//   https://<host>/scripts/jobrightsync
+// It is safe to hit more than once: the write is idempotent (it only ever sets
+// the flag to true, and skips clients already marked), so a repeat run reports
+// newlyMarked: 0 and changes nothing.
+app.get('/scripts/jobrightsync', async (req, res) => {
+  try {
+    const listed = JOBRIGHT_CLIENT_EMAILS;
+
+    // Read before writing so the response can distinguish "this run changed it"
+    // from "it was already true", and can name the addresses that match no
+    // client at all. A bare updated-count cannot tell those apart, and the
+    // not-found list is the useful half: it is the typos and the clients who
+    // were never onboarded here.
+    const existing = await ClientModel.find({ email: { $in: listed } })
+      .select('email jobrightCreated')
+      .lean();
+
+    const foundByEmail = new Map(existing.map((c) => [(c.email || '').toLowerCase(), c]));
+    const notFound = listed.filter((e) => !foundByEmail.has(e));
+    const alreadyMarked = existing.filter((c) => c.jobrightCreated === true).map((c) => c.email);
+    const toMark = existing.filter((c) => c.jobrightCreated !== true).map((c) => c.email);
+
+    let modified = 0;
+    if (toMark.length) {
+      const result = await ClientModel.updateMany(
+        { email: { $in: toMark } },
+        { $set: { jobrightCreated: true, jobrightCreatedAt: new Date() } }
+      );
+      modified = result?.modifiedCount ?? 0;
+    }
+
+    // Client Job Analysis serves this flag out of a cache that is keyed on the
+    // IST day, the add window and the payload version. None of those three move
+    // when a sync runs, so without an explicit clear the table would keep
+    // painting the old J colours until a day boundary rolled the stamps over.
+    if (modified > 0) {
+      clearAnalysisCache();
+      pClearAnalysisCache().catch(() => {});
+    }
+
+    console.log(`[jobrightsync] listed=${listed.length} matched=${existing.length} newlyMarked=${modified} notFound=${notFound.length}`);
+
+    res.json({
+      ok: true,
+      listed: listed.length,
+      matched: existing.length,
+      newlyMarked: modified,
+      alreadyMarked: alreadyMarked.length,
+      notFound: notFound.length,
+      notFoundEmails: notFound,
+      alreadyMarkedEmails: alreadyMarked,
+      cacheCleared: modified > 0
+    });
+  } catch (e) {
+    console.error('[jobrightsync] error:', e?.message);
+    res.status(500).json({ ok: false, error: 'jobright sync failed' });
+  }
+});
+
 app.get('/api/managers/names', getDashboardManagerNames);
 
 // ── Team chat (widget) ──

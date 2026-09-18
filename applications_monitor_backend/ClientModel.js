@@ -242,6 +242,21 @@ export const ClientSchema = new mongoose.Schema({
     trim: true,
     default: ""
   },
+  // Whether a JobRight account has been created for this client. Set only by
+  // GET /scripts/jobrightsync, which reads data/jobrightClients.js. Defaults to
+  // false so a client nobody has synced reads as "not created" rather than as
+  // unknown, which is what the red J in Client Job Analysis is calling out.
+  jobrightCreated: {
+    type: Boolean,
+    required: false,
+    default: false
+  },
+  // When the flag was last set to true, for auditing a sync run.
+  jobrightCreatedAt: {
+    type: Date,
+    required: false,
+    default: null
+  },
   // Dynamic per-plan milestone tracking. Keys come from PLAN_MILESTONES
   // ('started', 'count_250', 'count_350', 'count_700', 'completed').
   // Each value: { sent: Boolean, at: Date, count: Number }.

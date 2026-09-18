@@ -1,0 +1,110 @@
+/**
+ * Clients who already have a JobRight account created for them.
+ *
+ * This list is the source of truth, kept in version control rather than in a
+ * spreadsheet, so re-running the sync is deterministic and a change to who is on
+ * it shows up in a diff. POST /scripts/jobrightsync reads it and marks every
+ * matching client jobrightCreated: true.
+ *
+ * The sync is additive on purpose: a client missing from this list is never
+ * forced back to false. Clients that have never been synced simply keep the
+ * schema default of false, which is what paints the red J in Client Job
+ * Analysis. That way a truncated paste can never silently wipe real flags.
+ *
+ * Addresses are stored already lowercased and de-duplicated, because that is the
+ * form ClientModel.email is stored in and the form the sync matches on.
+ */
+export const JOBRIGHT_CLIENT_EMAILS = [
+  'mohith.tech01@gmail.com',
+  'shubhk20122001@gmail.com',
+  'swethakalla4@gmail.com',
+  'bhiseshreeya438@gmail.com',
+  'anasuddin.ahmed2002@gmail.com',
+  'manasvardhanusc@gmail.com',
+  'navyamanjariuppaluri2026@gmail.com',
+  'aayushigoenkausc@gmail.com',
+  'chandana.yaraguntla@gmail.com',
+  'map98890@gmail.com',
+  'aakashvrao0@gmail.com',
+  'rchakri555@gmail.com',
+  'kambojveenu06@gmail.com',
+  'mittapallisharmelee9599@gmail.com',
+  'saurabhpahune00@gmail.com',
+  'patelhetvi2407@gmail.com',
+  'raam.nandhaa@gmail.com',
+  'saumyarathore1896@gmail.com',
+  'srikant.lakshminarayan@gmail.com',
+  'aayushisinghp90@gmail.com',
+  'jaintanya2608@gmail.com',
+  'krishnatralavanya@gmail.com',
+  'nishit.pabari8@gmail.com',
+  'nandal.srushti29@gmail.com',
+  'shophiyakrishnamoorthy03@gmail.com',
+  'siddhantsancheti.ai@gmail.com',
+  'prernaasachdeva15@gmail.com',
+  'bhatianamit03@gmail.com',
+  'rajasekaradharsh464@gmail.com',
+  'patibandlabharathnarasimha@gmail.com',
+  'shahiananyaa97@gmail.com',
+  'diya.dinesh.kathait@gmail.com',
+  'ishdham16@gmail.com',
+  'abhishek.gaurihar01@gmail.com',
+  'purvisthakur789@gmail.com',
+  'anveshboddu259@gmail.com',
+  'effatn99@gmail.com',
+  'tanmayarya1223@gmail.com',
+  'seun62192@gmail.com',
+  'eniyak19@gmail.com',
+  'asmitasantoshshinde23@gmail.com',
+  'alisha.ringe2001@gmail.com',
+  'aayushjaiswal290598@gmail.com',
+  'mushfiqueahmed997@gmail.com',
+  'arunkatta217@gmail.com',
+  'anishajangiduk13@gmail.com',
+  'pranithacad@gmail.com',
+  'yamunarajendran2023@gmail.com',
+  'ragamvinaykumar03@gmail.com',
+  'mzsalaskar@gmail.com',
+  'saikrishna.grandhi2000@gmail.com',
+  'prajwal.prasad.dev@gmail.com',
+  'aarush.ambasht.duke@gmail.com',
+  'ft.maninderjeet@gmail.com',
+  'dhruvil.patel.careers@gmail.com',
+  'anantsingh04142002@gmail.com',
+  'csourav1571@gmail.com',
+  'sahanavkumar256@gmail.com',
+  'shivaumh@gmail.com',
+  'subramanisudhama@gmail.com',
+  'shubham.gulati.112000@gmail.com',
+  'yashviibhattt@gmail.com',
+  'prathamkadam134@gmail.com',
+  'pavan.marisetti17@gmail.com',
+  'sahasrakokkula03@gmail.com',
+  'dattasrestha99@gmail.com',
+  'contacturvi44@gmail.com',
+  'patilsuruchi27@gmail.com',
+  'mhardik2802@gmail.com',
+  'dreddyjammula@gmail.com',
+  'valli.sur24@gmail.com',
+  'senapatineha4@gmail.com',
+  'teresasenjaya@gmail.com',
+  'namankothari34@gmail.com',
+  'sravanibhamidipaty4@gmail.com',
+  'surajvon27@gmail.com',
+  'aaditishah26@gmail.com',
+  'akshayashan1902@gmail.com',
+  'chandramouleeswarananirudh@gmail.com',
+  'abhishekaggarwal2307@gmail.com',
+  'krishnasaip08@gmail.com',
+  'cmaamannaik@gmail.com',
+  'haindavibadri02@gmail.com',
+  'nidhichutani07@gmail.com',
+  'niharikaneelam222@gmail.com',
+  'sherlin.atluri5@gmail.com',
+  'swaralimahimkar11@gmail.com',
+  'shubhmangalbhardwaj1@gmail.com',
+  'cp2000594@gmail.com',
+];
+
+/** Lowercased Set for O(1) membership checks. */
+export const JOBRIGHT_CLIENT_EMAIL_SET = new Set(JOBRIGHT_CLIENT_EMAILS);
