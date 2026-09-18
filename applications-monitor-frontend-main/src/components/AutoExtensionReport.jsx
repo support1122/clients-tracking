@@ -105,6 +105,11 @@ export default function AutoExtensionReport() {
   const [days, setDays] = useState(7);
   const [rows, setRows] = useState([]);
   const [totals, setTotals] = useState(null);
+  // The server decides where the window starts (00:00 IST) and says so. We
+  // render its label rather than re-deriving one from `days` in the browser's
+  // timezone, which is how "Today" ended up meaning two different things on
+  // the same screen.
+  const [windowLabel, setWindowLabel] = useState('');
   const [queue, setQueue] = useState([]);
   const [search, setSearch] = useState('');
   const [onlyProblems, setOnlyProblems] = useState(false);
@@ -137,6 +142,7 @@ export default function AutoExtensionReport() {
       if (!alive.current || mine !== reqId.current) return;
       setRows(summary.data || []);
       setTotals(summary.totals || null);
+      setWindowLabel(summary.windowLabel || '');
       setQueue(queueBody.data || []);
       setErr('');
     } catch (e) {
@@ -291,11 +297,20 @@ export default function AutoExtensionReport() {
 
       {totals ? (
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          <StatTile label="Clients" value={totals.clients} hint={`in the last ${days === 1 ? 'day' : `${days} days`}`} />
+          <StatTile
+            label="Clients"
+            value={totals.clients}
+            hint={windowLabel || (days === 1 ? 'today (since 00:00 IST)' : `the last ${days} days (IST)`)}
+          />
           <StatTile label="Runs" value={totals.runs} />
           <StatTile label="Captured" value={totals.captured} hint="cards pulled off JobRight" />
           <StatTile label="Pushed" value={totals.pushed} tone="text-emerald-700" hint="reached the dashboard" />
-          <StatTile label="Rejected" value={totals.rejected} tone="text-slate-700" hint="captured minus pushed" />
+          {/* Not "captured minus pushed": this is the sum of each run's own
+              rejected count, and a run that pushed a job it captured in an
+              earlier batch floors at 0 rather than going negative. Subtracting
+              the two tiles above will not always land on this number, and the
+              old hint promised that it would. */}
+          <StatTile label="Rejected" value={totals.rejected} tone="text-slate-700" hint="captured but not pushed" />
           <StatTile
             label="Failed runs"
             value={totals.failedRuns}
