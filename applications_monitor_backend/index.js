@@ -4034,9 +4034,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       // fields. Computed server-side so the screen and any future report can
       // never apply two different definitions of "mismatch".
       planMismatch: planPaymentMismatch(c),
-      // Set only by GET /scripts/jobrightsync. Coerced here so a document written
-      // before the field existed arrives as false rather than undefined, which
-      // the UI would otherwise have to treat as a third state.
+      // Coerced here so a document written before the field existed arrives as
+      // false rather than undefined, which the UI would otherwise have to treat
+      // as a third state.
       jobrightCreated: c.jobrightCreated === true
     }]));
 
@@ -5025,10 +5025,59 @@ const updateClientCountry = async (req, res) => {
   }
 };
 
+// Toggle "JobRight account created" from the Client Job Analysis row.
+//
+// GET /scripts/jobrightsync seeds this flag in bulk from data/jobrightClients.js;
+// this route is the per-client correction an operator makes afterwards, so the
+// two write the same two fields and cannot drift.
+const updateClientJobright = async (req, res) => {
+  try {
+    const emailLower = String(req.params.email || '').toLowerCase().trim();
+    if (!emailLower) return res.status(400).json({ error: 'Email is required' });
+
+    // Strict boolean. A missing or string body would otherwise be coerced, and
+    // "false" is truthy — the one mistake that would silently mark a client as
+    // having an account they do not have.
+    const value = req.body?.jobrightCreated;
+    if (typeof value !== 'boolean') {
+      return res.status(400).json({ error: 'jobrightCreated must be true or false' });
+    }
+
+    const updatedAt = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+    const client = await ClientModel.findOneAndUpdate(
+      { email: emailLower },
+      { $set: { jobrightCreated: value, jobrightCreatedAt: value ? new Date() : null, updatedAt } },
+      { new: true }
+    ).select('email jobrightCreated jobrightCreatedAt').lean();
+
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    // Client Job Analysis serves this flag from a cache keyed on the IST day,
+    // the add window and the payload version. None of those move when a single
+    // flag is toggled, so without this the row would snap back to its old value
+    // on the next reload. Same clear updateClientCountry does, for the same
+    // reason.
+    clearAnalysisCache();
+    pClearAnalysisCache().catch(() => {});
+
+    res.status(200).json({
+      success: true,
+      email: client.email,
+      jobrightCreated: client.jobrightCreated === true,
+      jobrightCreatedAt: client.jobrightCreatedAt || null,
+      message: 'JobRight status updated'
+    });
+  } catch (error) {
+    console.error('updateClientJobright:', error);
+    res.status(500).json({ error: error.message || 'Failed to update JobRight status' });
+  }
+};
+
 app.post('/api/clients', optionalVerifyToken, createOrUpdateClient);
 app.post('/api/clients/addnumbers', addNumbersToClients);
 app.patch('/api/clients/:email/client-number', verifyToken, verifyAdmin, updateClientNumber);
 app.patch('/api/clients/:email/client-country', verifyToken, verifyAdmin, updateClientCountry);
+app.patch('/api/clients/:email/jobright', verifyToken, verifyAdmin, updateClientJobright);
 app.post('/api/clients/sync-client-numbers', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const synced = await syncClientNumbersToOnboardingJobs();

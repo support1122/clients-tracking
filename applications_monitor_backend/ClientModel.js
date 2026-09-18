@@ -242,10 +242,11 @@ export const ClientSchema = new mongoose.Schema({
     trim: true,
     default: ""
   },
-  // Whether a JobRight account has been created for this client. Set only by
-  // GET /scripts/jobrightsync, which reads data/jobrightClients.js. Defaults to
-  // false so a client nobody has synced reads as "not created" rather than as
-  // unknown, which is what the red J in Client Job Analysis is calling out.
+  // Whether a JobRight account has been created for this client. Seeded in bulk
+  // by GET /scripts/jobrightsync from data/jobrightClients.js, and corrected one
+  // row at a time by PATCH /api/clients/:email/jobright behind the dropdown in
+  // Client Job Analysis. Defaults to false so a client nobody has touched reads
+  // as "not created" rather than as unknown.
   jobrightCreated: {
     type: Boolean,
     required: false,
