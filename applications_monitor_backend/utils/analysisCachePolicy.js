@@ -53,8 +53,13 @@
  *   3  lastAppliedOperatorName now also reports "user" when the CLIENT applied
  *      the last card themselves. Those clients previously rendered a dash,
  *      identical to a client nobody had ever applied for.
+ *   4  jobrightCreated added to every row, and removedByAI dropped from the UI.
+ *      Without a bump, cached entries would serve jobrightCreated as undefined,
+ *      and the UI paints undefined the same as false. Every client would show
+ *      the red "not created" J regardless of what the sync actually wrote, until
+ *      a day boundary rolled the other stamps over.
  */
-export const ANALYSIS_PAYLOAD_VERSION = 3;
+export const ANALYSIS_PAYLOAD_VERSION = 4;
 
 /** 'YYYY-MM-DD' for the current IST calendar day. */
 export function istDayStamp(nowMs = Date.now()) {

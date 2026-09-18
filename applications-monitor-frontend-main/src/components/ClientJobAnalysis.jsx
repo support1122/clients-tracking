@@ -270,6 +270,10 @@ export default function ClientJobAnalysis() {
   // 'mismatch' is not a plan: the ⚠ Payment mismatch badge renders in this same
   // column and had no way to be filtered on, so it belongs in this dropdown.
   const [planFilter, setPlanFilter] = useState('');
+  // '' | yes | no. Whether a JobRight account has been created for the client,
+  // set by GET /scripts/jobrightsync. The whole point of the red J is finding
+  // the clients still waiting on one, so the column needs a way to list them.
+  const [jobrightFilter, setJobrightFilter] = useState('');
   const [addSortDir, setAddSortDir] = useState(null);     // null | 'worst' | 'best'
   const [alertFilter, setAlertFilter] = useState('');     // '' | stripe_mismatch | no_adds | not_applied
   const [alertsOpen, setAlertsOpen] = useState(false);    // expanded client list
@@ -796,6 +800,12 @@ export default function ClientJobAnalysis() {
     return counts;
   }, [rows]);
 
+  const jobrightCounts = useMemo(() => {
+    let yes = 0;
+    for (const r of rows) if (r.jobrightCreated === true) yes++;
+    return { yes, no: rows.length - yes };
+  }, [rows]);
+
   // Memoize filtered + sorted rows: active first, then by clientNumber ascending (same as Client Onboarding)
   const processedRows = useMemo(() => {
     let filtered = rows;
@@ -820,6 +830,8 @@ export default function ClientJobAnalysis() {
     }
     if (planFilter === 'mismatch') filtered = filtered.filter(r => !!r.planMismatch);
     else if (planFilter) filtered = filtered.filter(r => rowPlanKey(r) === planFilter);
+    if (jobrightFilter === 'yes') filtered = filtered.filter(r => r.jobrightCreated === true);
+    else if (jobrightFilter === 'no') filtered = filtered.filter(r => r.jobrightCreated !== true);
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(r => {
@@ -875,7 +887,7 @@ export default function ClientJobAnalysis() {
     // Attach derived cap/status math once per data change so per-render row
     // output stays cheap.
     return sorted.map((r) => ({ ...r, _d: computeRowDerived(r) }));
-  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, countryFilter, dashboardMgrFilter, planFilter, searchQuery, getSortingNumber]);
+  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, countryFilter, dashboardMgrFilter, planFilter, jobrightFilter, searchQuery, getSortingNumber]);
 
   // ── Chunked rendering: mount ROW_CHUNK rows at a time, growing as a sentinel
   // scrolls into view. Bounds initial paint cost + DOM size for big tables. ──
@@ -1433,14 +1445,20 @@ export default function ClientJobAnalysis() {
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Offer</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Rejected</th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Removed</th>
-                <th
-                  className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-amber-700"
-                  title="Jobs the AI moved to Removed: expired postings caught by second-stage screening, plus client exclusion-list matches. Follows the date picker — with no date selected it shows TODAY; pick a date and it shows that day. A subset of 'Removed'. Jobs the AI merely FLAGGED (e.g. a location mismatch) are NOT counted — they stay in place until an operator decides, under 'See AI flags' on the summaries page."
-                >
-                  Removed by AI
-                  <span className="block font-normal normal-case text-[10px] text-slate-500">
-                    {date ? convertToDMY(date) : 'today'}
-                  </span>
+                {/* JobRight, in the slot the "Removed by AI" column used to
+                    occupy. The flag is written only by GET /scripts/jobrightsync
+                    off data/jobrightClients.js; nothing on this screen edits it. */}
+                <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[104px]">
+                  <HeaderFilter
+                    label="JobRight"
+                    value={jobrightFilter}
+                    onChange={setJobrightFilter}
+                    title="Whether a JobRight account has been created for this client. Set by running /scripts/jobrightsync."
+                    options={[
+                      { value: 'no', label: `No (${jobrightCounts.no})` },
+                      { value: 'yes', label: `Yes (${jobrightCounts.yes})` },
+                    ]}
+                  />
                 </th>
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">
                   <div className="flex flex-col items-start gap-1">
@@ -1519,8 +1537,8 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
-                    {/* Removed by AI. */}
-                    <td className="px-2 py-2"><div className="h-3.5 bg-amber-200/80 rounded animate-pulse w-8 ml-auto" /></td>
+                    {/* JobRight. */}
+                    <td className="px-2 py-2"><div className="h-5 w-5 bg-gray-200 rounded-md animate-pulse" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-14 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-10 ml-auto" /></td>
                   </tr>
@@ -1530,7 +1548,7 @@ export default function ClientJobAnalysis() {
                   <td colSpan={TABLE_COLUMN_COUNT} className="px-2 py-8 text-center text-gray-500 text-sm">
                     {searchQuery.trim()
                       ? `No clients match "${searchQuery}"`
-                      : (lastAppliedByFilter || statusFilter || phaseFilter || addFilter || alertFilter || countryFilter || dashboardMgrFilter || planFilter)
+                      : (lastAppliedByFilter || statusFilter || phaseFilter || addFilter || alertFilter || countryFilter || dashboardMgrFilter || planFilter || jobrightFilter)
                         ? 'No clients match the selected filters'
                         : 'No data'}
                   </td>
@@ -1902,8 +1920,32 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1 text-right">{r.offer}</td>
                     <td className="px-2 py-1 text-right">{r.rejected}</td>
                     <td className="px-2 py-1 text-right">{r.removed}</td>
-                    <td className="px-2 py-1 text-right font-semibold text-amber-700">
-                      {r.removedByAI || 0}
+                    <td className="px-2 py-1">
+                      {/* A red J reads as "still to do" at a glance down the
+                          column, which is the whole reason this is a mark and
+                          not the word "No". The letter is kept for screen
+                          readers and the tooltip spells it out. */}
+                      {(() => {
+                        const created = r.jobrightCreated === true;
+                        return (
+                          <span
+                            className={`inline-flex items-center gap-1.5 ${created ? 'text-emerald-700' : 'text-red-700'}`}
+                            title={created ? 'JobRight account created' : 'No JobRight account yet'}
+                          >
+                            <span
+                              aria-hidden="true"
+                              className={`inline-flex h-5 w-5 items-center justify-center rounded-md border text-[11px] font-extrabold leading-none ${
+                                created
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
+                                  : 'bg-red-50 border-red-300 text-red-700'
+                              }`}
+                            >
+                              J
+                            </span>
+                            <span className="text-[11px] font-semibold">{created ? 'Yes' : 'No'}</span>
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-2 py-1 text-right">
                       {r.daysSinceFirstApplication == null ? (
