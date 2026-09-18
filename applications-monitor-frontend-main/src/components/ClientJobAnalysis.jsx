@@ -243,6 +243,7 @@ export default function ClientJobAnalysis() {
   const [savingStatus, setSavingStatus] = useState(new Set());
   const [savingPause, setSavingPause] = useState(new Set());
   const [savingCountry, setSavingCountry] = useState(new Set());
+  const [savingJobright, setSavingJobright] = useState(new Set());
   // Per-client scrape counts, loaded from the scraper service on mount. The
   // per-row Scrape column that used to edit them is gone; these now only seed
   // the "Scrape All" modal, where each count is still editable before running.
@@ -632,6 +633,41 @@ export default function ClientJobAnalysis() {
     }
   };
 
+
+  // Toggle whether a JobRight account exists for this client. The bulk seed is
+  // GET /scripts/jobrightsync; this is the per-client correction afterwards.
+  const handleJobrightChange = async (email, value) => {
+    if (userRole !== 'admin') {
+      toast.error('Only admins can change JobRight status');
+      return;
+    }
+    const jobrightCreated = value === 'yes';
+    setSavingJobright((prev) => new Set(prev).add(email));
+    try {
+      const resp = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(email)}/jobright`, {
+        method: 'PATCH',
+        headers: AUTH_HEADERS(),
+        body: JSON.stringify({ jobrightCreated }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || 'Failed to save');
+      // Trust the server's echo rather than the local guess, so a row can never
+      // display a value the database did not accept.
+      setRows((prev) =>
+        prev.map((r) => (r.email === email ? { ...r, jobrightCreated: data.jobrightCreated === true } : r)),
+      );
+      invalidateCache('analysis:');
+      toast.success(data.jobrightCreated ? 'JobRight marked as created' : 'JobRight marked as not created');
+    } catch (e) {
+      toast.error(e.message || 'Failed to update JobRight status');
+    } finally {
+      setSavingJobright((prev) => {
+        const nextSet = new Set(prev);
+        nextSet.delete(email);
+        return nextSet;
+      });
+    }
+  };
 
   // --- Scrape All (batch) handlers --------------------------------------
 
@@ -1447,7 +1483,7 @@ export default function ClientJobAnalysis() {
                     label="JobRight"
                     value={jobrightFilter}
                     onChange={setJobrightFilter}
-                    title="Whether a JobRight account has been created for this client. Set by running /scripts/jobrightsync."
+                    title="Whether a JobRight account has been created for this client. Seeded in bulk by /scripts/jobrightsync; admins can correct any row from its dropdown."
                     options={[
                       { value: 'no', label: `No (${jobrightCounts.no})` },
                       { value: 'yes', label: `Yes (${jobrightCounts.yes})` },
@@ -1532,7 +1568,7 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-8 ml-auto" /></td>
                     {/* JobRight. */}
-                    <td className="px-2 py-2"><div className="h-5 w-5 bg-gray-200 rounded-md animate-pulse" /></td>
+                    <td className="px-2 py-2"><div className="h-5 w-12 bg-gray-200 rounded-md animate-pulse" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-14 ml-auto" /></td>
                     <td className="px-2 py-2"><div className="h-3.5 bg-gray-200 rounded animate-pulse w-10 ml-auto" /></td>
                   </tr>
@@ -1915,31 +1951,33 @@ export default function ClientJobAnalysis() {
                     <td className="px-2 py-1 text-right">{r.rejected}</td>
                     <td className="px-2 py-1 text-right">{r.removed}</td>
                     <td className="px-2 py-1">
-                      {/* A red J reads as "still to do" at a glance down the
-                          column, which is the whole reason this is a mark and
-                          not the word "No". The letter is kept for screen
-                          readers and the tooltip spells it out. */}
-                      {(() => {
-                        const created = r.jobrightCreated === true;
-                        return (
-                          <span
-                            className={`inline-flex items-center gap-1.5 ${created ? 'text-emerald-700' : 'text-red-700'}`}
-                            title={created ? 'JobRight account created' : 'No JobRight account yet'}
-                          >
-                            <span
-                              aria-hidden="true"
-                              className={`inline-flex h-5 w-5 items-center justify-center rounded-md border text-[11px] font-extrabold leading-none ${
-                                created
-                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
-                                  : 'bg-red-50 border-red-300 text-red-700'
-                              }`}
-                            >
-                              J
-                            </span>
-                            <span className="text-[11px] font-semibold">{created ? 'Yes' : 'No'}</span>
-                          </span>
-                        );
-                      })()}
+                      {/* Colour lives on the control's own text, not on a badge
+                          beside it: option elements cannot be styled reliably
+                          across browsers, but the closed select shows the chosen
+                          value, so a column of red "No"s still reads at a glance. */}
+                      {userRole === 'admin' ? (
+                        <select
+                          value={r.jobrightCreated === true ? 'yes' : 'no'}
+                          onChange={(e) => handleJobrightChange(r.email, e.target.value)}
+                          disabled={savingJobright.has(r.email)}
+                          className={`px-1.5 py-0.5 text-[11px] font-semibold border rounded-md bg-white shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
+                            r.jobrightCreated === true
+                              ? 'border-emerald-300 text-emerald-700'
+                              : 'border-red-300 text-red-700'
+                          }`}
+                          title="Whether a JobRight account has been created for this client"
+                        >
+                          <option value="no">No</option>
+                          <option value="yes">Yes</option>
+                        </select>
+                      ) : (
+                        <span
+                          className={`text-[11px] font-semibold ${r.jobrightCreated === true ? 'text-emerald-700' : 'text-red-700'}`}
+                          title={r.jobrightCreated === true ? 'JobRight account created' : 'No JobRight account yet'}
+                        >
+                          {r.jobrightCreated === true ? 'Yes' : 'No'}
+                        </span>
+                      )}
                     </td>
                     <td className="px-2 py-1 text-right">
                       {r.daysSinceFirstApplication == null ? (
