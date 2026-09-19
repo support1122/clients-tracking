@@ -11,6 +11,7 @@
 // or https://dashboard-api.flashfirejobs.com). Falls back to localhost:8086 if unset.
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { buildAiSummaryAndWait, describeBuildFailure } from '../utils/aiSummaryBuild';
 
 const DASHBOARD_BASE = (import.meta.env.VITE_DASHBOARD_BASE || 'http://localhost:8086').replace(/\/+$/, '');
 
@@ -208,67 +209,19 @@ export default function ClientAiSummary({ clientEmail }) {
         }
     }
 
-    // The build runs 90-150s server-side (resume fetch + two OpenAI passes) —
-    // longer than Cloudflare's ~100s origin timeout, so /build-ai-summary is
-    // async: it returns 202 "building" and we poll /ai-summary-status until it
-    // leaves "building". The server caps one build at SUMMARY_BUILD_BUDGET_MS
-    // (8 min) and flags an abandoned build at 9.5 min, so wait a little past
-    // that — the server's own verdict always lands first.
-    const POLL_TIMEOUT_MS = 10.5 * 60 * 1000;
-
+    // Start/poll contract lives in utils/aiSummaryBuild.js, shared with
+    // AdminSummariesPage so the two screens cannot drift. See that file for why
+    // the 202 from /build-ai-summary must never be treated as a finished build.
     async function buildSummary() {
         setBuilding(true);
         setError(null);
         try {
-            const res = await fetch(`${DASHBOARD_BASE}/build-ai-summary`, {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ email: clientEmail.toLowerCase() }),
-            });
-            const body = await res.json().catch(() => null);
-            if (!res.ok || !body?.success) {
-                const step = body?.step ? ` [step: ${body.step}]` : '';
-                showError(`Build failed: ${body?.error || `HTTP ${res.status}`}${step} — ${body?.message || ''}`);
+            const result = await buildAiSummaryAndWait({ base: DASHBOARD_BASE, email: clientEmail });
+            if (!result.ok) {
+                showError(describeBuildFailure(result));
                 return;
             }
-
-            // 202 accepted — poll for completion. `since` is the moment the
-            // server accepted this build; a "done" whose builtAt predates it
-            // belongs to an EARLIER build, so it is not our result — accepting
-            // it would report the previous run's word count and reload the old
-            // summary as if the rebuild had finished.
-            const since = new Date(body.buildStartedAt || body.requestedAt || Date.now()).getTime();
-            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-            const deadline = Date.now() + POLL_TIMEOUT_MS;
-            let final = null;
-            while (Date.now() < deadline) {
-                await sleep(5000);
-                const sres = await fetch(
-                    `${DASHBOARD_BASE}/ai-summary-status?email=${encodeURIComponent(clientEmail.toLowerCase())}`,
-                );
-                const sbody = await sres.json().catch(() => null);
-                if (!sres.ok || !sbody?.success) continue; // transient — keep polling
-                if (sbody.status === 'building') continue;
-                if (sbody.status === 'done') {
-                    const builtAt = sbody.builtAt ? new Date(sbody.builtAt).getTime() : 0;
-                    // 2s of slack for clock skew between the app server and Mongo.
-                    if (!builtAt || builtAt < since - 2000) continue; // stale "done" — keep waiting
-                }
-                final = sbody;
-                break;
-            }
-
-            if (!final) {
-                showError('Build is taking longer than expected. Click ↻ Refresh in a minute to check.');
-                return;
-            }
-            if (final.status === 'error') {
-                const e = final.lastError || {};
-                const step = e.step ? ` [step: ${e.step}]` : '';
-                showError(`Build failed: ${e.error || 'UNKNOWN'}${step} — ${e.message || ''}`);
-                return;
-            }
-            showMessage(`Summary built (${final.wordCount} words, ${final.source}).`, 'ok');
+            showMessage(`Summary built (${result.status.wordCount} words, ${result.status.source}).`, 'ok');
             await loadProfile();
             setEditing(false);
         } catch (e) {
