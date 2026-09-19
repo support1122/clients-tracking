@@ -17,10 +17,25 @@
 //   GET  /push-history?email=       — daily pushes (chart)
 
 import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { buildAiSummaryAndWait, describeBuildFailure } from '../utils/aiSummaryBuild';
 
 const DASHBOARD_BASE = (import.meta.env.VITE_DASHBOARD_BASE || 'http://localhost:8086').replace(/\/+$/, '');
 // Main client portal — used to deep-link a removed job card open (?jobId=<id>).
 const PORTAL_BASE = (import.meta.env.VITE_PORTAL_BASE || 'https://portal.flashfirejobs.com').replace(/\/+$/, '');
+
+// One build takes 90-150s server-side and bulkBuild now waits for each to
+// finish before starting the next, so the wall-clock cost is that per client.
+// The old copy quoted 15s each, which was the duration of the fire-and-forget
+// POST rather than of the build, and under-sold a full rebuild by about 8x.
+function estimateBulkBuild(count) {
+    const low = Math.ceil((count * 90) / 60);
+    const high = Math.ceil((count * 150) / 60);
+    const fmt = (mins) => (mins >= 60 ? `${(mins / 60).toFixed(1)} hour(s)` : `${mins} minute(s)`);
+    return `Rebuild ALL ${count} client summaries from scratch?\n\n`
+        + `Cost: ~$${(count * 0.001).toFixed(2)}\n`
+        + `Time: ${fmt(low)} to ${fmt(high)} — each build runs to completion before the next starts.\n\n`
+        + `Keep this tab open. You can stop it at any point with "Stop bulk build".`;
+}
 
 const FILTER_LABELS = {
     all: 'All',
@@ -129,14 +144,19 @@ export default function AdminSummariesPage() {
             const t = targets[i];
             setBulkProgress({ done: i, total: targets.length, current: t.email, errors: [...errors], mode });
             try {
-                const r = await fetch(`${DASHBOARD_BASE}/build-ai-summary`, {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({ email: t.email }),
+                // Waits for each build to finish before starting the next. The
+                // POST alone returns 202 immediately, so the old loop fired every
+                // request back to back — the opposite of the "never hammer
+                // OpenAI" this loop is written to guarantee, and it made the
+                // progress counter run to completion in seconds while the builds
+                // were still queued.
+                const result = await buildAiSummaryAndWait({
+                    base: DASHBOARD_BASE,
+                    email: t.email,
+                    shouldAbort: () => bulkAbortRef.current,
                 });
-                const body = await r.json().catch(() => null);
-                if (!r.ok || !body?.success) {
-                    errors.push({ email: t.email, error: body?.error || `HTTP ${r.status}`, message: body?.message || '' });
+                if (!result.ok && result.kind !== 'aborted') {
+                    errors.push({ email: t.email, error: result.error || result.kind, message: result.message || '' });
                 }
             } catch (e) {
                 errors.push({ email: t.email, error: 'NETWORK', message: e.message });
@@ -248,7 +268,7 @@ export default function AdminSummariesPage() {
 
                                     <button
                                         onClick={() => {
-                                            if (!window.confirm(`Rebuild ALL ${bulkBuckets.allClients.length} client summaries from scratch? This will spend ~$${(bulkBuckets.allClients.length * 0.001).toFixed(2)} and take ~${Math.ceil(bulkBuckets.allClients.length * 15 / 60)} minute(s).`)) return;
+                                            if (!window.confirm(estimateBulkBuild(bulkBuckets.allClients.length))) return;
                                             setBulkPopup(false);
                                             bulkBuild('all');
                                         }}
@@ -736,18 +756,17 @@ function ClientDetailPane({ row, onProfileChanged }) {
         setBuilding(true);
         setError(null);
         try {
-            const r = await fetch(`${DASHBOARD_BASE}/build-ai-summary`, {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ email: row.email }),
-            });
-            const body = await r.json().catch(() => null);
-            if (!r.ok || !body?.success) {
-                const step = body?.step ? ` [step: ${body.step}]` : '';
-                showError(`Build failed: ${body?.error || `HTTP ${r.status}`}${step} — ${body?.message || ''}`);
+            // POST /build-ai-summary returns 202 and the build runs for 90-150s.
+            // This used to read that 202 as "done", reload the profile straight
+            // away and show the PREVIOUS summary, which is why the button only
+            // appeared to work on the third or fourth click. Wait for the real
+            // result instead.
+            const result = await buildAiSummaryAndWait({ base: DASHBOARD_BASE, email: row.email });
+            if (!result.ok) {
+                showError(describeBuildFailure(result));
                 return;
             }
-            showMessage(`Summary built (${body.wordCount} words, ${body.source}).`);
+            showMessage(`Summary built (${result.status.wordCount} words, ${result.status.source}).`);
             setEditing(false);
             await loadProfile();
             onProfileChanged?.();
@@ -1275,7 +1294,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                                 disabled={building}
                                 className="px-3 py-1.5 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 disabled:opacity-50"
                             >
-                                {building ? 'Building (~15s)…' : (summary ? '↻ Rebuild' : 'Build summary')}
+                                {building ? 'Building (1-3 min)…' : (summary ? '↻ Rebuild' : 'Build summary')}
                             </button>
                             {summary && (
                                 <button
