@@ -66,6 +66,16 @@ export async function readEffectiveCap(rawEmail) {
   return { email, planType, baseCap, addonBonus, referralBonus, effectiveCap };
 }
 
+// What counts as a live job card: anything whose currentStatus does not start
+// with "deleted"/"removed". Exported because the auto-unpause sweep has to
+// count job cards the same way the cap does — if the two ever disagreed, a
+// client could be unpaused off a card the cap does not consider to exist.
+export const ACTIVE_JOB_STATUS_OR = [
+  { currentStatus: { $exists: false } },
+  { currentStatus: null },
+  { currentStatus: { $not: /^(deleted|removed)/i } },
+];
+
 // countActiveJobs(email) → number of non-removed jobs across all roles.
 export async function countActiveJobs(rawEmail) {
   const email = String(rawEmail || "").trim().toLowerCase();
@@ -76,11 +86,7 @@ export async function countActiveJobs(rawEmail) {
   }
   return JobModel.countDocuments({
     userID: email,
-    $or: [
-      { currentStatus: { $exists: false } },
-      { currentStatus: null },
-      { currentStatus: { $not: /^(deleted|removed)/i } },
-    ],
+    $or: ACTIVE_JOB_STATUS_OR,
   });
 }
 

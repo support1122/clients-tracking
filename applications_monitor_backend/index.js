@@ -94,6 +94,7 @@ import {
 } from './utils/persistentAnalysisCache.js';
 import { istDayStamp, decideAnalysisCacheAction, ANALYSIS_PAYLOAD_VERSION } from './utils/analysisCachePolicy.js';
 import { JOBRIGHT_CLIENT_EMAILS } from './data/jobrightClients.js';
+import { autoUnpauseIfEligible, runAutoUnpauseSweep, AUTO_UNPAUSE_MIN_JOB_CARDS } from './utils/autoUnpauseNewClients.js';
 import { addWindowDayStamp } from './utils/addWindow.js';
 import { computeClientAddStats, emptyAddStat } from './utils/clientAddStats.js';
 import { computeClientApplyStats, emptyApplyStat, APPLY_LOOKBACK_DAYS } from './utils/clientApplyStats.js';
@@ -2156,6 +2157,15 @@ const createJob = async (req, res) => {
       } catch (e) {
         console.error('planCapGuard.enforcePlanCapPostInsert failed:', e.message);
       }
+    }
+
+    // A client still flagged "New" who now has real job cards is not new.
+    // Fire-and-forget on purpose: the job was created and the caller must be
+    // told so, whatever the phase flip does. Runs after the cap race guard so
+    // a job that gets rolled back can never unpause anybody.
+    if (clientEmail) {
+      autoUnpauseIfEligible(clientEmail, { trigger: 'job-created' })
+        .catch((e) => console.error('[auto-unpause] post-create check failed:', e?.message || e));
     }
 
     res.status(201).json({ job });
@@ -5689,6 +5699,20 @@ app.get('/scripts/jobrightsync', async (req, res) => {
   }
 });
 
+// Run the auto-unpause sweep on demand. Same shape as /scripts/jobrightsync:
+// a plain GET you can open in a browser. Safe to hit repeatedly — a client
+// already unpaused is simply not a candidate, so a repeat run reports 0.
+// Also gives the external scheduler a reliable path on hosts that suspend idle
+// services, where in-process node-cron stops ticking.
+app.get('/scripts/autounpause', async (req, res) => {
+  try {
+    const summary = await runAutoUnpauseSweep({ trigger: 'manual' });
+    res.json({ ok: true, threshold: AUTO_UNPAUSE_MIN_JOB_CARDS, ...summary });
+  } catch (e) {
+    console.error('[auto-unpause] manual run failed:', e?.message || e);
+    res.status(500).json({ ok: false, error: 'auto-unpause sweep failed' });
+  }
+});
 app.get('/api/managers/names', getDashboardManagerNames);
 
 // ── Team chat (widget) ──
@@ -9703,6 +9727,32 @@ if (DISCORD_ADD_SHORTFALL_WEBHOOK) {
       setTimeout(() => {
         runClientMilestoneCron({ trigger: 'boot' }).catch((e) => console.error('[Client Milestones] boot run failed:', e));
       }, 15_000);
+
+      // Auto-unpause New clients who have job cards: every 15 minutes.
+      // The create hook in postJob already handles cards written through THIS
+      // service. This sweep exists for the ones written by the dashboard
+      // backend straight into the same collection, which never touch that
+      // route — without it those clients would sit in New indefinitely.
+      try {
+        cron.schedule(
+          '*/15 * * * *',
+          () => {
+            runAutoUnpauseSweep({ trigger: 'cron' })
+              .catch((e) => console.error('[auto-unpause] sweep tick crashed:', e?.message || e));
+          },
+          { timezone: 'Asia/Kolkata' },
+        );
+        console.log(`🔄 [Auto-unpause] Cron scheduled every 15 minutes (threshold ${AUTO_UNPAUSE_MIN_JOB_CARDS} job cards)`);
+      } catch (e) {
+        console.error('❌ [Auto-unpause] cron registration failed:', e?.message || e);
+      }
+      // Boot-time catch-up, for the same reason the milestone cron has one:
+      // in-process node-cron only ticks while this instance is awake, so a
+      // redeploy or a suspended host would otherwise skip ticks silently.
+      setTimeout(() => {
+        runAutoUnpauseSweep({ trigger: 'boot' })
+          .catch((e) => console.error('[auto-unpause] boot run failed:', e?.message || e));
+      }, 20_000);
 
       // Chat: escalation sweep every 10 min (email tags unread 30m, admin ping 3h)
       try {
