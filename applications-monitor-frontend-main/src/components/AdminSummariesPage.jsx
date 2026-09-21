@@ -583,8 +583,8 @@ function ClientDetailPane({ row, onProfileChanged }) {
     }
     const [savingNotes, setSavingNotes] = useState(false);
     // Per-client scrape-source allowlist ('jobright' / 'indeed' / 'reed' /
-    // 'flexa'). JobRight is the default when a client has none saved. Extension
-    // only scrapes the selected sites for this client.
+    // 'flexa' / 'hiringcafe'). JobRight is the default when a client has none
+    // saved. Extension only scrapes the selected sites for this client.
     const [sourcesDraft, setSourcesDraft] = useState(['jobright']);
     const [savedSources, setSavedSources] = useState(['jobright']);
     const [savingSources, setSavingSources] = useState(false);
@@ -675,7 +675,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
             setDraft(p?.aiSummary || '');
             setTargetDraft(p?.targetJobCount != null ? String(p.targetJobCount) : '');
             const src = Array.isArray(p?.scrapeSources) && p.scrapeSources.length
-                ? p.scrapeSources.map((s) => String(s).toLowerCase()).filter((s) => s === 'jobright' || s === 'indeed' || s === 'reed' || s === 'flexa')
+                ? p.scrapeSources.map((s) => String(s).toLowerCase()).filter((s) => s === 'jobright' || s === 'indeed' || s === 'reed' || s === 'flexa' || s === 'hiringcafe')
                 : ['jobright'];
             const normalized = src.length ? src : ['jobright'];
             setSourcesDraft(normalized);
@@ -876,7 +876,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
 
     async function saveSources() {
         // Persist in a stable order so the saved/draft comparison is reliable.
-        const ORDER = ['jobright', 'indeed', 'reed', 'flexa'];
+        const ORDER = ['jobright', 'indeed', 'reed', 'flexa', 'hiringcafe'];
         const ordered = ORDER.filter((s) => sourcesDraft.includes(s));
         if (ordered.length === 0) {
             showError('Select at least one scrape source.');
@@ -976,7 +976,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                         </p>
                     </div>
                     <span className={`px-3 py-1 rounded-full text-xs font-bold ${savedSources.length > 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-sky-100 text-sky-700'}`}>
-                        {savedSources.map((s) => (s === 'indeed' ? 'ca.indeed' : s === 'reed' ? 'Reed UK' : s === 'flexa' ? 'Flexa' : 'JobRight')).join(' + ')}
+                        {savedSources.map((s) => (s === 'indeed' ? 'ca.indeed' : s === 'reed' ? 'Reed UK' : s === 'flexa' ? 'Flexa' : s === 'hiringcafe' ? 'HiringCafe' : 'JobRight')).join(' + ')}
                     </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -985,6 +985,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
                         { id: 'indeed', label: 'ca.indeed', host: 'ca.indeed.com', accent: 'indigo' },
                         { id: 'reed', label: 'Reed UK', host: 'reed.co.uk', accent: 'indigo' },
                         { id: 'flexa', label: 'Flexa', host: 'flexa.careers', accent: 'indigo' },
+                        { id: 'hiringcafe', label: 'HiringCafe', host: 'hiringcafe.com', accent: 'indigo' },
                     ].map((opt) => {
                         const on = sourcesDraft.includes(opt.id);
                         return (
