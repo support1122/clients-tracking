@@ -138,6 +138,67 @@ const MILESTONE_COUNT_STATUS_RE = /^(applied|interview|offer|reject)/i;
 // startsWith('saved') and flashfire-dashboard-backend's classifyStatus() uses
 // /^saved/i; this matches both.
 const SAVED_STATUS_RE = /^saved/i;
+// appliedDate is a locale string, not a Date, and parsing it is where the
+// client statistics went wrong.
+//
+// Every row in this collection looks like "9/5/2026, 8:32:36 pm" - en-IN, so
+// DAY first, and with the clock time glued on after a comma. The aggregation
+// that fed the monitor split the whole string on "/" and handed the third
+// piece straight to $convert, which meant the year came from the literal
+// "2026, 8:32:36 pm". That conversion fails, onError returned 0, and every
+// single job landed in year 0 - so any date range matched nothing at all and
+// the Applied column read 0 for every client on every day.
+//
+// Measured before changing it: of 2,523 rows where the first two numbers
+// differ (so the format is unambiguous), 2,523 read as D/M/Y when checked
+// against the job's own ObjectId creation time, and 0 read as M/D/Y. Rows like
+// "31/12/2025" settle it on their own. D/M/Y is therefore the default, and the
+// $gt 12 test below still rescues a stray M/D/Y row if one is ever written.
+const APPLIED_DATE_RE = /^\d{1,2}\/\d{1,2}\/\d{4}/;
+
+// Stages that turn $appliedDate into a real _dt Date. Append them after a
+// $match that has already required appliedDate: APPLIED_DATE_RE.
+const APPLIED_DATE_STAGES = [
+  // Drop the time: "9/5/2026, 8:32:36 pm" -> "9/5/2026".
+  { $addFields: { _dateOnly: { $trim: { input: { $arrayElemAt: [{ $split: ['$appliedDate', ','] }, 0] } } } } },
+  { $addFields: { _dp: { $split: ['$_dateOnly', '/'] } } },
+  {
+    $addFields: {
+      _n0: { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 0, onNull: 0 } },
+      _n1: { $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 0, onNull: 0 } },
+      _yr: { $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } }
+    }
+  },
+  {
+    $addFields: {
+      // A second part above 12 can only be a day, so that row is M/D/Y.
+      // Everything else is read as D/M/Y, which is what the data is.
+      _day: { $cond: [{ $gt: ['$_n1', 12] }, '$_n1', '$_n0'] },
+      _mon: { $cond: [{ $gt: ['$_n1', 12] }, '$_n0', '$_n1'] }
+    }
+  },
+  // Never hand $dateFromParts something it would silently roll over into a
+  // different year. A row that fails this is dropped, not misdated.
+  {
+    $match: {
+      _yr: { $gte: 1970, $lte: 2100 },
+      _mon: { $gte: 1, $lte: 12 },
+      _day: { $gte: 1, $lte: 31 }
+    }
+  },
+  { $addFields: { _dt: { $dateFromParts: { year: '$_yr', month: '$_mon', day: '$_day' } } } }
+];
+
+// The UI sends plain YYYY-MM-DD. _dt above is a calendar date at UTC midnight,
+// so the window has to be midnight-to-midnight too or the last day of the
+// range loses every job on it.
+function appliedDateWindow(startDate, endDate) {
+  const start = new Date(`${String(startDate).slice(0, 10)}T00:00:00.000Z`);
+  const end = new Date(`${String(endDate).slice(0, 10)}T23:59:59.999Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  return { start, end };
+}
+
 function milestoneCountFilter(userEmail) {
   return {
     userID: userEmail,
@@ -3137,33 +3198,36 @@ const getClientStatistics = async (req, res) => {
 
     const userEmails = resolvedUsers.map(u => u.email);
 
+    // Neither count is scoped to this operator any more.
+    //
+    // A client's cards are spread across whoever worked them - ushac had 287
+    // from sarah, 274 from arjun and 4 of their own - so an operatorEmail
+    // filter turned "this client's applications" into "the slice this operator
+    // happened to add". It also made savedCount permanently 0, because a saved
+    // card is stamped operatorEmail: "user@flashfirehq", never an operator's.
+    // The Saved number rendered beside this one already comes from
+    // getSavedJobCounts(), which is client-wide; these now agree with it and
+    // with the client's own Job Tracker.
+    const milestoneMatch = { userID: { $in: userEmails }, currentStatus: { $regex: MILESTONE_COUNT_STATUS_RE } };
+    const savedPipeline = [
+      { $match: { userID: { $in: userEmails }, currentStatus: SAVED_STATUS_RE } },
+      { $group: { _id: '$userID', count: { $sum: 1 } } }
+    ];
+
     if (startDate && endDate) {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
+      const window = appliedDateWindow(startDate, endDate);
+      if (!window) return res.status(400).json({ error: 'Invalid startDate or endDate' });
+      const { start, end } = window;
 
       // Single aggregation for all users: applied count + saved count
       const [appliedAgg, savedAgg] = await Promise.all([
         JobModel.aggregate([
-          { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, appliedDate: { $regex: /^\d{1,2}\/\d{1,2}\/\d{4}/ } } },
-          { $addFields: { _dp: { $split: [{ $trim: { input: '$appliedDate' } }, '/'] } } },
-          {
-            $addFields: {
-              _dt: {
-                $dateFromParts: {
-                  year: { $convert: { input: { $arrayElemAt: ['$_dp', 2] }, to: 'int', onError: 0, onNull: 0 } },
-                  month: { $convert: { input: { $arrayElemAt: ['$_dp', 1] }, to: 'int', onError: 1, onNull: 1 } },
-                  day: { $convert: { input: { $arrayElemAt: ['$_dp', 0] }, to: 'int', onError: 1, onNull: 1 } }
-                }
-              }
-            }
-          },
+          { $match: { ...milestoneMatch, appliedDate: { $regex: APPLIED_DATE_RE } } },
+          ...APPLIED_DATE_STAGES,
           { $match: { _dt: { $gte: start, $lte: end } } },
           { $group: { _id: '$userID', count: { $sum: 1 } } }
         ]),
-        JobModel.aggregate([
-          { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: SAVED_STATUS_RE } },
-          { $group: { _id: '$userID', count: { $sum: 1 } } }
-        ])
+        JobModel.aggregate(savedPipeline)
       ]);
 
       const appliedMap = new Map(appliedAgg.map(r => [r._id, r.count]));
@@ -3179,16 +3243,19 @@ const getClientStatistics = async (req, res) => {
       return res.status(200).json({ clientStats });
     }
 
-    // No date range: single aggregation for all users
+    // No date range: lifetime counts.
+    //
+    // This branch used to count EVERY card the operator had touched and label
+    // the result appliedCount - deleted, removed and saved cards all included.
+    // maratherajat98 read 1254 where the real applied figure was 1071. It now
+    // uses the same Applied/Interviewing/Offer/Rejected whitelist as every
+    // other milestone count in this file.
     const [allAgg, savedAgg] = await Promise.all([
       JobModel.aggregate([
-        { $match: { operatorEmail: opEmail, userID: { $in: userEmails } } },
+        { $match: milestoneMatch },
         { $group: { _id: '$userID', count: { $sum: 1 } } }
       ]),
-      JobModel.aggregate([
-        { $match: { operatorEmail: opEmail, userID: { $in: userEmails }, currentStatus: SAVED_STATUS_RE } },
-        { $group: { _id: '$userID', count: { $sum: 1 } } }
-      ])
+      JobModel.aggregate(savedPipeline)
     ]);
 
     const allMap = new Map(allAgg.map(r => [r._id, r.count]));
@@ -3239,10 +3306,19 @@ const parseDateString = (dateStr) => {
   if (!dateStr) return null;
 
   try {
-    // Handle different date formats
+    // Handle different date formats.
+    //
+    // Was [month, day, year] - the wrong way round. appliedDate is written
+    // en-IN, so it is DAY first ("31/12/2025, 11:15:15 pm"), and every other
+    // parser in this file already reads it that way. Nothing calls this helper
+    // today (both call sites shadow it with their own correct copy), but it
+    // sat here reversing dates for whoever picked it up next.
     if (dateStr.includes(',')) {
       const datePart = dateStr.split(',')[0].trim();
-      const [month, day, year] = datePart.split('/');
+      const [a, b, year] = datePart.split('/').map((n) => parseInt(n, 10));
+      // A second part above 12 can only be a day, so that row is M/D/Y.
+      const day = b > 12 ? b : a;
+      const month = b > 12 ? a : b;
       return new Date(year, month - 1, day);
     }
 
