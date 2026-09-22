@@ -637,11 +637,21 @@ export default function ClientJobAnalysis() {
   // Toggle whether a JobRight account exists for this client. The bulk seed is
   // GET /scripts/jobrightsync; this is the per-client correction afterwards.
   const handleJobrightChange = async (email, value) => {
-    if (userRole !== 'admin') {
-      toast.error('Only admins can change JobRight status');
-      return;
-    }
     const jobrightCreated = value === 'yes';
+    // Mirrors verifyJobrightToggle on the server, which is the real gate.
+    // Marking Yes is the team lead's own job as they onboard a client;
+    // reverting to No hides the client from every "still needs an account"
+    // view, so that direction stays with admins.
+    if (userRole !== 'admin') {
+      if (userRole !== 'team_lead') {
+        toast.error('Only admins and team leads can change JobRight status');
+        return;
+      }
+      if (!jobrightCreated) {
+        toast.error('Only admins can change JobRight back to No');
+        return;
+      }
+    }
     setSavingJobright((prev) => new Set(prev).add(email));
     try {
       const resp = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(email)}/jobright`, {
@@ -1972,17 +1982,27 @@ export default function ClientJobAnalysis() {
                           beside it: option elements cannot be styled reliably
                           across browsers, but the closed select shows the chosen
                           value, so a column of red "No"s still reads at a glance. */}
-                      {userRole === 'admin' ? (
+                      {(userRole === 'admin' || userRole === 'team_lead') ? (
                         <select
                           value={r.jobrightCreated === true ? 'yes' : 'no'}
                           onChange={(e) => handleJobrightChange(r.email, e.target.value)}
-                          disabled={savingJobright.has(r.email)}
+                          // A team lead looking at a row that is already Yes has
+                          // no move left, so the control is disabled outright
+                          // rather than offering a No that the server refuses.
+                          disabled={
+                            savingJobright.has(r.email) ||
+                            (userRole === 'team_lead' && r.jobrightCreated === true)
+                          }
                           className={`px-1.5 py-0.5 text-[11px] font-semibold border rounded-md bg-white shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed ${
                             r.jobrightCreated === true
                               ? 'border-emerald-300 text-emerald-700'
                               : 'border-red-300 text-red-700'
                           }`}
-                          title="Whether a JobRight account has been created for this client"
+                          title={
+                            userRole === 'team_lead' && r.jobrightCreated === true
+                              ? 'Already marked Yes. Only an admin can change it back to No.'
+                              : 'Whether a JobRight account has been created for this client'
+                          }
                         >
                           <option value="no">No</option>
                           <option value="yes">Yes</option>
