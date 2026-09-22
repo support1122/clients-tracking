@@ -723,6 +723,33 @@ const verifyAdmin = (req, res, next) => {
   next();
 };
 
+// The JobRight toggle is gated by DIRECTION, not just by role.
+//
+// Marking a client Yes is the safe, routine direction: it records that the
+// account exists and provisions the autopilot credentials, and it is the team
+// lead's own job to do as they onboard a client. Setting it back to No is the
+// destructive one - it hides the client from every "who still needs an
+// account" view, and a careless revert is invisible until runs quietly stop
+// producing jobs. So that direction stays with admins.
+//
+// Gating on the TARGET value is the whole rule: sending true is always the
+// permissive direction and sending false always the restricted one, whatever
+// the row currently says. Re-sending the value a row already holds is a no-op
+// that lands in the same bucket, which is correct.
+const verifyJobrightToggle = (req, res, next) => {
+  const role = req.user?.role || '';
+  if (role === 'admin') return next();
+
+  const value = req.body?.jobrightCreated;
+  if (value === true && role === 'team_lead') return next();
+
+  return res.status(403).json({
+    error: value === false
+      ? 'Only admins can change JobRight back to No.'
+      : 'Only admins and team leads can change JobRight status.',
+  });
+};
+
 // Allow admin, CSM, or team_lead to manage operations (link/remove operations interns to clients)
 const verifyOperationsManage = (req, res, next) => {
   const role = req.user?.role || '';
@@ -5236,7 +5263,7 @@ app.post('/api/clients', optionalVerifyToken, createOrUpdateClient);
 app.post('/api/clients/addnumbers', addNumbersToClients);
 app.patch('/api/clients/:email/client-number', verifyToken, verifyAdmin, updateClientNumber);
 app.patch('/api/clients/:email/client-country', verifyToken, verifyAdmin, updateClientCountry);
-app.patch('/api/clients/:email/jobright', verifyToken, verifyAdmin, updateClientJobright);
+app.patch('/api/clients/:email/jobright', verifyToken, verifyJobrightToggle, updateClientJobright);
 app.post('/api/clients/sync-client-numbers', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const synced = await syncClientNumbersToOnboardingJobs();
