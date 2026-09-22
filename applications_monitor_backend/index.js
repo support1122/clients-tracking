@@ -209,6 +209,57 @@ import { getPlanCap, getPlanMilestones, MIN_JOBS_FOR_EMAIL, getEffectiveCap, com
 
 const FLASHFIRE_API_BASE_URL = process.env.VITE_FLASHFIRE_API_BASE_URL || 'https://dashboard-api.flashfirejobs.com';
 
+// Shared secret for the dashboard backend's ops-gated routes (x-ops-key).
+// The default mirrors Middlewares/RequireOpsKey.js over there, so this works
+// on a box where the variable was never set - exactly as that middleware does.
+// Set OPS_SECRET_KEY in production and set it to the SAME value in both
+// services, or every provisioning call below comes back 401.
+const FLASHFIRE_OPS_KEY = process.env.OPS_SECRET_KEY || 'flashfire@2025';
+
+// Give a client the JobRight credentials the autopilot needs.
+//
+// Fired when an operator flips Client Job Analysis -> JobRight -> Yes. The
+// account has just been created by hand; this saves someone having to open the
+// autopilot afterwards and type the same standard password for the 300th time.
+//
+// The dashboard backend owns the credential store, so the semantics live there
+// (POST /autopilot/creds/:email/provision - idempotent, fills blanks only,
+// never overwrites a client's own password). This is only the call.
+//
+// It NEVER throws. Marking the flag is the operator's actual intent and must
+// succeed even if the dashboard backend is down or the keys have drifted; the
+// caller reports what happened so a failure is visible rather than silent.
+async function provisionAutopilotJrCreds(email, updatedBy = '') {
+  const url = `${FLASHFIRE_API_BASE_URL.replace(/\/+$/, '')}/autopilot/creds/${encodeURIComponent(email)}/provision`;
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-ops-key': FLASHFIRE_OPS_KEY },
+      body: JSON.stringify({ updatedBy }),
+      // A hung dashboard backend must not hold the operator's toggle open.
+      signal: AbortSignal.timeout(15000),
+    });
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const reason = resp.status === 401
+        ? 'ops key rejected - OPS_SECRET_KEY must match the dashboard backend'
+        : (body.message || `HTTP ${resp.status}`);
+      console.warn(`provisionAutopilotJrCreds(${email}): ${reason}`);
+      return { provisioned: false, reason };
+    }
+    return {
+      provisioned: true,
+      created: body.created === true,
+      filled: Array.isArray(body.filled) ? body.filled : [],
+      autoLoginReady: body.autoLoginReady === true,
+    };
+  } catch (e) {
+    const reason = e?.name === 'TimeoutError' ? 'dashboard backend timed out' : (e?.message || 'request failed');
+    console.warn(`provisionAutopilotJrCreds(${email}): ${reason}`);
+    return { provisioned: false, reason };
+  }
+}
+
 // Short TTL cache for client profile from flashfire (avoids hammering external API, keeps dashboard details fast)
 const PROFILE_CACHE_TTL_MS = 90 * 1000; // 90 seconds
 const profileCache = new Map();
@@ -5146,11 +5197,33 @@ const updateClientJobright = async (req, res) => {
     clearAnalysisCache();
     pClearAnalysisCache().catch(() => {});
 
+    // Saying "yes, the JobRight account exists" is exactly the moment the
+    // autopilot can start using it, so provision the credentials now instead
+    // of leaving it as a second manual step someone forgets.
+    //
+    // Awaited, not fire-and-forget: the operator is told whether it worked.
+    // A silent background call that fails leaves a client looking provisioned
+    // and quietly never scraping - which is the failure this whole change
+    // exists to remove, not one to reintroduce.
+    //
+    // Turning the flag OFF deliberately leaves the credentials alone. The
+    // account still exists on JobRight's side; deleting the row would only
+    // strand a run that is mid-flight, and re-toggling restores nothing that
+    // was not already there.
+    let autopilotCreds = null;
+    if (value === true) {
+      autopilotCreds = await provisionAutopilotJrCreds(
+        client.email,
+        `clients-tracking:jobright-toggle:${req.user?.email || 'admin'}`,
+      );
+    }
+
     res.status(200).json({
       success: true,
       email: client.email,
       jobrightCreated: client.jobrightCreated === true,
       jobrightCreatedAt: client.jobrightCreatedAt || null,
+      autopilotCreds,
       message: 'JobRight status updated'
     });
   } catch (error) {
