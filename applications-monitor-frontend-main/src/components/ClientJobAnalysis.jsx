@@ -663,7 +663,24 @@ export default function ClientJobAnalysis() {
         prev.map((r) => (r.email === email ? { ...r, jobrightCreated: data.jobrightCreated === true } : r)),
       );
       invalidateCache('analysis:');
-      toast.success(data.jobrightCreated ? 'JobRight marked as created' : 'JobRight marked as not created');
+      // Saying Yes also provisions the client's JobRight credentials for the
+      // autopilot. Report what actually happened rather than a flat success:
+      // a failed provision still saves the flag, and an operator who is not
+      // told will assume the client is ready to scrape when it is not.
+      const creds = data.autopilotCreds;
+      if (!data.jobrightCreated) {
+        toast.success('JobRight marked as not created');
+      } else if (!creds) {
+        toast.success('JobRight marked as created');
+      } else if (!creds.provisioned) {
+        toast.error(`JobRight saved, but autopilot credentials were not created: ${creds.reason}`, { duration: 8000 });
+      } else if (creds.created) {
+        toast.success('JobRight marked as created - autopilot credentials added');
+      } else if (creds.filled?.length) {
+        toast.success(`JobRight marked as created - filled ${creds.filled.join(' and ')}`);
+      } else {
+        toast.success('JobRight marked as created - autopilot credentials already on file');
+      }
     } catch (e) {
       toast.error(e.message || 'Failed to update JobRight status');
     } finally {
