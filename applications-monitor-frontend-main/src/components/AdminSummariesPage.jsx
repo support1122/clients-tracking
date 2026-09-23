@@ -47,6 +47,24 @@ const FILTER_LABELS = {
     'no-cap': 'No cap',
 };
 
+// Every job site the JR-direct extension can scrape, in the order they are
+// saved and shown. The `id` is the slug stored in the client profile's
+// scrapeSources and must match VALID_SOURCES in the dashboard backend's
+// Controllers/UpdateScrapeSources.js, or a save silently drops it.
+const SCRAPE_SOURCES = [
+    { id: 'jobright', label: 'JobRight', host: 'jobright.ai' },
+    { id: 'indeed', label: 'ca.indeed', host: 'ca.indeed.com' },
+    { id: 'reed', label: 'Reed UK', host: 'reed.co.uk' },
+    { id: 'flexa', label: 'Flexa', host: 'flexa.careers' },
+    { id: 'hiringcafe', label: 'HiringCafe', host: 'hiringcafe.com' },
+    { id: 'seek', label: 'SEEK', host: 'seek.com.au' },
+    { id: 'jora', label: 'Jora', host: 'au.jora.com' },
+    { id: 'careerone', label: 'CareerOne', host: 'careerone.com.au' },
+    { id: 'adzuna', label: 'Adzuna', host: 'adzuna.com.au' },
+];
+const SCRAPE_SOURCE_IDS = SCRAPE_SOURCES.map((s) => s.id);
+const scrapeSourceLabel = (id) => SCRAPE_SOURCES.find((s) => s.id === id)?.label || 'JobRight';
+
 export default function AdminSummariesPage() {
     const [overview, setOverview] = useState(null);
     const [overviewLoading, setOverviewLoading] = useState(false);
@@ -582,9 +600,9 @@ function ClientDetailPane({ row, onProfileChanged }) {
         setNotePoint('');
     }
     const [savingNotes, setSavingNotes] = useState(false);
-    // Per-client scrape-source allowlist ('jobright' / 'indeed' / 'reed' /
-    // 'flexa' / 'hiringcafe' / 'seek'). JobRight is the default when a client
-    // has none saved. Extension only scrapes the selected sites for this client.
+    // Per-client scrape-source allowlist (ids from SCRAPE_SOURCES). JobRight is
+    // the default when a client has none saved. Extension only scrapes the
+    // selected sites for this client.
     const [sourcesDraft, setSourcesDraft] = useState(['jobright']);
     const [savedSources, setSavedSources] = useState(['jobright']);
     const [savingSources, setSavingSources] = useState(false);
@@ -675,7 +693,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
             setDraft(p?.aiSummary || '');
             setTargetDraft(p?.targetJobCount != null ? String(p.targetJobCount) : '');
             const src = Array.isArray(p?.scrapeSources) && p.scrapeSources.length
-                ? p.scrapeSources.map((s) => String(s).toLowerCase()).filter((s) => s === 'jobright' || s === 'indeed' || s === 'reed' || s === 'flexa' || s === 'hiringcafe' || s === 'seek')
+                ? p.scrapeSources.map((s) => String(s).toLowerCase()).filter((s) => SCRAPE_SOURCE_IDS.includes(s))
                 : ['jobright'];
             const normalized = src.length ? src : ['jobright'];
             setSourcesDraft(normalized);
@@ -876,8 +894,7 @@ function ClientDetailPane({ row, onProfileChanged }) {
 
     async function saveSources() {
         // Persist in a stable order so the saved/draft comparison is reliable.
-        const ORDER = ['jobright', 'indeed', 'reed', 'flexa', 'hiringcafe', 'seek'];
-        const ordered = ORDER.filter((s) => sourcesDraft.includes(s));
+        const ordered = SCRAPE_SOURCE_IDS.filter((s) => sourcesDraft.includes(s));
         if (ordered.length === 0) {
             showError('Select at least one scrape source.');
             return;
@@ -976,18 +993,11 @@ function ClientDetailPane({ row, onProfileChanged }) {
                         </p>
                     </div>
                     <span className={`px-3 py-1 rounded-full text-xs font-bold ${savedSources.length > 1 ? 'bg-indigo-100 text-indigo-700' : 'bg-sky-100 text-sky-700'}`}>
-                        {savedSources.map((s) => (s === 'indeed' ? 'ca.indeed' : s === 'reed' ? 'Reed UK' : s === 'flexa' ? 'Flexa' : s === 'hiringcafe' ? 'HiringCafe' : s === 'seek' ? 'SEEK' : 'JobRight')).join(' + ')}
+                        {savedSources.map(scrapeSourceLabel).join(' + ')}
                     </span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {[
-                        { id: 'jobright', label: 'JobRight', host: 'jobright.ai', accent: 'sky' },
-                        { id: 'indeed', label: 'ca.indeed', host: 'ca.indeed.com', accent: 'indigo' },
-                        { id: 'reed', label: 'Reed UK', host: 'reed.co.uk', accent: 'indigo' },
-                        { id: 'flexa', label: 'Flexa', host: 'flexa.careers', accent: 'indigo' },
-                        { id: 'hiringcafe', label: 'HiringCafe', host: 'hiringcafe.com', accent: 'indigo' },
-                        { id: 'seek', label: 'SEEK', host: 'seek.com', accent: 'indigo' },
-                    ].map((opt) => {
+                    {SCRAPE_SOURCES.map((opt) => {
                         const on = sourcesDraft.includes(opt.id);
                         return (
                             <button
