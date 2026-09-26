@@ -9,6 +9,7 @@ import {
 } from '../utils/dashboardManagerSelect.js';
 import { fetchDashboardManagerFullNames } from '../utils/fetchDashboardManagerCatalog.js';
 import { apiFetch, getCached, invalidateCache } from '../utils/apiClient';
+import { rowDeliveryKeys, matchesDeliveryFilter, countDeliveryStates } from '../utils/deliveryStatus';
 
 const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
 // Scraper backend (local internal tool at DASH/scraper). Configurable via
@@ -121,7 +122,7 @@ const ALERT_ORDER = ['no_adds', 'not_applied'];
 // against the wrong width.
 const TABLE_COLUMN_COUNT = 20;
 
-function HeaderFilter({ label, value, onChange, options, title }) {
+function HeaderFilter({ label, value, onChange, options, title, width = 'w-[104px]' }) {
   return (
     // Stacked, not side by side: a label+select on one line forced every
     // filtered column to roughly double width, which pushed the count columns
@@ -134,7 +135,7 @@ function HeaderFilter({ label, value, onChange, options, title }) {
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onClick={(e) => e.stopPropagation()}
-          className="w-[104px] max-w-full px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500 truncate"
+          className={`${width} max-w-full px-1.5 py-0.5 text-[10px] font-normal normal-case tracking-normal border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-500 truncate`}
           title={title}
         >
           <option value="">All</option>
@@ -269,6 +270,10 @@ export default function ClientJobAnalysis() {
   // set by GET /scripts/jobrightsync. The whole point of the red J is finding
   // the clients still waiting on one, so the column needs a way to list them.
   const [jobrightFilter, setJobrightFilter] = useState('');
+  // Delivery column: '' | mail_ok | mail_reconnect | mail_none
+  //                     | hook_ok | hook_failing | hook_missing
+  //                     | no_payment_email
+  const [deliveryFilter, setDeliveryFilter] = useState('');
   const [addSortDir, setAddSortDir] = useState(null);     // null | 'worst' | 'best'
   const [alertFilter, setAlertFilter] = useState('');     // '' | no_adds | not_applied
   const [alertsOpen, setAlertsOpen] = useState(false);    // expanded client list
@@ -863,6 +868,14 @@ export default function ClientJobAnalysis() {
     return { yes, no: rows.length - yes };
   }, [rows]);
 
+  // Depends on mmConn/mailConn as well as rows: those two Sets load from a
+  // separate, lighter endpoint than the analysis payload, so the counts have to
+  // recompute when they arrive or the dropdown would read all-zero on first paint.
+  const deliveryCounts = useMemo(
+    () => countDeliveryStates(rows, mmConn, mailConn),
+    [rows, mmConn, mailConn],
+  );
+
   // Memoize filtered + sorted rows: active first, then by clientNumber ascending (same as Client Onboarding)
   const processedRows = useMemo(() => {
     let filtered = rows;
@@ -889,6 +902,7 @@ export default function ClientJobAnalysis() {
     else if (planFilter) filtered = filtered.filter(r => rowPlanKey(r) === planFilter);
     if (jobrightFilter === 'yes') filtered = filtered.filter(r => r.jobrightCreated === true);
     else if (jobrightFilter === 'no') filtered = filtered.filter(r => r.jobrightCreated !== true);
+    if (deliveryFilter) filtered = filtered.filter(r => matchesDeliveryFilter(r, deliveryFilter, mmConn, mailConn));
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       filtered = filtered.filter(r => {
@@ -944,7 +958,7 @@ export default function ClientJobAnalysis() {
     // Attach derived cap/status math once per data change so per-render row
     // output stays cheap.
     return sorted.map((r) => ({ ...r, _d: computeRowDerived(r) }));
-  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, countryFilter, dashboardMgrFilter, planFilter, jobrightFilter, searchQuery, getSortingNumber]);
+  }, [rows, date, sortDir, sinceSortDir, addSortDir, lastAppliedByFilter, statusFilter, phaseFilter, addFilter, alertFilter, countryFilter, dashboardMgrFilter, planFilter, jobrightFilter, deliveryFilter, mmConn, mailConn, searchQuery, getSortingNumber]);
 
   // ── Chunked rendering: mount ROW_CHUNK rows at a time, growing as a sentinel
   // scrolls into view. Bounds initial paint cost + DOM size for big tables. ──
@@ -1324,20 +1338,37 @@ export default function ClientJobAnalysis() {
             <thead className="bg-slate-50">
               <tr className="align-top">
                 <th className="px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700">Client</th>
-                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[86px] leading-tight">
-                  <span className="inline-flex items-center gap-1">
-                    <span>Delivery</span>
-                    <button
-                      type="button"
-                      onClick={() => setDeliveryLegendOpen((v) => !v)}
-                      aria-expanded={deliveryLegendOpen}
-                      aria-label="What do these badges mean?"
-                      title="What do these badges mean?"
-                      className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-slate-400 text-[9px] font-bold leading-none text-slate-500 hover:border-slate-600 hover:text-slate-700"
-                    >
-                      ?
-                    </button>
-                  </span>
+                <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[126px] leading-tight">
+                  <HeaderFilter
+                    width="w-[118px]"
+                    label={
+                      <span className="inline-flex items-center gap-1">
+                        <span>Delivery</span>
+                        <button
+                          type="button"
+                          onClick={() => setDeliveryLegendOpen((v) => !v)}
+                          aria-expanded={deliveryLegendOpen}
+                          aria-label="What do these badges mean?"
+                          title="What do these badges mean?"
+                          className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-slate-400 text-[9px] font-bold leading-none text-slate-500 hover:border-slate-600 hover:text-slate-700"
+                        >
+                          ?
+                        </button>
+                      </span>
+                    }
+                    value={deliveryFilter}
+                    onChange={setDeliveryFilter}
+                    title="Filter by what we can reach this client on. Mail = the small G dot (can we READ their inbox). Hook = the Mattermost badge (can we SEND to them)."
+                    options={[
+                      { value: 'mail_none', label: `Mail: not connected (${deliveryCounts.mail_none})` },
+                      { value: 'mail_reconnect', label: `Mail: reconnect (${deliveryCounts.mail_reconnect})` },
+                      { value: 'mail_ok', label: `Mail: connected (${deliveryCounts.mail_ok})` },
+                      { value: 'hook_missing', label: `Hook: missing (${deliveryCounts.hook_missing})` },
+                      { value: 'hook_failing', label: `Hook: failing (${deliveryCounts.hook_failing})` },
+                      { value: 'hook_ok', label: `Hook: working (${deliveryCounts.hook_ok})` },
+                      { value: 'no_payment_email', label: `No payment email (${deliveryCounts.no_payment_email})` },
+                    ]}
+                  />
                 </th>
                 <th className="px-1.5 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-700 w-[96px]">
                   <HeaderFilter
@@ -1605,7 +1636,7 @@ export default function ClientJobAnalysis() {
                   <td colSpan={TABLE_COLUMN_COUNT} className="px-2 py-8 text-center text-gray-500 text-sm">
                     {searchQuery.trim()
                       ? `No clients match "${searchQuery}"`
-                      : (lastAppliedByFilter || statusFilter || phaseFilter || addFilter || alertFilter || countryFilter || dashboardMgrFilter || planFilter || jobrightFilter)
+                      : (lastAppliedByFilter || statusFilter || phaseFilter || addFilter || alertFilter || countryFilter || dashboardMgrFilter || planFilter || jobrightFilter || deliveryFilter)
                         ? 'No clients match the selected filters'
                         : 'No data'}
                   </td>
@@ -1668,10 +1699,13 @@ export default function ClientJobAnalysis() {
                         //   the G dot      - can we still READ their inbox, which
                         //     is what produces the interview and offer alerts
                         // The dot is 8px, so the second signal costs no width.
-                        const em = String(r.email || '').toLowerCase();
-                        const hasHook = mmConn.withWebhook.has(em);
-                        const isFailing = mmConn.failing.has(em);
-                        const noPay = mmConn.noPaymentEmail.has(em);
+                        // Same helper the Delivery dropdown filters on, so a
+                        // row can never be hidden by a selection that disagrees
+                        // with the badge printed in it.
+                        const dk = rowDeliveryKeys(r.email, mmConn, mailConn);
+                        const hasHook = dk.hook !== 'missing';
+                        const isFailing = dk.hook === 'failing';
+                        const noPay = dk.noPay;
                         const cls = 'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold';
 
                         let badge;
@@ -1685,8 +1719,8 @@ export default function ClientJobAnalysis() {
                           badge = <span className={`${cls} bg-red-100 text-red-700`} title="No Mattermost webhook saved. Email still works.">No hook</span>;
                         }
 
-                        const gConnected = mailConn.connected.has(em);
-                        const gReconnect = mailConn.reconnect.has(em);
+                        const gConnected = dk.mail === 'ok';
+                        const gReconnect = dk.mail === 'reconnect';
                         const gTone = gConnected
                           ? 'bg-green-500'
                           : gReconnect
