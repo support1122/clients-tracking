@@ -2,8 +2,8 @@ import mongoose from 'mongoose';
 import { istDayPatterns } from './clientApplyStats.js';
 
 /**
- * Permanently switches off the Upgrade and Refer n Earn buttons for clients who
- * have gone dormant.
+ * Permanently REMOVES the Upgrade and Refer n Earn buttons from the portal for
+ * clients who have gone dormant. They are not greyed out, they are gone.
  *
  * WHY
  * ---
@@ -28,12 +28,29 @@ import { istDayPatterns } from './clientApplyStats.js';
  * rejected, because the buttons would flicker back the moment anyone touched the
  * account.
  *
+ * WHY "14 DAYS" IS MEASURED OFF ACTIVITY
+ * --------------------------------------
+ * "Inactive for 14 days" has nothing to count from. Nothing in the schema
+ * records WHEN a status became inactive: there is no inactiveSince, and the
+ * tracking document's own `updatedAt` is a locale STRING that is rewritten on
+ * any edit to any field, so it cannot date a status change. Adding such a field
+ * would still leave every client who is already inactive with no start date,
+ * and a 14-day grace period before the rule could touch anyone.
+ *
+ * Silence is the measurable form of the same thing. A client whose account has
+ * had no card applied and none added for a fortnight HAS been dormant for a
+ * fortnight, on evidence that is in the database today.
+ *
  * ACTIVITY IS ADDS *OR* APPLIES
  * -----------------------------
  * The looser of the two definitions on purpose. A client whose operator is still
  * adding cards is being worked on, whatever the status field says, and locking
  * them out permanently on the strength of a stale status flag is not a mistake
  * this code gets to make twice.
+ *
+ * To drop that protection and go on the status field alone, set
+ * REQUIRE_NO_ACTIVITY to false below. Every inactive client is then flagged on
+ * the next sweep, including any whose cards are still moving.
  *
  * Adds are measured by ObjectId creation time, not by `dateAdded`. dateAdded is
  * a locale string written in mixed day-first and month-first orientations (6564
@@ -47,6 +64,18 @@ import { istDayPatterns } from './clientApplyStats.js';
 
 /** Days of silence, on an inactive account, before the perks are withdrawn. */
 export const PERKS_DORMANT_DAYS = 14;
+
+/**
+ * Must an inactive client ALSO have been silent for the window, or is the
+ * status field enough on its own?
+ *
+ * true  - inactive AND no add and no apply for PERKS_DORMANT_DAYS days.
+ * false - inactive, full stop. The 14 days stop mattering and an inactive
+ *         client whose cards are still moving loses the buttons too.
+ *
+ * Flip this one constant to change the policy; everything else follows.
+ */
+export const REQUIRE_NO_ACTIVITY = true;
 
 /** Reason string stamped alongside the flag, so the DB explains itself. */
 export const PERKS_REASON_DORMANT = 'inactive_no_activity_14d';
@@ -77,13 +106,20 @@ export function isInactiveStatus(status) {
  * @param {string} o.status              tracking status, "active" or "inactive"
  * @param {boolean} o.activeInLookback   a card was added OR applied in the window
  * @param {Date|string|null} [o.perksDisabledAt]  already flagged, if set
+ * @param {boolean} [o.requireNoActivity]  defaults to REQUIRE_NO_ACTIVITY
  * @returns {boolean}
  */
-export function shouldDisablePerks({ status, activeInLookback, perksDisabledAt = null }) {
+export function shouldDisablePerks({
+     status,
+     activeInLookback,
+     perksDisabledAt = null,
+     requireNoActivity = REQUIRE_NO_ACTIVITY,
+}) {
      // Already flagged. The flag is write-once, so there is nothing to do and
      // nothing to re-stamp; re-stamping would destroy the date it happened.
      if (perksDisabledAt) return false;
      if (!isInactiveStatus(status)) return false;
+     if (!requireNoActivity) return true;
      return !activeInLookback;
 }
 
@@ -231,8 +267,8 @@ export async function sweepDormantClientPerks({
      );
 
      console.log(
-          `[clientPerks] withdrew Upgrade and Refer n Earn from ${toFlag.length} dormant client(s) ` +
-          `(inactive with no adds or applies in ${lookbackDays} days); ` +
+          `[clientPerks] removed Upgrade and Refer n Earn from ${toFlag.length} dormant client(s) ` +
+          `(inactive${REQUIRE_NO_ACTIVITY ? ` with no adds or applies in ${lookbackDays} days` : ''}); ` +
           `${out.skippedActive.length} inactive client(s) left alone because they still had activity`,
      );
 

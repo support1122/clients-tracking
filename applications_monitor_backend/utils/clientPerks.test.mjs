@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
      PERKS_DORMANT_DAYS,
      PERKS_REASON_DORMANT,
+     REQUIRE_NO_ACTIVITY,
      isInactiveStatus,
      perksDisabled,
      shouldDisablePerks,
@@ -63,6 +64,44 @@ test('perksDisabled reads the presence of the date', () => {
 test('the window is the 14 days that were asked for', () => {
      assert.equal(PERKS_DORMANT_DAYS, 14);
      assert.equal(PERKS_REASON_DORMANT, 'inactive_no_activity_14d');
+});
+
+// ── The policy switch ───────────────────────────────────────────────────────
+
+test('the shipped policy keeps the activity protection', () => {
+     // Pinned so flipping it is a deliberate act with a failing test attached,
+     // not something that drifts in unnoticed.
+     assert.equal(REQUIRE_NO_ACTIVITY, true);
+});
+
+test('with requireNoActivity off, every inactive client is flagged', () => {
+     assert.equal(
+          shouldDisablePerks({ status: 'inactive', activeInLookback: true, requireNoActivity: false }),
+          true,
+     );
+     assert.equal(
+          shouldDisablePerks({ status: 'inactive', activeInLookback: false, requireNoActivity: false }),
+          true,
+     );
+});
+
+test('requireNoActivity off still never touches an active client', () => {
+     assert.equal(
+          shouldDisablePerks({ status: 'active', activeInLookback: false, requireNoActivity: false }),
+          false,
+     );
+});
+
+test('requireNoActivity off still never re-stamps an existing flag', () => {
+     assert.equal(
+          shouldDisablePerks({
+               status: 'inactive',
+               activeInLookback: false,
+               perksDisabledAt: new Date('2026-01-01T00:00:00Z'),
+               requireNoActivity: false,
+          }),
+          false,
+     );
 });
 
 // ── The sweep, against fakes ────────────────────────────────────────────────
