@@ -196,6 +196,27 @@ export const ClientSchema = new mongoose.Schema({
     required: false,
     default: false
   },
+  /**
+   * When the Upgrade and Refer n Earn buttons were permanently withdrawn from
+   * this client's portal. Set by utils/clientPerks.js when the client is
+   * inactive AND has had no job added or applied for 14 days.
+   *
+   * WRITE-ONCE. Nothing in the codebase clears this. Reviving the client does
+   * not restore the buttons; a human clearing this field is the only way back,
+   * which is what "disabled for ever" was asked for. Null means the perks are
+   * live.
+   */
+  perksDisabledAt: {
+    type: Date,
+    required: false,
+    default: null
+  },
+  /** Why the perks were withdrawn, so the row explains itself without the code. */
+  perksDisabledReason: {
+    type: String,
+    required: false,
+    default: ''
+  },
   jobStatus: {
     type: String,
     enum: ["still_searching", "job_done"],

@@ -99,6 +99,7 @@ import { addWindowDayStamp } from './utils/addWindow.js';
 import { computeClientAddStats, emptyAddStat } from './utils/clientAddStats.js';
 import { computeClientApplyStats, emptyApplyStat, APPLY_LOOKBACK_DAYS } from './utils/clientApplyStats.js';
 import { deriveClientAlerts, summariseAlerts } from './utils/clientAlerts.js';
+import { sweepDormantClientPerks, PERKS_DORMANT_DAYS } from './utils/clientPerks.js';
 import { ensureDbIndexes } from './utils/ensureDbIndexes.js';
 import { ExtensionIncentiveComplaintModel } from './ExtensionIncentiveComplaintModel.js';
 import { ExtensionDailyIncentiveModel } from './ExtensionDailyIncentiveModel.js';
@@ -9950,6 +9951,31 @@ if (DISCORD_ADD_SHORTFALL_WEBHOOK) {
         console.log('📬 [Tag Reminders] Cron scheduled every 30 minutes');
       } catch (e) {
         console.error('❌ [Tag Reminders] cron registration failed:', e?.message || e);
+      }
+      // Client perks: permanently withdraw Upgrade and Refer n Earn from
+      // clients who are inactive AND have had nothing added or applied for
+      // PERKS_DORMANT_DAYS. Runs once a day; the flag is write-once, so a
+      // missed run only delays the withdrawal, it never loses one.
+      try {
+        cron.schedule(
+          '30 3 * * *',
+          async () => {
+            try {
+              const res = await sweepDormantClientPerks({ ClientModel, JobModel });
+              console.log(
+                `🔒 [Client Perks] scanned ${res.scanned} inactive client(s), ` +
+                `withdrew perks from ${res.flagged.length}, ` +
+                `left ${res.skippedActive.length} alone for recent activity`
+              );
+            } catch (e) {
+              console.error('❌ [Client Perks] sweep failed:', e?.message || e);
+            }
+          },
+          { timezone: 'Asia/Kolkata' }
+        );
+        console.log(`🔒 [Client Perks] Cron scheduled daily 3:30 AM IST (${PERKS_DORMANT_DAYS}-day dormancy)`);
+      } catch (e) {
+        console.error('❌ [Client Perks] cron registration failed:', e?.message || e);
       }
     });
   })
