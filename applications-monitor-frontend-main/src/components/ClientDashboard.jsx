@@ -32,6 +32,7 @@ export default function ClientDashboard() {
   const [upgradePaymentCurrency, setUpgradePaymentCurrency] = useState('USD');
   const [addonPaymentAmount, setAddonPaymentAmount] = useState('');
   const [addonPaymentCurrency, setAddonPaymentCurrency] = useState('USD');
+  const [freeApplicationCount, setFreeApplicationCount] = useState('');
   // Referral Management state
   const [referralUsers, setReferralUsers] = useState([]);
   const [loadingReferralUsers, setLoadingReferralUsers] = useState(false);
@@ -555,6 +556,45 @@ export default function ClientDashboard() {
     } catch (error) {
       console.error('Error adding addon:', error);
       toast.error(error.message || 'Failed to add addon');
+    } finally {
+      setUpgrading(false);
+    }
+  };
+
+  const handleAddFreeApplications = async () => {
+    if (!clientDetails) return;
+
+    const parsedCount = parseInt(freeApplicationCount, 10);
+    if (!parsedCount || parsedCount <= 0) {
+      toast.error('Please enter a valid number of applications');
+      return;
+    }
+
+    setUpgrading(true);
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`${API_BASE}/api/clients/${clientDetails.email}/add-free-applications`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ applicationCount: parsedCount })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        toast.success(`${parsedCount} applications added successfully!`);
+        setFreeApplicationCount('');
+        await handleClientSearch(selectedClient);
+        await loadAnalyticsData();
+      } else {
+        throw new Error(data.error || 'Failed to add applications');
+      }
+    } catch (error) {
+      console.error('Error adding free applications:', error);
+      toast.error(error.message || 'Failed to add applications');
     } finally {
       setUpgrading(false);
     }
@@ -1309,6 +1349,48 @@ export default function ClientDashboard() {
                           </>
                         ) : (
                           'Select an addon'
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-gradient-to-br from-white to-emerald-50 rounded-xl shadow-lg border border-emerald-200 p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="p-1.5 bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-lg">
+                        <Zap className="w-4 h-4 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-base font-bold text-gray-900">Add Applications</h3>
+                        <p className="text-xs text-gray-600">Manually grant applications (admin only, no charge)</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-gray-700">Number of Applications</p>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Enter number of applications"
+                        value={freeApplicationCount}
+                        onChange={(e) => setFreeApplicationCount(e.target.value)}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                      />
+
+                      <button
+                        onClick={handleAddFreeApplications}
+                        disabled={!freeApplicationCount || upgrading}
+                        className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 text-white py-2 px-3 rounded-lg hover:from-emerald-700 hover:to-emerald-600 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-md"
+                      >
+                        {upgrading ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            <span>Adding...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="w-4 h-4" />
+                            <span>Add Applications</span>
+                          </>
                         )}
                       </button>
                     </div>

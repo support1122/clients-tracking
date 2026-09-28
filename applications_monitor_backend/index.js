@@ -1663,6 +1663,62 @@ const addClientAddon = async (req, res) => {
   }
 };
 
+const addFreeApplications = async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { applicationCount } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+
+    const parsedCount = parseInt(applicationCount, 10);
+    if (!parsedCount || parsedCount <= 0) {
+      return res.status(400).json({ success: false, error: 'A positive application count is required' });
+    }
+
+    const emailLower = email.toLowerCase();
+    const currentDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+
+    const existingClient = await ClientModel.findOne({ email: emailLower }).lean();
+    if (!existingClient) {
+      return res.status(404).json({ success: false, error: 'Client not found' });
+    }
+
+    const newAddon = {
+      type: parsedCount.toString(),
+      price: 0,
+      source: 'admin_free',
+      addedAt: currentDate
+    };
+
+    const existingAddons = existingClient.addons || [];
+    const updatedAddons = [...existingAddons, newAddon];
+
+    await ClientModel.updateOne(
+      { email: emailLower },
+      {
+        $set: {
+          addons: updatedAddons,
+          updatedAt: currentDate
+        }
+      },
+      { runValidators: false }
+    );
+
+    const updatedClient = await ClientModel.findOne({ email: emailLower }).lean();
+
+    res.status(200).json({
+      success: true,
+      message: `${parsedCount} applications added successfully`,
+      client: updatedClient
+    });
+  } catch (error) {
+    console.error('Error adding free applications:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 // const createOrUpdateClient = async (req, res) => {
 //     try {
 //       // const referer = req.headers.referer || "";
@@ -5280,6 +5336,7 @@ app.post('/api/clients/update-operations-name', updateClientOperationsName);
 app.post('/api/clients/update-dashboard-team-lead', updateClientDashboardTeamLead);
 app.put('/api/clients/:email/upgrade-plan', verifyToken, upgradeClientPlan);
 app.post('/api/clients/:email/add-addon', verifyToken, addClientAddon);
+app.post('/api/clients/:email/add-free-applications', verifyToken, addFreeApplications);
 // Admin-only: export client milestone email logs.
 // Body: { mode: 'all'|'selected', clientEmails?: [], example?: bool }
 // Returns { rows: [...] }. Frontend converts to CSV/JSON file.
