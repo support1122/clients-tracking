@@ -62,6 +62,7 @@ const SCRAPE_SOURCES = [
     { id: 'careerone', label: 'CareerOne', host: 'careerone.com.au' },
     { id: 'adzuna', label: 'Adzuna', host: 'adzuna.com.au' },
     { id: 'linkedin', label: 'LinkedIn', host: 'linkedin.com/jobs' },
+    { id: 'glassdoor', label: 'Glassdoor US', host: 'glassdoor.com' },
 ];
 const SCRAPE_SOURCE_IDS = SCRAPE_SOURCES.map((s) => s.id);
 const scrapeSourceLabel = (id) => SCRAPE_SOURCES.find((s) => s.id === id)?.label || 'JobRight';
