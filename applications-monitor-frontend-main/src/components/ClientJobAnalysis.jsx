@@ -266,7 +266,7 @@ export default function ClientJobAnalysis() {
   const [statusFilter, setStatusFilter] = useState('');   // '' | active | inactive
   const [phaseFilter, setPhaseFilter] = useState('');     // '' | new | paused | unpaused
   const [addFilter, setAddFilter] = useState('');         // '' | under | stale | met
-  const [countryFilter, setCountryFilter] = useState(''); // '' | USA | Canada | UK | blank
+  const [countryFilter, setCountryFilter] = useState(''); // '' | USA | Canada | UK | Australia | blank
   const [dashboardMgrFilter, setDashboardMgrFilter] = useState('');
   // '' | prime | ignite | professional | executive | blank | other | mismatch.
   // 'mismatch' is not a plan: the ⚠ Payment mismatch badge renders in this same
@@ -625,7 +625,7 @@ export default function ClientJobAnalysis() {
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(data.error || 'Failed to save');
       const next =
-        data.clientCountry === 'USA' || data.clientCountry === 'Canada'
+        ['USA', 'Canada', 'UK', 'Australia'].includes(data.clientCountry)
           ? data.clientCountry
           : null;
       setRows((prev) =>
@@ -849,11 +849,12 @@ export default function ClientJobAnalysis() {
 
   // Country counts computed from all rows (not filtered) so the badges always show totals
   const countryCounts = useMemo(() => {
-    const counts = { USA: 0, Canada: 0, UK: 0, blank: 0 };
+    const counts = { USA: 0, Canada: 0, UK: 0, Australia: 0, blank: 0 };
     for (const r of rows) {
       if (r.clientCountry === 'USA') counts.USA++;
       else if (r.clientCountry === 'Canada') counts.Canada++;
       else if (r.clientCountry === 'UK') counts.UK++;
+      else if (r.clientCountry === 'Australia') counts.Australia++;
       else counts.blank++;
     }
     return counts;
@@ -1087,6 +1088,7 @@ export default function ClientJobAnalysis() {
               { key: 'USA', label: 'USA', color: 'text-blue-600' },
               { key: 'Canada', label: 'Canada', color: 'text-red-500' },
               { key: 'UK', label: 'UK', color: 'text-purple-600' },
+              { key: 'Australia', label: 'Australia', color: 'text-emerald-600' },
               { key: 'blank', label: 'Blank', color: 'text-gray-400' },
             ].map(({ key, label, color }) => (
               <button
@@ -1397,6 +1399,7 @@ export default function ClientJobAnalysis() {
                       { value: 'USA', label: `USA (${countryCounts.USA})` },
                       { value: 'Canada', label: `Canada (${countryCounts.Canada})` },
                       { value: 'UK', label: `UK (${countryCounts.UK})` },
+                      { value: 'Australia', label: `Australia (${countryCounts.Australia})` },
                       { value: 'blank', label: `Blank (${countryCounts.blank})` },
                     ]}
                   />
@@ -1779,7 +1782,7 @@ export default function ClientJobAnalysis() {
                       {userRole === 'admin' ? (
                         <select
                           value={
-                            ['USA', 'Canada', 'UK'].includes(r.clientCountry)
+                            ['USA', 'Canada', 'UK', 'Australia'].includes(r.clientCountry)
                               ? r.clientCountry
                               : ''
                           }
@@ -1792,10 +1795,11 @@ export default function ClientJobAnalysis() {
                           <option value="USA">USA</option>
                           <option value="Canada">Canada</option>
                           <option value="UK">UK</option>
+                          <option value="Australia">Australia</option>
                         </select>
                       ) : (
                         <span className="text-[11px] text-slate-700">
-                          {['USA', 'Canada', 'UK'].includes(r.clientCountry)
+                          {['USA', 'Canada', 'UK', 'Australia'].includes(r.clientCountry)
                             ? r.clientCountry
                             : '—'}
                         </span>
