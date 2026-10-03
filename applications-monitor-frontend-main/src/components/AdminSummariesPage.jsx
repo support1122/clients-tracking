@@ -17,9 +17,19 @@
 //   GET  /push-history?email=       — daily pushes (chart)
 
 import React, { useEffect, useMemo, useState, useRef } from 'react';
+import toast from 'react-hot-toast';
 import { buildAiSummaryAndWait, describeBuildFailure } from '../utils/aiSummaryBuild';
+import JobrightCredsBody from './JobrightCredsBody.jsx';
 
 const DASHBOARD_BASE = (import.meta.env.VITE_DASHBOARD_BASE || 'http://localhost:8086').replace(/\/+$/, '');
+// The portal's own backend. This page talked only to the dashboard backend
+// until the JobRight credentials card, which reads through the portal so the
+// ops key stays server-side. Same default and token as ClientJobAnalysis.
+const API_BASE = import.meta.env.VITE_BASE || 'https://clients-tracking-backend.onrender.com';
+const AUTH_HEADERS = () => ({
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${localStorage.getItem('authToken') || ''}`,
+});
 // Main client portal — used to deep-link a removed job card open (?jobId=<id>).
 const PORTAL_BASE = (import.meta.env.VITE_PORTAL_BASE || 'https://portal.flashfirejobs.com').replace(/\/+$/, '');
 
@@ -983,6 +993,12 @@ function ClientDetailPane({ row, onProfileChanged }) {
             {/* Push history */}
             <PushHistoryCard history={history} loading={historyLoading} onReload={loadHistory} />
 
+            {/* JobRight credentials — what the "JobRight: Yes" toggle on Client
+                Job Analysis provisioned for this client. Here because this pane
+                is where a manager looks a client up, and the toggle's toast is
+                long gone by then. */}
+            <JobrightCredsCard email={row.email} />
+
             {/* Scrape sources — per-client site allowlist for the JR-direct extension */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
                 <div className="flex items-start justify-between gap-3 mb-4">
@@ -1659,6 +1675,68 @@ function ClientDetailPane({ row, onProfileChanged }) {
 // -------------------------------------------------------------------------
 // Push history card with bar chart + table
 // -------------------------------------------------------------------------
+
+// JobrightCredsCard: the autopilot login saved for one client.
+//
+// Loaded on demand rather than with the pane, because the response carries real
+// passwords and most visits to this page are not about credentials. A 403 is
+// reported plainly: only admins and team leads may read these, and silently
+// rendering nothing would look identical to "this client has none".
+function JobrightCredsCard({ email }) {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+
+    // Reset when the operator selects a different client.
+    useEffect(() => { setData(null); setError(''); }, [email]);
+
+    const load = async () => {
+        setLoading(true);
+        setError('');
+        try {
+            const r = await fetch(`${API_BASE}/api/clients/${encodeURIComponent(email)}/jobright-creds`, {
+                headers: AUTH_HEADERS(),
+            });
+            const body = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+            setData(body);
+        } catch (e) {
+            setError(e.message || 'Failed to load');
+            toast.error(e.message || 'Failed to load JobRight credentials');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <div className="flex items-start justify-between gap-3 mb-3">
+                <div>
+                    <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                        🔑 JobRight credentials
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                        The autopilot login provisioned when a manager set <strong>JobRight: Yes</strong> on
+                        Client Job Analysis. Admins and team leads only.
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    onClick={load}
+                    disabled={loading}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-900 text-white hover:bg-slate-700 disabled:opacity-50"
+                >
+                    {loading ? 'Loading…' : data ? 'Reload' : 'Show'}
+                </button>
+            </div>
+            {error && <div className="text-[11px] text-red-700">{error}</div>}
+            {data && <JobrightCredsBody data={data} />}
+            {!data && !error && !loading && (
+                <div className="text-[11px] text-slate-400">Hidden until you ask for it.</div>
+            )}
+        </div>
+    );
+}
 
 function PushHistoryCard({ history, loading, onReload }) {
     if (loading && !history) {
