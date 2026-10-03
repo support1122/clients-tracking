@@ -261,6 +261,59 @@ async function provisionAutopilotJrCreds(email, updatedBy = '') {
   }
 }
 
+// Read a client's autopilot credentials back out of the dashboard backend.
+//
+// The portal shows these on Client Job Analysis and AI Summaries so a manager
+// who flips "JobRight: Yes" can confirm the account details landed, instead of
+// trusting a toast that scrolled away.
+//
+// WHY THIS PROXIES INSTEAD OF THE BROWSER CALLING DIRECTLY
+// GET /autopilot/creds/:email is behind x-ops-key, and that key also guards
+// /operations/reminders/* which can email clients. Vite inlines env vars at
+// build time, so putting the key in the frontend would publish it to every
+// visitor (the same reason AutoExtensionReport.jsx sends no ops key). Here the
+// key stays on the server and the caller proves itself with the portal's own
+// JWT instead.
+//
+// Never throws: a credentials panel that cannot load must not 500 the page.
+async function fetchAutopilotJrCreds(email) {
+  const url = `${FLASHFIRE_API_BASE_URL.replace(/\/+$/, '')}/autopilot/creds/${encodeURIComponent(email)}`;
+  try {
+    const resp = await fetch(url, {
+      headers: { 'x-ops-key': FLASHFIRE_OPS_KEY },
+      signal: AbortSignal.timeout(15000),
+    });
+    // 404 is the documented "no credentials on file" answer, not a failure.
+    if (resp.status === 404) return { onFile: false, creds: null, reason: 'no credentials on file' };
+    const body = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const reason = resp.status === 401
+        ? 'ops key rejected - OPS_SECRET_KEY must match the dashboard backend'
+        : (body.message || `HTTP ${resp.status}`);
+      return { onFile: false, creds: null, reason };
+    }
+    const d = body.data || {};
+    return {
+      onFile: true,
+      reason: '',
+      creds: {
+        jrEmail: d.jrEmail || '',
+        jrPassword: d.jrPassword || '',
+        extEmail: d.extEmail || '',
+        extPassword: d.extPassword || '',
+        extCode: d.extCode || '',
+        hcSearch: d.hcSearch || '',
+        // The autopilot can only log in unattended when both halves are there,
+        // so state the conclusion rather than leaving the UI to infer it.
+        autoLoginReady: !!String(d.jrEmail || '').trim() && !!String(d.jrPassword || '').trim(),
+      },
+    };
+  } catch (e) {
+    const reason = e?.name === 'TimeoutError' ? 'dashboard backend timed out' : (e?.message || 'request failed');
+    return { onFile: false, creds: null, reason };
+  }
+}
+
 // Short TTL cache for client profile from flashfire (avoids hammering external API, keeps dashboard details fast)
 const PROFILE_CACHE_TTL_MS = 90 * 1000; // 90 seconds
 const profileCache = new Map();
@@ -749,6 +802,16 @@ const verifyJobrightToggle = (req, res, next) => {
       ? 'Only admins can change JobRight back to No.'
       : 'Only admins and team leads can change JobRight status.',
   });
+};
+
+// Reading a client's JobRight credentials returns their real passwords, so it
+// is limited to the same people who may set the toggle: admins and team leads.
+// Unlike the write gate this allows team leads in both directions, because
+// reading changes nothing.
+const verifyJobrightRead = (req, res, next) => {
+  const role = req.user?.role || '';
+  if (role === 'admin' || role === 'team_lead') return next();
+  return res.status(403).json({ error: 'Only admins and team leads can view JobRight credentials.' });
 };
 
 // Allow admin, CSM, or team_lead to manage operations (link/remove operations interns to clients)
@@ -5253,6 +5316,35 @@ const updateClientCountry = async (req, res) => {
 // GET /scripts/jobrightsync seeds this flag in bulk from data/jobrightClients.js;
 // this route is the per-client correction an operator makes afterwards, so the
 // two write the same two fields and cannot drift.
+// GET /api/clients/:email/jobright-creds
+//
+// The credentials behind the "JobRight: Yes" toggle, for the managers who set
+// it. Same audience as the toggle itself (admin or team lead), because this
+// returns the client's actual passwords.
+const getClientJobrightCreds = async (req, res) => {
+  try {
+    const emailLower = String(req.params.email || '').toLowerCase().trim();
+    if (!emailLower) return res.status(400).json({ error: 'Email is required' });
+
+    const client = await ClientModel.findOne({ email: emailLower })
+      .select('email jobrightCreated jobrightCreatedAt')
+      .lean();
+    if (!client) return res.status(404).json({ error: 'Client not found' });
+
+    const result = await fetchAutopilotJrCreds(emailLower);
+    res.status(200).json({
+      success: true,
+      email: client.email,
+      jobrightCreated: client.jobrightCreated === true,
+      jobrightCreatedAt: client.jobrightCreatedAt || null,
+      ...result,
+    });
+  } catch (error) {
+    console.error('getClientJobrightCreds:', error);
+    res.status(500).json({ error: error.message || 'Failed to load JobRight credentials' });
+  }
+};
+
 const updateClientJobright = async (req, res) => {
   try {
     const emailLower = String(req.params.email || '').toLowerCase().trim();
@@ -5323,6 +5415,7 @@ app.post('/api/clients/addnumbers', addNumbersToClients);
 app.patch('/api/clients/:email/client-number', verifyToken, verifyAdmin, updateClientNumber);
 app.patch('/api/clients/:email/client-country', verifyToken, verifyAdmin, updateClientCountry);
 app.patch('/api/clients/:email/jobright', verifyToken, verifyJobrightToggle, updateClientJobright);
+app.get('/api/clients/:email/jobright-creds', verifyToken, verifyJobrightRead, getClientJobrightCreds);
 app.post('/api/clients/sync-client-numbers', verifyToken, verifyAdmin, async (req, res) => {
   try {
     const synced = await syncClientNumbersToOnboardingJobs();
