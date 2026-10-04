@@ -166,10 +166,10 @@ export const ClientSchema = new mongoose.Schema({
     required: true,
     default: "paypal"
   },
-  /** Client Job Analysis: USA / Canada / UK / Australia (optional until set). */
+  /** Client Job Analysis: USA / Canada / UK / Australia / Europe (optional until set). */
   clientCountry: {
     type: String,
-    enum: ["USA", "Canada", "UK", "Australia"],
+    enum: ["USA", "Canada", "UK", "Australia", "Europe"],
     required: false,
     default: undefined,
   },
