@@ -11,7 +11,7 @@ export const parseAmount = (amountStr) => {
   if (!amountStr) return 0;
   const str = amountStr.toString();
   // Remove currency symbols and whitespace: $, ₹, CAD, commas, spaces
-  const cleaned = str.replace(/[$₹£,\s]|CAD|AUD/gi, '').trim();
+  const cleaned = str.replace(/[$₹£€,\s]|CAD|AUD/gi, '').trim();
   return parseFloat(cleaned) || 0;
 };
 
@@ -27,6 +27,7 @@ export const extractCurrency = (amountStr) => {
   if (str.startsWith('AUD')) return 'AUD';
   if (str.startsWith('₹')) return '₹';
   if (str.startsWith('£')) return '£';
+  if (str.startsWith('€')) return '€';
   if (str.startsWith('$')) return '$';
   return '';
 };
@@ -52,6 +53,8 @@ export const formatAmount = (amount, currency = '') => {
     return `₹${numAmount.toLocaleString()}`;
   } else if (currency === '£') {
     return `£${numAmount.toLocaleString()}`;
+  } else if (currency === '€') {
+    return `€${numAmount.toLocaleString()}`;
   } else if (currency === '$') {
     return `$${numAmount.toLocaleString()}`;
   }
@@ -69,6 +72,7 @@ export const getCurrencyPrefix = (currency) => {
   if (currency === 'AUD') return 'AUD';
   if (currency === '₹') return '₹';
   if (currency === '£') return '£';
+  if (currency === '€') return '€';
   if (currency === '$') return '$';
   return '$';
 };

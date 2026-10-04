@@ -486,7 +486,7 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
         return res.status(200).json({ received: true, warning: 'unknown plan' });
       }
       const { planType: planTypeLower, planPrice, planLabel: capitalizedPlan } = planFields;
-      const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£,\s]|CAD|AUD/gi, '') || '0');
+      const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£€,\s]|CAD|AUD/gi, '') || '0');
       const currentPlanPrice = existingClient.planPrice || 0;
       const newAmountPaid = currentAmountPaid + (planPrice - currentPlanPrice);
       const planChanged = String(existingClient.planType || '').toLowerCase() !== planTypeLower;
@@ -515,7 +515,7 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
     } else if (type === 'addon' && addonApps) {
       const addonType = addonApps; // '250', '500', '1000'
       const addonPrice = parseFloat(amountPaid);
-      const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£,\s]|CAD|AUD/gi, '') || '0');
+      const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£€,\s]|CAD|AUD/gi, '') || '0');
       const newAmountPaid = currentAmountPaid + addonPrice;
       const existingAddons = existingClient.addons || [];
       const newAddon = { type: addonType, price: addonPrice, addedAt: currentDate };
@@ -1201,12 +1201,13 @@ export const createOrUpdateClient = async (req, res) => {
     }
 
     // Resolve currency: use explicit value from body first, then detect from amountPaid prefix
-    const currencySymbolMap = { "$": "USD", "₹": "INR", "£": "GBP", "CAD": "CAD", "AUD": "AUD" };
+    const currencySymbolMap = { "$": "USD", "₹": "INR", "£": "GBP", "€": "EUR", "CAD": "CAD", "AUD": "AUD" };
     const amountPaidStr = String(amountPaid || "");
     const amountDetected = amountPaidStr.toUpperCase().startsWith("CAD") ? "CAD"
       : amountPaidStr.toUpperCase().startsWith("AUD") ? "AUD"
       : amountPaidStr.startsWith("₹") ? "INR"
       : amountPaidStr.startsWith("£") ? "GBP"
+      : amountPaidStr.startsWith("€") ? "EUR"
       : amountPaidStr.startsWith("$") ? "USD"
       : null;
     const detectedCurrency = (currencySymbolMap[currencyFromBody] || currencyFromBody?.toUpperCase() || amountDetected || "USD");
@@ -1589,7 +1590,7 @@ const upgradeClientPlan = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Client not found' });
     }
 
-    const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£,\s]|CAD|AUD/gi, '') || '0');
+    const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£€,\s]|CAD|AUD/gi, '') || '0');
     const currentPlanPrice = existingClient.planPrice || 0;
     const upgradeDifference = planPrice - currentPlanPrice;
     const newAmountPaid = currentAmountPaid + upgradeDifference;
@@ -1679,7 +1680,7 @@ const addClientAddon = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Client not found' });
     }
 
-    const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£,\s]|CAD|AUD/gi, '') || '0');
+    const currentAmountPaid = parseFloat(existingClient.amountPaid?.toString().replace(/[$₹£€,\s]|CAD|AUD/gi, '') || '0');
     const newAmountPaid = currentAmountPaid + parseFloat(addonPrice);
 
     const newAddon = {
@@ -4302,11 +4303,12 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       onboardingPhase: !!c.onboardingPhase,
       pausedAt: c.pausedAt != null ? new Date(c.pausedAt).toISOString() : null,
       clientCountry: (() => {
-        if (c.clientCountry === 'USA' || c.clientCountry === 'Canada' || c.clientCountry === 'UK' || c.clientCountry === 'Australia') return c.clientCountry;
+        if (c.clientCountry === 'USA' || c.clientCountry === 'Canada' || c.clientCountry === 'UK' || c.clientCountry === 'Australia' || c.clientCountry === 'Europe') return c.clientCountry;
         const amt = String(c.amountPaid || '');
         if (amt.startsWith('CAD')) return 'Canada';
         if (amt.startsWith('AUD')) return 'Australia';
         if (amt.startsWith('£')) return 'UK';
+        if (amt.startsWith('€')) return 'Europe';
         if (amt.startsWith('$') || amt.startsWith('₹')) return 'USA';
         return null;
       })(),
@@ -5062,7 +5064,7 @@ const getRevenueStats = async (req, res) => {
       // If amountPaid is a string, parse it to a number
       if (typeof amountPaid === 'string') {
         // Remove currency symbols ($, ₹, £, CAD, AUD) and any whitespace
-        amountPaid = amountPaid.replace(/[$₹£,\s]|CAD|AUD/gi, '').trim();
+        amountPaid = amountPaid.replace(/[$₹£€,\s]|CAD|AUD/gi, '').trim();
         // Convert to number, default to 0 if invalid
         amountPaid = parseFloat(amountPaid) || 0;
       }
@@ -5268,7 +5270,7 @@ const updateClientNumber = async (req, res) => {
   }
 };
 
-/** PATCH /api/clients/:email/client-country — Body: { clientCountry: 'USA' | 'Canada' | 'UK' | 'Australia' | null }; null clears. Admin only. */
+/** PATCH /api/clients/:email/client-country — Body: { clientCountry: 'USA' | 'Canada' | 'UK' | 'Australia' | 'Europe' | null }; null clears. Admin only. */
 const updateClientCountry = async (req, res) => {
   try {
     const { email } = req.params;
@@ -5286,8 +5288,8 @@ const updateClientCountry = async (req, res) => {
       ).select('email clientCountry').lean();
     } else {
       const v = String(raw).trim();
-      if (!['USA', 'Canada', 'UK', 'Australia'].includes(v)) {
-        return res.status(400).json({ error: 'clientCountry must be USA, Canada, UK, or Australia' });
+      if (!['USA', 'Canada', 'UK', 'Australia', 'Europe'].includes(v)) {
+        return res.status(400).json({ error: 'clientCountry must be USA, Canada, UK, Australia, or Europe' });
       }
       client = await ClientModel.findOneAndUpdate(
         { email: emailLower },

@@ -689,6 +689,7 @@ const RegisterClient = () => {
                         <option value="CAD">CAD (Canadian Dollar)</option>
                         <option value="£">£ (Pound)</option>
                         <option value="AUD">AUD (Australian Dollar)</option>
+                        <option value="€">€ (Euro)</option>
                       </select>
                     </div>
                     <div className="col-span-2">
@@ -783,6 +784,7 @@ const RegisterClient = () => {
                       <option value="USA">🇺🇸 USA</option>
                       <option value="Canada">🇨🇦 Canada</option>
                       <option value="Australia">🇦🇺 Australia</option>
+                      <option value="Europe">🇪🇺 Europe</option>
                     </select>
                   </div>
 

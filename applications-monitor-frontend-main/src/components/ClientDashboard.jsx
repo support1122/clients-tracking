@@ -1227,6 +1227,7 @@ export default function ClientDashboard() {
                             <option value="CAD">CAD</option>
                             <option value="GBP">GBP</option>
                             <option value="AUD">AUD</option>
+                            <option value="EUR">EUR</option>
                           </select>
                           <input
                             type="number"
@@ -1322,6 +1323,7 @@ export default function ClientDashboard() {
                             <option value="CAD">CAD</option>
                             <option value="GBP">GBP</option>
                             <option value="AUD">AUD</option>
+                            <option value="EUR">EUR</option>
                           </select>
                           <input
                             type="number"
