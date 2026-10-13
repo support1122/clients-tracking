@@ -107,12 +107,17 @@ test("maps a full record, including the autoLoginReady conclusion", async () => 
     assert.equal(out.onFile, true);
     assert.equal(out.creds.jrEmail, "c@example.com");
     assert.equal(out.creds.jrPassword, "Jobhunt@2026");
-    assert.equal(out.creds.extCode, "12345");
     assert.equal(out.creds.hcSearch, "Data Analyst");
     assert.equal(out.creds.autoLoginReady, true);
     // Only the fields the panel renders travel on; cap numbers belong to the
     // autopilot and have their own view.
     assert.equal(out.creds.dailyCap, undefined);
+    // The operator code is the same for every client, so it is not what this
+    // panel exists to show. It must not reach the browser at all - hiding it
+    // in the markup would still leave it in the network tab, on a screen
+    // managers share and screenshot.
+    assert.equal(out.creds.extCode, undefined, "the operator code must not be sent");
+    assert.equal(JSON.stringify(out).includes("12345"), false, "nor appear anywhere else in the payload");
   } finally { await s.close(); }
 });
 
