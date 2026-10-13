@@ -1996,7 +1996,7 @@ export default function ClientJobAnalysis() {
                             ? `No daily target applies — this client is ${r.status !== 'active' ? 'inactive' : r.onboardingPhase ? 'still onboarding' : 'paused'}.`
                             : null,
                           `${r.addedToday ?? 0} of ${r.dailyTarget ?? 30} added this window (${r.addFulfillmentPct ?? 0}%)`,
-                          r.isDefaultTarget ? 'No explicit target set for this client — using the default of 30' : null,
+                          r.isDefaultTarget ? 'No explicit target set for this client — using the default of 25' : null,
                           !r.addTargetTracked ? null : r.addShortfall ? `${r.addShortfall} short` : 'Target met',
                           r.addedTodayBy?.length ? `Added today by: ${r.addedTodayBy.join(', ')}` : 'Nobody has added for this client today',
                           r.lastAddedAt ? `Last add ${new Date(r.lastAddedAt).toLocaleString()}` : 'No job card has ever been added'

@@ -9083,7 +9083,7 @@ function chunkDiscordLines(header, lines) {
  * the next morning when nothing can be done.
  *
  * Target is the SAME number dailyCapGuard enforces as the ceiling
- * (profile.targetJobCount, else 30). One number, so the report can never
+ * (profile.targetJobCount, else 25). One number, so the report can never
  * disagree with the counter the extension shows the same operator.
  */
 async function runAddShortfallReport({ triggeredSource = 'cron', triggeredBy = '' } = {}) {

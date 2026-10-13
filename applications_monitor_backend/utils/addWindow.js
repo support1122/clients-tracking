@@ -118,7 +118,7 @@ export function windowsSince(lastAddedAt, nowMs = Date.now()) {
  * @param {unknown} rawTargetJobCount
  * @returns {{ target: number, isDefault: boolean }}
  */
-export const DEFAULT_DAILY_TARGET = 30;
+export const DEFAULT_DAILY_TARGET = 25;
 
 export function effectiveDailyTarget(rawTargetJobCount) {
   const raw = Number(rawTargetJobCount);
