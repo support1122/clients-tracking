@@ -100,6 +100,12 @@ function rowPlanKey(r) {
 // (utils/clientAlerts.js) so the panel, the row badges and any future digest
 // can never disagree; the client only supplies presentation.
 const ALERT_CODES = {
+  stripe_mismatch: {
+    title: 'Plan mismatch',
+    blurb: 'Client registered on a different plan than what they paid for on Stripe.',
+    tint: 'text-red-700 bg-red-50 border-red-200',
+    chip: 'border-red-300 bg-red-50 text-red-800'
+  },
   no_adds: {
     title: 'No jobs added',
     blurb: 'Active clients with nothing added in the last operator window or longer.',
@@ -113,7 +119,7 @@ const ALERT_CODES = {
     chip: 'border-amber-300 bg-amber-50 text-amber-900'
   }
 };
-const ALERT_ORDER = ['no_adds', 'not_applied'];
+const ALERT_ORDER = ['stripe_mismatch', 'no_adds', 'not_applied'];
 
 // Columns rendered by the table below. Every row — header, data, skeleton and
 // the two full-width placeholders — must agree on this number. It used to be
@@ -290,7 +296,7 @@ export default function ClientJobAnalysis() {
   const [statusFilter, setStatusFilter] = useState('');   // '' | active | inactive
   const [phaseFilter, setPhaseFilter] = useState('');     // '' | new | paused | unpaused
   const [addFilter, setAddFilter] = useState('');         // '' | under | stale | met
-  const [countryFilter, setCountryFilter] = useState(''); // '' | USA | Canada | UK | blank
+  const [countryFilter, setCountryFilter] = useState(''); // '' | USA | Canada | UK | Australia | Europe | blank
   const [dashboardMgrFilter, setDashboardMgrFilter] = useState('');
   // '' | prime | ignite | professional | executive | blank | other | mismatch.
   // 'mismatch' is not a plan: the ⚠ Payment mismatch badge renders in this same
@@ -305,7 +311,7 @@ export default function ClientJobAnalysis() {
   //                     | no_payment_email
   const [deliveryFilter, setDeliveryFilter] = useState('');
   const [addSortDir, setAddSortDir] = useState(null);     // null | 'worst' | 'best'
-  const [alertFilter, setAlertFilter] = useState('');     // '' | no_adds | not_applied
+  const [alertFilter, setAlertFilter] = useState('');     // '' | stripe_mismatch | no_adds | not_applied
   const [alertsOpen, setAlertsOpen] = useState(false);    // expanded client list
   // Hidden for the rest of this browser session only. Deliberately sessionStorage
   // and not localStorage: an operator who dismisses this on Monday must still be
@@ -649,7 +655,7 @@ export default function ClientJobAnalysis() {
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(data.error || 'Failed to save');
       const next =
-        data.clientCountry === 'USA' || data.clientCountry === 'Canada'
+        ['USA', 'Canada', 'UK', 'Australia', 'Europe'].includes(data.clientCountry)
           ? data.clientCountry
           : null;
       setRows((prev) =>
@@ -873,11 +879,13 @@ export default function ClientJobAnalysis() {
 
   // Country counts computed from all rows (not filtered) so the badges always show totals
   const countryCounts = useMemo(() => {
-    const counts = { USA: 0, Canada: 0, UK: 0, blank: 0 };
+    const counts = { USA: 0, Canada: 0, UK: 0, Australia: 0, Europe: 0, blank: 0 };
     for (const r of rows) {
       if (r.clientCountry === 'USA') counts.USA++;
       else if (r.clientCountry === 'Canada') counts.Canada++;
       else if (r.clientCountry === 'UK') counts.UK++;
+      else if (r.clientCountry === 'Australia') counts.Australia++;
+      else if (r.clientCountry === 'Europe') counts.Europe++;
       else counts.blank++;
     }
     return counts;
@@ -1030,7 +1038,7 @@ export default function ClientJobAnalysis() {
   }, [rows]);
 
   const alertCounts = useMemo(() => {
-    const out = { total: 0, critical: 0, no_adds: 0, not_applied: 0 };
+    const out = { total: 0, critical: 0, stripe_mismatch: 0, no_adds: 0, not_applied: 0 };
     for (const r of alertRows) {
       for (const a of r.alerts || []) {
         out.total += 1;
@@ -1111,6 +1119,8 @@ export default function ClientJobAnalysis() {
               { key: 'USA', label: 'USA', color: 'text-blue-600' },
               { key: 'Canada', label: 'Canada', color: 'text-red-500' },
               { key: 'UK', label: 'UK', color: 'text-purple-600' },
+              { key: 'Australia', label: 'Australia', color: 'text-emerald-600' },
+              { key: 'Europe', label: 'Europe', color: 'text-amber-600' },
               { key: 'blank', label: 'Blank', color: 'text-gray-400' },
             ].map(({ key, label, color }) => (
               <button
@@ -1421,6 +1431,8 @@ export default function ClientJobAnalysis() {
                       { value: 'USA', label: `USA (${countryCounts.USA})` },
                       { value: 'Canada', label: `Canada (${countryCounts.Canada})` },
                       { value: 'UK', label: `UK (${countryCounts.UK})` },
+                      { value: 'Australia', label: `Australia (${countryCounts.Australia})` },
+                      { value: 'Europe', label: `Europe (${countryCounts.Europe})` },
                       { value: 'blank', label: `Blank (${countryCounts.blank})` },
                     ]}
                   />
@@ -1803,7 +1815,7 @@ export default function ClientJobAnalysis() {
                       {userRole === 'admin' ? (
                         <select
                           value={
-                            ['USA', 'Canada', 'UK'].includes(r.clientCountry)
+                            ['USA', 'Canada', 'UK', 'Australia', 'Europe'].includes(r.clientCountry)
                               ? r.clientCountry
                               : ''
                           }
@@ -1816,10 +1828,12 @@ export default function ClientJobAnalysis() {
                           <option value="USA">USA</option>
                           <option value="Canada">Canada</option>
                           <option value="UK">UK</option>
+                          <option value="Australia">Australia</option>
+                          <option value="Europe">Europe</option>
                         </select>
                       ) : (
                         <span className="text-[11px] text-slate-700">
-                          {['USA', 'Canada', 'UK'].includes(r.clientCountry)
+                          {['USA', 'Canada', 'UK', 'Australia', 'Europe'].includes(r.clientCountry)
                             ? r.clientCountry
                             : '—'}
                         </span>

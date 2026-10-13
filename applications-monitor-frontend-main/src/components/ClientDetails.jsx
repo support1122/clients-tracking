@@ -496,6 +496,8 @@ const ClientDetails = ({ clientEmail, onClose, userRole = 'admin', onStatusUpdat
                                 <option value="₹">₹ (INR)</option>
                                 <option value="CAD">CAD</option>
                                 <option value="£">£ (GBP)</option>
+                                <option value="AUD">AUD</option>
+                                <option value="€">€ (EUR)</option>
                               </select>
                             </div>
                             <div className="col-span-3">

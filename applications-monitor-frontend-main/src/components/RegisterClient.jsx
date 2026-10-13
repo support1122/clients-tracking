@@ -781,6 +781,8 @@ const RegisterClient = () => {
                       <option value="UK">🇬🇧 UK</option>
                       <option value="USA">🇺🇸 USA</option>
                       <option value="Canada">🇨🇦 Canada</option>
+                      <option value="Australia">🇦🇺 Australia</option>
+                      <option value="Europe">🇪🇺 Europe</option>
                     </select>
                   </div>
 
