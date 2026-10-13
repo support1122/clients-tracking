@@ -19,10 +19,10 @@ const RegisterClient = () => {
     paymentEmail: '',
     // Max number of jobs operators can push for this client. Enforced by
     // dashboard /addjob via ProfileModel.targetJobCount. Pre-filled with the
-    // standard 30/day target so every new client is capped by default; the
-    // operator can change it. (Clearing it falls back to the same 30 default
+    // standard 25/day target so every new client is capped by default; the
+    // operator can change it. (Clearing it falls back to the same 25 default
     // that dailyCapGuard enforces server-side.)
-    targetJobCount: '30',
+    targetJobCount: '25',
     clientCountry: ''
   });
 
@@ -331,7 +331,7 @@ const RegisterClient = () => {
         currency: "$",
         clientNumber: "",
         paymentEmail: "",
-        targetJobCount: "30",
+        targetJobCount: "25",
       });
       setErrors({});
       setShowForm(false);
@@ -688,8 +688,6 @@ const RegisterClient = () => {
                         <option value="₹">₹ (Rupee)</option>
                         <option value="CAD">CAD (Canadian Dollar)</option>
                         <option value="£">£ (Pound)</option>
-                        <option value="AUD">AUD (Australian Dollar)</option>
-                        <option value="€">€ (Euro)</option>
                       </select>
                     </div>
                     <div className="col-span-2">
@@ -759,13 +757,13 @@ const RegisterClient = () => {
                       name="targetJobCount"
                       value={formData.targetJobCount}
                       onChange={handleInputChange}
-                      placeholder="e.g. 50  (default 30)"
+                      placeholder="e.g. 50  (default 25)"
                       min="0"
                       max="10000"
                       step="5"
                       className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-amber-500 focus:border-amber-500 border-gray-300"
                     />
-                    <p className="text-xs text-gray-500 mt-1">Caps the total number of jobs operators (scraper + extension) can push to this client's tracker. Once reached, /addjob refuses with TARGET_REACHED. Defaults to 30 if left empty.</p>
+                    <p className="text-xs text-gray-500 mt-1">Caps the total number of jobs operators (scraper + extension) can push to this client's tracker. Once reached, /addjob refuses with TARGET_REACHED. Defaults to 25 if left empty.</p>
                   </div>
 
                   {/* Client Country */}

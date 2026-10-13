@@ -98,12 +98,17 @@ export default function JobrightCredsBody({ data }) {
             <Field label="JR email" value={creds.jrEmail} />
             <Field label="JR pass" value={creds.jrPassword} secret />
             {/* The dashboard-panel login is a different account; shown only when
-                it has been filled in, since the toggle never writes it. */}
-            {(creds.extEmail || creds.extPassword || creds.extCode) && (
+                it has been filled in, since the toggle never writes it.
+
+                The operator code is deliberately NOT shown. It is the same
+                code for everyone, it is not per-client information, and this
+                panel sits on a screen managers share and screenshot. The
+                backend stops sending it too, so it is absent from the
+                response rather than merely hidden in the markup. */}
+            {(creds.extEmail || creds.extPassword) && (
                 <div className="mt-1 pt-1 border-t border-slate-200">
                     <Field label="Panel email" value={creds.extEmail} />
                     <Field label="Panel pass" value={creds.extPassword} secret />
-                    <Field label="Op code" value={creds.extCode} secret />
                 </div>
             )}
             {creds.hcSearch && (

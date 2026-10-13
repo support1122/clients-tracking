@@ -301,7 +301,10 @@ async function fetchAutopilotJrCreds(email) {
         jrPassword: d.jrPassword || '',
         extEmail: d.extEmail || '',
         extPassword: d.extPassword || '',
-        extCode: d.extCode || '',
+        // extCode is deliberately not returned. It is the same operator code
+        // for every client, so it is not information this panel exists to
+        // show, and sending it would put a shared secret in the browser's
+        // network tab on a screen that gets screenshotted.
         hcSearch: d.hcSearch || '',
         // The autopilot can only log in unattended when both halves are there,
         // so state the conclusion rather than leaving the UI to infer it.
@@ -9149,7 +9152,7 @@ function chunkDiscordLines(header, lines) {
  * the next morning when nothing can be done.
  *
  * Target is the SAME number dailyCapGuard enforces as the ceiling
- * (profile.targetJobCount, else 30). One number, so the report can never
+ * (profile.targetJobCount, else 25). One number, so the report can never
  * disagree with the counter the extension shows the same operator.
  */
 async function runAddShortfallReport({ triggeredSource = 'cron', triggeredBy = '' } = {}) {

@@ -1102,13 +1102,13 @@ function ClientDetailPane({ row, onProfileChanged }) {
                             🎯 Target job count cap
                         </h3>
                         <p className="text-xs text-slate-500 mt-1">
-                            Daily cap. <code>/addjob</code> refuses ops pushes once today's count hits this number — resets at 10:00 PM IST. Empty = falls back to default 30/day.
+                            Daily cap. <code>/addjob</code> refuses ops pushes once today's count hits this number — resets at 10:00 PM IST. Empty = falls back to default 25/day.
                         </p>
                     </div>
                     {(() => {
                         const ci = history?.capInfo || {};
                         const todayOps = Number.isFinite(Number(ci.currentOps)) ? ci.currentOps : 0;
-                        const eff = ci.effectiveCap ?? row.targetJobCount ?? 30;
+                        const eff = ci.effectiveCap ?? row.targetJobCount ?? 25;
                         const isDefault = ci.isDefaultCap === true || row.targetJobCount == null;
                         const reached = todayOps >= eff;
                         return (
