@@ -15,6 +15,8 @@
 //   POST /update-ai-summary         — manual edit save
 //   POST /update-target-jobs        — set/remove cap
 //   GET  /push-history?email=       — daily pushes (chart)
+//   GET  /uk-sponsor-only?email=    — UK client? sponsors-only switch + places
+//   POST /update-uk-sponsor-only    — flip the switch (UK clients only)
 
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import toast from 'react-hot-toast';
@@ -1094,6 +1096,9 @@ function ClientDetailPane({ row, onProfileChanged }) {
                 )}
             </div>
 
+            {/* UK visa sponsors only — rendered for UK clients only */}
+            <UkSponsorCard email={row.email} />
+
             {/* Target cap */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
                 <div className="flex items-start justify-between gap-3 mb-3">
@@ -1682,6 +1687,224 @@ function ClientDetailPane({ row, onProfileChanged }) {
 // passwords and most visits to this page are not about credentials. A 403 is
 // reported plainly: only admins and team leads may read these, and silently
 // rendering nothing would look identical to "this client has none".
+// "UK visa sponsors only". Renders nothing unless the dashboard backend says
+// this is a UK client (clientCountry "UK", or a "£" payment when the country
+// is unset). When on, the backend refuses every operator push whose employer
+// is not on the Home Office sponsor register with a Skilled Worker licence
+// (Utils/ukVisaSponsor.js); the extension shows those as "blocked".
+const PLACE_STYLE = {
+    london: 'bg-indigo-50 text-indigo-800 border-indigo-200',
+    city: 'bg-sky-50 text-sky-800 border-sky-200',
+    nation: 'bg-violet-50 text-violet-800 border-violet-200',
+    uk: 'bg-violet-50 text-violet-800 border-violet-200',
+    other: 'bg-slate-50 text-slate-500 border-slate-200',
+};
+
+function UkSponsorCard({ email }) {
+    const [status, setStatus] = useState(null);
+    const [loadError, setLoadError] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [company, setCompany] = useState('');
+    const [lookup, setLookup] = useState(null);
+    const [lookingUp, setLookingUp] = useState(false);
+
+    async function load() {
+        setLoadError('');
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/uk-sponsor-only?email=${encodeURIComponent(email)}`);
+            const body = await r.json().catch(() => null);
+            if (!r.ok || !body?.success) throw new Error(body?.message || `HTTP ${r.status}`);
+            setStatus(body);
+        } catch (e) {
+            setStatus(null);
+            setLoadError(e.message || 'Failed to load');
+        }
+    }
+
+    useEffect(() => {
+        setStatus(null);
+        setLookup(null);
+        setCompany('');
+        load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [email]);
+
+    async function toggle() {
+        if (!status) return;
+        const enabled = !status.enabled;
+        setSaving(true);
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/update-uk-sponsor-only`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ email, enabled, updatedBy: 'admin-summaries-page' }),
+            });
+            const body = await r.json().catch(() => null);
+            if (!r.ok || !body?.success) throw new Error(body?.message || `HTTP ${r.status}`);
+            toast.success(enabled ? 'UK visa sponsors only: ON' : 'UK visa sponsors only: OFF');
+            await load();
+        } catch (e) {
+            toast.error(e.message || 'Save failed');
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    async function check(e) {
+        e.preventDefault();
+        const q = company.trim();
+        if (!q) return;
+        setLookingUp(true);
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/uk-visa-sponsors/lookup?company=${encodeURIComponent(q)}`);
+            const body = await r.json().catch(() => null);
+            if (!r.ok || !body?.success) throw new Error(body?.message || `HTTP ${r.status}`);
+            setLookup(body);
+        } catch (err) {
+            setLookup({ error: err.message || 'Lookup failed' });
+        } finally {
+            setLookingUp(false);
+        }
+    }
+
+    // A failed load is shown, so ops know why the card is missing; a non-UK
+    // client simply gets no card.
+    if (loadError) {
+        return (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 text-xs text-red-700">
+                UK visa sponsors: {loadError}
+            </div>
+        );
+    }
+    if (!status?.isUkClient) return null;
+
+    const reg = status.register || {};
+    const places = Array.isArray(status.places) ? status.places : [];
+    const on = status.enabled === true;
+
+    return (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <div className="flex items-start justify-between gap-3 mb-4">
+                <div>
+                    <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                        🇬🇧 UK visa sponsors only
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                        When on, only jobs from employers on the Home Office register of licensed sponsors
+                        (Skilled Worker route) are added for <strong>this client</strong>. Everything else is
+                        refused by the backend and shows as <em>blocked</em> in the extension, without using the daily cap.
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    role="switch"
+                    aria-checked={on}
+                    aria-label="UK visa sponsors only"
+                    onClick={toggle}
+                    disabled={saving || (!on && !reg.sponsors)}
+                    className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${on ? 'bg-emerald-600' : 'bg-slate-300'}`}
+                >
+                    <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${on ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className={`px-2.5 py-1 rounded-full font-bold ${on ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                    {saving ? 'Saving…' : on ? 'On: sponsors only' : 'Off: all employers'}
+                </span>
+                <span className="text-slate-500">
+                    Country: <strong className="text-slate-700">UK</strong>
+                    {status.countrySource === 'amountPaid' && ' (from the £ payment; country not set in Client Job Analysis)'}
+                </span>
+                {status.updatedAt && (
+                    <span className="text-slate-400">
+                        · changed {new Date(status.updatedAt).toLocaleString()}
+                    </span>
+                )}
+            </div>
+
+            <div className="mt-4">
+                <div className="text-[10px] uppercase tracking-wide font-bold text-slate-500 mb-1.5">
+                    Where they want to work
+                </div>
+                {places.length ? (
+                    <div className="flex flex-wrap gap-1.5">
+                        {places.map((pl) => (
+                            <span
+                                key={`${pl.kind}:${pl.place}`}
+                                className={`px-2 py-1 rounded-lg border text-[11px] ${PLACE_STYLE[pl.kind] || PLACE_STYLE.other}`}
+                                title={pl.kind === 'other' ? 'Not a UK location on the sponsor register' : undefined}
+                            >
+                                📍 {pl.place}
+                                {pl.sponsors != null && pl.kind !== 'other' && (
+                                    <span className="ml-1 font-semibold">· {pl.sponsors.toLocaleString()} sponsors</span>
+                                )}
+                                {(pl.kind === 'nation' || pl.kind === 'uk') && <span className="ml-1 opacity-70">· nation-wide</span>}
+                                {pl.kind === 'other' && <span className="ml-1 opacity-70">· not on register</span>}
+                            </span>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="text-[11px] text-slate-400">
+                        {(status.preferredLocations || []).length
+                            ? `No UK places recognised in: ${status.preferredLocations.join(', ')}`
+                            : 'No preferred locations on the profile.'}
+                    </div>
+                )}
+                <p className="text-[10px] text-slate-400 mt-1.5">
+                    Counts are Skilled Worker sponsors registered in that place. The register lists head offices,
+                    so a sponsor elsewhere can still hire there; this is context, not a filter.
+                </p>
+            </div>
+
+            <form onSubmit={check} className="mt-4 pt-4 border-t border-slate-100">
+                <label htmlFor={`uk-sponsor-check-${email}`} className="text-[10px] uppercase tracking-wide font-bold text-slate-500">
+                    Check an employer
+                </label>
+                <div className="flex gap-2 mt-1.5">
+                    <input
+                        id={`uk-sponsor-check-${email}`}
+                        type="text"
+                        value={company}
+                        onChange={(e) => setCompany(e.target.value)}
+                        placeholder="e.g. Barclays"
+                        maxLength={200}
+                        className="flex-1 min-w-0 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <button
+                        type="submit"
+                        disabled={lookingUp || !company.trim()}
+                        className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {lookingUp ? 'Checking…' : 'Check'}
+                    </button>
+                </div>
+                {lookup && (
+                    <div className={`mt-2 text-xs rounded-lg px-3 py-2 border ${
+                        lookup.error ? 'bg-red-50 text-red-800 border-red-200'
+                            : lookup.sponsor ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}>
+                        {lookup.error
+                            ? lookup.error
+                            : lookup.sponsor
+                                ? <>✓ Sponsor: <strong>{lookup.name}</strong> ({lookup.match === 'prefix' ? 'brand match' : 'exact match'}){lookup.ukvjVerified ? ' · actively posting sponsored jobs' : ''}</>
+                                : lookup.reason === 'NO_SKILLED_WORKER_ROUTE'
+                                    ? <>✗ <strong>{lookup.name}</strong> holds a licence, but not for the Skilled Worker route. Would be blocked.</>
+                                    : <>✗ Not on the sponsor register. Would be blocked.</>}
+                    </div>
+                )}
+            </form>
+
+            <div className="mt-3 text-[10px] text-slate-400">
+                {reg.sponsors
+                    ? `${reg.sponsors.toLocaleString()} sponsors loaded · register of ${reg.registerDate || 'unknown date'}`
+                    : 'Sponsor register not imported yet, so the switch cannot be turned on.'}
+            </div>
+        </div>
+    );
+}
+
 function JobrightCredsCard({ email }) {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(false);
