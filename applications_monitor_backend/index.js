@@ -1203,9 +1203,13 @@ export const createOrUpdateClient = async (req, res) => {
       console.warn(`[clients] unknown planType "${planType}" for ${emailLower} — defaulting to ${DEFAULT_PLAN.planLabel}`);
     }
 
-    // Resolve currency: use explicit value from body first, then detect from amountPaid prefix
+    // Resolve currency: explicit value from body first (symbol or ISO code), then the
+    // amountPaid prefix. Anything outside the supported list falls back to USD.
     const currencySymbolMap = { "$": "USD", "₹": "INR", "£": "GBP", "€": "EUR", "CAD": "CAD", "AUD": "AUD" };
-    const amountPaidStr = String(amountPaid || "");
+    const SUPPORTED_CURRENCIES = ["USD", "INR", "GBP", "EUR", "CAD", "AUD"];
+    const CURRENCY_PREFIX = { USD: "$", INR: "₹", GBP: "£", EUR: "€", CAD: "CAD", AUD: "AUD" };
+    const CURRENCY_COUNTRY = { CAD: "Canada", AUD: "Australia", GBP: "UK", EUR: "Europe" };
+    const amountPaidStr = String(amountPaid || "").trim();
     const amountDetected = amountPaidStr.toUpperCase().startsWith("CAD") ? "CAD"
       : amountPaidStr.toUpperCase().startsWith("AUD") ? "AUD"
       : amountPaidStr.startsWith("₹") ? "INR"
@@ -1213,7 +1217,17 @@ export const createOrUpdateClient = async (req, res) => {
       : amountPaidStr.startsWith("€") ? "EUR"
       : amountPaidStr.startsWith("$") ? "USD"
       : null;
-    const detectedCurrency = (currencySymbolMap[currencyFromBody] || currencyFromBody?.toUpperCase() || amountDetected || "USD");
+    const bodyCurrency = typeof currencyFromBody === 'string' ? currencyFromBody.trim() : '';
+    const bodyCurrencyCode = currencySymbolMap[bodyCurrency] || bodyCurrency.toUpperCase();
+    const detectedCurrency = SUPPORTED_CURRENCIES.includes(bodyCurrencyCode)
+      ? bodyCurrencyCode
+      : (amountDetected || "USD");
+    // Keep the stored amountPaid prefix in step with the resolved currency
+    // (e.g. a bare "500" with currency AUD is stored as "AUD500").
+    const amountPaidNormalized = amountPaidStr && /^[\d.,]+$/.test(amountPaidStr)
+      ? `${CURRENCY_PREFIX[detectedCurrency]}${amountPaidStr}`
+      : amountPaid;
+    const resolvedClientCountry = clientCountry || CURRENCY_COUNTRY[detectedCurrency] || undefined;
 
     const userData = {
       name,
@@ -1299,12 +1313,13 @@ export const createOrUpdateClient = async (req, res) => {
           username: "",
           password: "",
         },
-        amountPaid: amountPaid || 0,
+        amountPaid: amountPaidNormalized || 0,
+        currency: detectedCurrency,
         amountPaidDate: amountPaidDate || " ",
         modeOfPayment: modeOfPayment || "paypal",
         paymentEmail: paymentEmailNorm,
         crmEmail: typeof oldEmail === 'string' ? oldEmail.trim().toLowerCase() : '',
-        ...(clientCountry && { clientCountry }),
+        ...(resolvedClientCountry && { clientCountry: resolvedClientCountry }),
         status: status !== undefined && status !== null && status !== '' ? status : "active",
         isPaused: true,
         onboardingPhase: true,

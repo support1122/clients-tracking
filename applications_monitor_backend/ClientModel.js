@@ -155,6 +155,12 @@ export const ClientSchema = new mongoose.Schema({
     required: false,
     default: '0'
   },
+  /** ISO currency code the client paid in (amountPaid also carries a symbol/code prefix). */
+  currency: {
+    type: String,
+    enum: ["USD", "INR", "GBP", "EUR", "CAD", "AUD"],
+    default: "USD"
+  },
   amountPaidDate: {
     type: String,
     required: true,
