@@ -1099,6 +1099,9 @@ function ClientDetailPane({ row, onProfileChanged }) {
             {/* UK visa sponsors only — rendered for UK clients only */}
             <UkSponsorCard email={row.email} />
 
+            {/* US H-1B sponsors only — rendered for US clients only */}
+            <UsSponsorCard email={row.email} />
+
             {/* Target cap */}
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
                 <div className="flex items-start justify-between gap-3 mb-3">
@@ -1900,6 +1903,179 @@ function UkSponsorCard({ email }) {
                 {reg.sponsors
                     ? `${reg.sponsors.toLocaleString()} sponsors loaded · register of ${reg.registerDate || 'unknown date'}`
                     : 'Sponsor register not imported yet, so the switch cannot be turned on.'}
+            </div>
+        </div>
+    );
+}
+
+// "US H-1B sponsors only" (dashboard backend Utils/usVisaSponsor.js). Same
+// shape as UkSponsorCard; the sponsor data is held in the backend's memory,
+// built from US Department of Labor H-1B filings (ellis.com + flexapply.org).
+function UsSponsorCard({ email }) {
+    const [status, setStatus] = useState(null);
+    const [loadError, setLoadError] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [company, setCompany] = useState('');
+    const [lookup, setLookup] = useState(null);
+    const [lookingUp, setLookingUp] = useState(false);
+
+    async function load() {
+        setLoadError('');
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/us-sponsor-only?email=${encodeURIComponent(email)}`);
+            const body = await r.json().catch(() => null);
+            if (!r.ok || !body?.success) throw new Error(body?.message || `HTTP ${r.status}`);
+            setStatus(body);
+        } catch (e) {
+            setStatus(null);
+            setLoadError(e.message || 'Failed to load');
+        }
+    }
+
+    useEffect(() => {
+        setStatus(null);
+        setLookup(null);
+        setCompany('');
+        load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [email]);
+
+    async function toggle() {
+        if (!status) return;
+        const enabled = !status.enabled;
+        setSaving(true);
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/update-us-sponsor-only`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ email, enabled, updatedBy: 'admin-summaries-page' }),
+            });
+            const body = await r.json().catch(() => null);
+            if (!r.ok || !body?.success) throw new Error(body?.message || `HTTP ${r.status}`);
+            toast.success(enabled ? 'US H-1B sponsors only: ON' : 'US H-1B sponsors only: OFF');
+            await load();
+        } catch (e) {
+            toast.error(e.message || 'Save failed');
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    async function check(e) {
+        e.preventDefault();
+        const q = company.trim();
+        if (!q) return;
+        setLookingUp(true);
+        try {
+            const r = await fetch(`${DASHBOARD_BASE}/us-visa-sponsors/lookup?company=${encodeURIComponent(q)}`);
+            const body = await r.json().catch(() => null);
+            if (!r.ok || !body?.success) throw new Error(body?.message || `HTTP ${r.status}`);
+            setLookup(body);
+        } catch (err) {
+            setLookup({ error: err.message || 'Lookup failed' });
+        } finally {
+            setLookingUp(false);
+        }
+    }
+
+    if (loadError) {
+        return (
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 text-xs text-red-700">
+                US H-1B sponsors: {loadError}
+            </div>
+        );
+    }
+    if (!status?.isUsClient) return null;
+
+    const data = status.data || {};
+    const on = status.enabled === true;
+    const since = data.since ? new Date(`${data.since}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', year: 'numeric', timeZone: 'UTC' }) : '';
+    const matchLabel = { exact: 'exact match', prefix: 'brand match', alias: 'known brand' };
+
+    return (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <div className="flex items-start justify-between gap-3 mb-4">
+                <div>
+                    <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                        🇺🇸 US H-1B sponsors only
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                        When on, only jobs from employers that filed an H-1B since {since || 'the cutoff'} are added
+                        for <strong>this client</strong> (US Department of Labor filings). Everything else is refused
+                        by the backend and shows as <em>blocked</em> in the extension, without using the daily cap.
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    role="switch"
+                    aria-checked={on}
+                    aria-label="US H-1B sponsors only"
+                    onClick={toggle}
+                    disabled={saving || (!on && !data.loaded)}
+                    className={`relative inline-flex h-7 w-12 flex-shrink-0 items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${on ? 'bg-emerald-600' : 'bg-slate-300'}`}
+                >
+                    <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${on ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className={`px-2.5 py-1 rounded-full font-bold ${on ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                    {saving ? 'Saving…' : on ? 'On: H-1B sponsors only' : 'Off: all employers'}
+                </span>
+                <span className="text-slate-500">
+                    Country: <strong className="text-slate-700">USA</strong>
+                    {status.countrySource === 'amountPaid' && ' (from the $ payment; country not set in Client Job Analysis)'}
+                </span>
+                {status.updatedAt && (
+                    <span className="text-slate-400">
+                        · changed {new Date(status.updatedAt).toLocaleString()}
+                    </span>
+                )}
+            </div>
+
+            <form onSubmit={check} className="mt-4 pt-4 border-t border-slate-100">
+                <label htmlFor={`us-sponsor-check-${email}`} className="text-[10px] uppercase tracking-wide font-bold text-slate-500">
+                    Check an employer
+                </label>
+                <div className="flex gap-2 mt-1.5">
+                    <input
+                        id={`us-sponsor-check-${email}`}
+                        type="text"
+                        value={company}
+                        onChange={(e) => setCompany(e.target.value)}
+                        placeholder="e.g. Walmart"
+                        maxLength={200}
+                        className="flex-1 min-w-0 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <button
+                        type="submit"
+                        disabled={lookingUp || !company.trim()}
+                        className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {lookingUp ? 'Checking…' : 'Check'}
+                    </button>
+                </div>
+                {lookup && (
+                    <div className={`mt-2 text-xs rounded-lg px-3 py-2 border ${
+                        lookup.error ? 'bg-red-50 text-red-800 border-red-200'
+                            : lookup.sponsor ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}>
+                        {lookup.error
+                            ? lookup.error
+                            : lookup.sponsor
+                                ? <>✓ Sponsor: <strong>{lookup.name}</strong> ({matchLabel[lookup.match] || 'match'}) · last H-1B {lookup.lastH1bFiling}{lookup.recentH1b ? ` · ${lookup.recentH1b.toLocaleString()} filed in the last year` : ''}</>
+                                : lookup.reason === 'NO_RECENT_H1B'
+                                    ? <>✗ <strong>{lookup.name}</strong> last filed an H-1B on {lookup.lastH1bFiling}. Would be blocked.</>
+                                    : <>✗ No H-1B filings found. Would be blocked.</>}
+                    </div>
+                )}
+            </form>
+
+            <div className="mt-3 text-[10px] text-slate-400">
+                {data.loaded
+                    ? `${data.employers.toLocaleString()} H-1B employers loaded on the server · data built ${data.builtAt ? new Date(data.builtAt).toLocaleDateString() : 'unknown'}`
+                    : 'Sponsor data is not loaded on the server, so the switch cannot be turned on.'}
             </div>
         </div>
     );
