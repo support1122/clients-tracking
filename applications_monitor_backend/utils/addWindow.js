@@ -106,7 +106,9 @@ export function windowsSince(lastAddedAt, nowMs = Date.now()) {
   const currentStart = addWindowStart(nowMs).getTime();
   const at = lastAddedAt.getTime();
   if (at >= currentStart) return 0;
-  return Math.floor((currentStart - at) / MS_PER_DAY) + 1;
+  // ceil, not floor + 1: an add at exactly currentStart - 24h is the first
+  // instant of the previous window (1), and floor + 1 reported it as 2.
+  return Math.ceil((currentStart - at) / MS_PER_DAY);
 }
 
 /**

@@ -58,8 +58,33 @@
  *      and the UI paints undefined the same as false. Every client would show
  *      the red "not created" J regardless of what the sync actually wrote, until
  *      a day boundary rolled the other stamps over.
+ *   5  generatedAt (ISO compute time), cacheAgeMs and servedFrom added to the
+ *      response so the UI can show how old the numbers are. Entries written
+ *      before this carry no generatedAt, so the max-age check below could not
+ *      judge them; the bump makes them unservable instead. Same bump covers
+ *      addStatsUnavailable / applyStatsUnavailable on every row, and job-side
+ *      counts now folded on trim+lowercase userID (some ghost rows disappear and
+ *      some clients' counts change), so older entries must not be served.
  */
-export const ANALYSIS_PAYLOAD_VERSION = 4;
+export const ANALYSIS_PAYLOAD_VERSION = 5;
+
+/**
+ * Hard ceiling on how old an entry may be and still be served by the
+ * stale-while-revalidate path ('l2-stale').
+ *
+ * Before this existed, any entry from the same IST day / add window / payload
+ * version was served stale however old it was: pGetAnalysisCache() enforces no
+ * maximum age, so a page load could be answered with a payload hours old, and
+ * the background recompute only helped whoever reloaded a second time. Past
+ * this age the request recomputes and the user waits for live data instead.
+ *
+ * 60s: twice the 30s ANALYSIS_CACHE_TTL, so the stale window is the 30s after
+ * expiry (the case SWR is meant for: instant answer while one background
+ * compute runs), and nothing older than a minute is ever shown as current.
+ * Measured by generatedAt, not by the cache's own exp, so it holds across
+ * instances and for entries whose exp was extended.
+ */
+export const MAX_STALE_MS = 60_000;
 
 /** 'YYYY-MM-DD' for the current IST calendar day. */
 export function istDayStamp(nowMs = Date.now()) {
@@ -77,6 +102,8 @@ export function istDayStamp(nowMs = Date.now()) {
  *                                  field existed are simply treated as stale
  *                                  rather than throwing; they carry no
  *                                  addWindowDay and so can never match.
+ * @param {number} [o.now]         epoch ms used for the max-age check (tests inject it)
+ * @param {number} [o.maxStaleMs]   override for MAX_STALE_MS
  * @param {number} [o.payloadVersion] shape version the caller expects. Optional
  *                                  for the same reason; when given, an entry
  *                                  built by older code can never match.
@@ -89,6 +116,8 @@ export function decideAnalysisCacheAction({
   istDay,
   addWindowDay = null,
   payloadVersion = null,
+  now = Date.now(),
+  maxStaleMs = MAX_STALE_MS,
 }) {
   // All three stamps must match. istDay alone is wrong between 22:00 and
   // midnight IST, when a new add window has opened but the calendar day has not
@@ -104,7 +133,12 @@ export function decideAnalysisCacheAction({
 
   if (entry && sameDay(entry.val)) {
     if (entry.fresh) return 'l2-fresh';
-    if (!forceFresh) return 'l2-stale';
+    // Stale is only servable while young. An entry with no parseable
+    // generatedAt cannot be aged, so it is not trusted either.
+    const generatedMs = Date.parse(entry.val.generatedAt);
+    if (!forceFresh && Number.isFinite(generatedMs) && now - generatedMs <= maxStaleMs) {
+      return 'l2-stale';
+    }
   }
 
   return 'compute';

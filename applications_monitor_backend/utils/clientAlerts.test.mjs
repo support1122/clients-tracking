@@ -55,6 +55,15 @@ t('singular saved',
   deriveClientAlerts({ ...base, saved: 1, appliedToday: 0, daysSinceLastApply: 3 }).find(a => a.code === ALERT.NOT_APPLIED).detail,
   '1 job card waiting. Last application was 3 days ago.');
 
+console.log('\n--- failed stats queries must not alert the whole book ---');
+// The route falls back to a zeroed stat when a stats query throws. That reads as
+// "never added" / "nothing applied", so the flags must silence the two alerts.
+t('add stats down -> no NO_ADDS',    codes({ ...base, daysSinceLastAdd: null, addStatsUnavailable: true }), '');
+t('apply stats down -> no NOT_APPLIED', codes({ ...base, saved: 12, appliedToday: 0, daysSinceLastApply: null, applyStatsUnavailable: true }), '');
+t('add down, apply live -> NOT_APPLIED still fires',
+  codes({ ...base, daysSinceLastAdd: null, addStatsUnavailable: true, saved: 5, appliedToday: 0, daysSinceLastApply: 3 }), ALERT.NOT_APPLIED);
+t('flags false -> unchanged', codes({ ...base, daysSinceLastAdd: 2, addStatsUnavailable: false }), ALERT.NO_ADDS);
+
 console.log('\n--- both at once ---');
 t('two alerts', codes({ ...base, daysSinceLastAdd: 3, saved: 20, appliedToday: 0, daysSinceLastApply: 4 }),
   `${ALERT.NO_ADDS},${ALERT.NOT_APPLIED}`);
@@ -73,7 +82,7 @@ console.log('\n--- summariseAlerts ---');
   t('critical',   s.critical, 2);
   t('no_adds',    s.byCode[ALERT.NO_ADDS], 2);
   t('not_applied',s.byCode[ALERT.NOT_APPLIED], 1);
-  t('empty input', JSON.stringify(summariseAlerts([])), '{"total":0,"clients":0,"critical":0,"byCode":{"no_adds":0,"not_applied":0}}');
+  t('empty input', JSON.stringify(summariseAlerts([])), '{"total":0,"clients":0,"critical":0,"byCode":{"no_adds":0,"not_applied":0,"stripe_mismatch":0}}');
 }
 
 console.log('\n--- istDayPatterns: index IS the age in days ---');

@@ -4,7 +4,7 @@
 //   * a cached removedByAI must never be served on a different IST day
 //   * a cached addedToday must never be served on a different 22:00-IST add window
 //   * an operator Refresh must never be answered from the stale cache
-import { istDayStamp, decideAnalysisCacheAction, ANALYSIS_PAYLOAD_VERSION } from './analysisCachePolicy.js';
+import { istDayStamp, decideAnalysisCacheAction, ANALYSIS_PAYLOAD_VERSION, MAX_STALE_MS } from './analysisCachePolicy.js';
 
 let pass = 0, fail = 0;
 const t = (name, got, want) => {
@@ -16,8 +16,12 @@ const t = (name, got, want) => {
 
 const TODAY = '2026-07-10';
 const YDAY = '2026-07-09';
-const val = (istDay) => ({ istDay, rows: [] });
-const decide = (o) => decideAnalysisCacheAction({ istDay: TODAY, ...o });
+// Entries are stamped with a generatedAt "just now" so the stale cases below test
+// the stamp logic, not the max-age rule (which has its own block further down).
+const NOW = Date.parse('2026-07-10T08:00:00Z');
+const gen = (ageMs = 0) => new Date(NOW - ageMs).toISOString();
+const val = (istDay) => ({ istDay, generatedAt: gen(), rows: [] });
+const decide = (o) => decideAnalysisCacheAction({ istDay: TODAY, now: NOW, ...o });
 
 console.log('--- istDayStamp (IST = UTC+5:30) ---');
 t('23:30 IST -> that day', istDayStamp(Date.parse('2026-07-10T18:00:00Z')), '2026-07-10');
@@ -49,8 +53,8 @@ console.log('\n--- the 22:00 IST add-window stamp ---');
 // addedToday and must not be served, even though its istDay matches.
 const WIN_TODAY = '2026-07-10';
 const WIN_NEXT = '2026-07-11';
-const wval = (istDay, addWindowDay) => ({ istDay, addWindowDay, rows: [] });
-const wdecide = (o) => decideAnalysisCacheAction({ istDay: TODAY, addWindowDay: WIN_NEXT, ...o });
+const wval = (istDay, addWindowDay) => ({ istDay, addWindowDay, generatedAt: gen(), rows: [] });
+const wdecide = (o) => decideAnalysisCacheAction({ istDay: TODAY, addWindowDay: WIN_NEXT, now: NOW, ...o });
 
 t('L1 same istDay, same window     -> l1',       wdecide({ memHit: wval(TODAY, WIN_NEXT) }), 'l1');
 t('L1 same istDay, PREV window     -> compute',  wdecide({ memHit: wval(TODAY, WIN_TODAY) }), 'compute');
@@ -70,8 +74,8 @@ console.log('\n--- the payload-shape stamp ---');
 // That shipped a row contradicting itself: passing the "under target" filter
 // (isUnderTarget true) while the badge read grey (addTargetTracked undefined).
 const V = ANALYSIS_PAYLOAD_VERSION;
-const pval = (ver) => ({ istDay: TODAY, addWindowDay: WIN_NEXT, payloadVersion: ver, rows: [] });
-const pdecide = (o) => decideAnalysisCacheAction({ istDay: TODAY, addWindowDay: WIN_NEXT, payloadVersion: V, ...o });
+const pval = (ver) => ({ istDay: TODAY, addWindowDay: WIN_NEXT, payloadVersion: ver, generatedAt: gen(), rows: [] });
+const pdecide = (o) => decideAnalysisCacheAction({ istDay: TODAY, addWindowDay: WIN_NEXT, payloadVersion: V, now: NOW, ...o });
 
 t('L1 current version           -> l1',       pdecide({ memHit: pval(V) }), 'l1');
 t('L1 OLDER version             -> compute',  pdecide({ memHit: pval(V - 1) }), 'compute');
@@ -85,6 +89,21 @@ t('Refresh + older version      -> compute',  pdecide({ forceFresh: true, entry:
 // A caller that passes no version keeps the old two-stamp behaviour, so the
 // assertions above this block still mean exactly what they meant before.
 t('caller omits payloadVersion  -> l1',       wdecide({ memHit: pval(V - 1) }), 'l1');
+
+console.log('\n--- the max-age ceiling on stale-while-revalidate ---');
+const aged = (ageMs) => ({ entry: { val: { ...val(TODAY), generatedAt: gen(ageMs) }, fresh: false } });
+t('MAX_STALE_MS is 60s                    ', MAX_STALE_MS, 60_000);
+t('stale, 10s old                  -> l2-stale', decide(aged(10_000)), 'l2-stale');
+t('stale, exactly at the limit     -> l2-stale', decide(aged(MAX_STALE_MS)), 'l2-stale');
+t('stale, 1ms past the limit       -> compute',  decide(aged(MAX_STALE_MS + 1)), 'compute');
+t('stale, hours old, same day      -> compute',  decide(aged(3 * 60 * 60 * 1000)), 'compute');
+t('stale, no generatedAt           -> compute',  decide({ entry: { val: { istDay: TODAY, rows: [] }, fresh: false } }), 'compute');
+t('stale, garbage generatedAt      -> compute',  decide({ entry: { val: { istDay: TODAY, generatedAt: 'nope', rows: [] }, fresh: false } }), 'compute');
+t('fresh entry is not age-checked  -> l2-fresh', decide({ entry: { val: { ...val(TODAY), generatedAt: gen(5 * MAX_STALE_MS) }, fresh: true } }), 'l2-fresh');
+t('Refresh + young stale           -> compute',  decide({ forceFresh: true, ...aged(10_000) }), 'compute');
+t('custom maxStaleMs honoured      -> compute',  decide({ maxStaleMs: 5_000, ...aged(10_000) }), 'compute');
+t('stamp mismatch + young stale    -> compute',  decide({ entry: { val: { ...val(YDAY), generatedAt: gen(1_000) }, fresh: false } }), 'compute');
+t('current payload version is 5    ', ANALYSIS_PAYLOAD_VERSION, 5);
 
 console.log('\n--- the pre-fix behaviour these replace ---');
 console.log('  old: stale L2 of ANY age was served on Refresh, then refreshed in the background');
