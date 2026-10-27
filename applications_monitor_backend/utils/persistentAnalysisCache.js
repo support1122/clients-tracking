@@ -62,7 +62,7 @@ export async function pSetAnalysisCache(key, val, ttlMs) {
     if (size > MAX_PERSIST_BYTES) return;
     await AnalysisCacheModel.updateOne(
       { _id: key },
-      { $set: { val, exp: Date.now() + (ttlMs || 120_000), updatedAt: new Date() } },
+      { $set: { val, exp: Date.now() + (ttlMs || 30_000), updatedAt: new Date() } },
       { upsert: true }
     );
   } catch (err) {

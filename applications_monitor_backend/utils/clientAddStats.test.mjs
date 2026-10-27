@@ -86,7 +86,7 @@ console.log('\n--- a client who has NEVER had a job added ---');
   const m = await run([], [], [{ email: 'd@x.com', targetJobCount: null }]);
   const r = m.get('d@x.com');
   t('present from profile',  !!r, 'true');
-  t('target falls back to 30', r.dailyTarget, 30);
+  t('target falls back to 25', r.dailyTarget, 25);   // DEFAULT_DAILY_TARGET, lowered from 30 on 2026-10-13
   t('isDefaultTarget',       r.isDefaultTarget, 'true');
   t('daysSinceLastAdd null', r.daysSinceLastAdd, 'null');  // never, not "very long ago"
   t('lastAddedAt null',      r.lastAddedAt, 'null');
@@ -96,7 +96,7 @@ console.log('\n--- a typo target of 0 must not disable the target ---');
 {
   const m = await run([{ _id: 'e@x.com', addedToday: 1, addedYesterday: 0, addedPrev7Total: 0, todayOperators: [] }], [], [{ email: 'e@x.com', targetJobCount: 0 }]);
   const r = m.get('e@x.com');
-  t('target 0 -> 30',   r.dailyTarget, 30);
+  t('target 0 -> 25',   r.dailyTarget, 25);
   t('still under',      r.isUnderTarget, 'true');
 }
 

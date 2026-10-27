@@ -178,6 +178,39 @@ const AVG_DAYS_PER_MONTH = 30.4375;
 const AVG_DAYS_PER_YEAR = 365.25;
 // Drop the ".0" so a whole unit reads "3 months", not "3.0 months".
 const halfStep = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+// "Updated 12s ago". Owns its own 5s timer so the tick re-renders only this
+// label, never the whole table. Staleness is spelled out in text (not just
+// colour or a tooltip) so keyboard and touch users get it too.
+const STALE_AFTER_MS = 3 * 60_000;
+const VERY_STALE_AFTER_MS = 10 * 60_000;
+function DataAgeLabel({ updatedAt }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(id);
+  }, []);
+  const ageMs = Math.max(0, now - updatedAt);
+  const sec = Math.floor(ageMs / 1000);
+  const min = Math.floor(sec / 60);
+  const label = sec < 10 ? 'just now'
+    : sec < 60 ? `${sec}s ago`
+    : min < 60 ? `${min}m ago`
+    : `${Math.floor(min / 60)}h ${min % 60}m ago`;
+  const stale = ageMs > STALE_AFTER_MS;
+  const tone = ageMs > VERY_STALE_AFTER_MS ? 'text-red-600 font-semibold'
+    : stale ? 'text-amber-600 font-semibold'
+    : 'text-gray-500';
+  return (
+    <time
+      dateTime={new Date(updatedAt).toISOString()}
+      title={`Data computed ${new Date(updatedAt).toLocaleString()}. Auto-refreshes every minute.`}
+      className={`text-xs whitespace-nowrap ${tone}`}
+    >
+      Updated {label}{stale ? ', may be stale' : ''}
+    </time>
+  );
+}
+
 function formatSinceFirstApply(days) {
   if (days == null || !Number.isFinite(days)) return null;
   if (days < 30) return `${days} ${days === 1 ? 'day' : 'days'}`;
@@ -332,6 +365,18 @@ export default function ClientJobAnalysis() {
     underTarget: 0, addedToday: 0, staleClients: 0
   });
   const lastAppliedRef = useRef({}); // Canonical lastAppliedOperatorName from initial (no-date) load
+  // Freshness + background refresh bookkeeping. Refs, not state, so the poll
+  // timer never restarts and a tick never re-renders the table.
+  const reqSeqRef = useRef(0);          // id of the newest request started
+  const appliedSeqRef = useRef(0);      // id of the newest response applied
+  const inFlightRef = useRef(0);        // requests currently running
+  const loadingCountRef = useRef(0);    // visible (non-silent) requests running
+  const lastOkAtRef = useRef(0);        // client time of last successful fetch
+  const silentFailsRef = useRef(0);     // consecutive background failures
+  const dateRef = useRef('');           // latest picked date, read by the poll
+  // When the data on screen was computed (server `generatedAt`, else the
+  // client fetch time) and a ticking "now" so the label ages without a fetch.
+  const [dataUpdatedAt, setDataUpdatedAt] = useState(null);
 
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -347,8 +392,15 @@ export default function ClientJobAnalysis() {
     return `${d}/${m}/${y}`;
   }, []);
 
-  const fetchAnalysis = useCallback(async (selected, force = false) => {
-    setLoading(true);
+  // `silent` is for background polling: no loading flag (the table keeps its
+  // rows, scroll, filters and edits), and failures keep the last good data.
+  const fetchAnalysis = useCallback(async (selected, force = false, silent = false) => {
+    const seq = ++reqSeqRef.current;
+    inFlightRef.current += 1;
+    if (!silent) {
+      loadingCountRef.current += 1;
+      setLoading(true);
+    }
     try {
       const dateKey = selected ? convertToDMY(selected) : '';
       // `force` bypasses the BROWSER cache; `refresh: true` tells the server to
@@ -364,8 +416,14 @@ export default function ClientJobAnalysis() {
       const data = await getCached(
         `analysis:${dateKey || '__all__'}`,
         () => apiFetch('/api/analytics/client-job-analysis', { method: 'POST', body }),
-        { ttl: 30_000, force }
+        { ttl: 30_000, force: force || silent }
       );
+      // An older response must never overwrite a newer one that already landed.
+      // A background poll is also dropped when ANY newer request has started,
+      // not only landed: an edit's forced refetch is newer than the poll, and a
+      // poll arriving first would briefly revert the optimistic row.
+      if (seq < appliedSeqRef.current || (silent && seq !== reqSeqRef.current)) return;
+      appliedSeqRef.current = seq;
       const newRows = data.rows || [];
 
       if (!selected) {
@@ -383,10 +441,28 @@ export default function ClientJobAnalysis() {
       }
 
       if (data.summary) setSummaryCounts(data.summary);
+      const gen = data.generatedAt ? Date.parse(data.generatedAt) : NaN;
+      setDataUpdatedAt(Number.isFinite(gen) ? gen : Date.now());
+      lastOkAtRef.current = Date.now();
+      silentFailsRef.current = 0;
     } catch {
-      toast.error('Failed to load client job analysis');
+      if (!silent) {
+        toast.error('Failed to load client job analysis');
+      } else {
+        // Keep the last good data; speak up once after repeated failures.
+        silentFailsRef.current += 1;
+        if (silentFailsRef.current === 3) {
+          toast.error('Auto-refresh is failing. Showing the last loaded data.');
+        }
+      }
     } finally {
-      setLoading(false);
+      inFlightRef.current -= 1;
+      // Counted, not toggled: a dropped older response must not clear the
+      // spinner of a newer visible fetch that is still running.
+      if (!silent) {
+        loadingCountRef.current -= 1;
+        if (loadingCountRef.current <= 0) setLoading(false);
+      }
     }
   }, [convertToDMY]);
 
@@ -464,6 +540,30 @@ export default function ClientJobAnalysis() {
 
   useEffect(() => {
     fetchAnalysis();
+  }, [fetchAnalysis]);
+
+  useEffect(() => { dateRef.current = date; }, [date]);
+
+  // Auto-refresh: one 60s timer while the tab is visible, plus an immediate
+  // refetch when the tab comes back and the data is older than 30s. Never
+  // overlaps a request that is still running.
+  useEffect(() => {
+    const AUTO_MS = 60_000;
+    const RESUME_STALE_MS = 30_000;
+    const run = () => {
+      if (document.visibilityState !== 'visible' || inFlightRef.current > 0) return;
+      fetchAnalysis(dateRef.current || undefined, false, true);
+    };
+    const id = setInterval(run, AUTO_MS);
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastOkAtRef.current > RESUME_STALE_MS) run();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [fetchAnalysis]);
 
   // Load mail-connection status on mount (refreshed alongside the Refresh button).
@@ -1181,6 +1281,7 @@ export default function ClientJobAnalysis() {
             >
               {loading ? 'Loading...' : 'Refresh'}
             </button>
+            {dataUpdatedAt && <DataAgeLabel updatedAt={dataUpdatedAt} />}
             {isAdmin && (
               <button
                 type="button"

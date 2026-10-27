@@ -84,6 +84,7 @@ import {
   getAnalysisCache,
   setAnalysisCache,
   clearAnalysisCache,
+  analysisCacheGeneration,
   ANALYSIS_CACHE_TTL,
   LAST_APPLIED_CACHE_TTL
 } from './utils/analysisCache.js';
@@ -1523,6 +1524,10 @@ const updateClientOperationsName = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Client not found' });
     }
 
+    // operationsName is a column on the analysis rows; drop cached payloads.
+    clearAnalysisCache();
+    pClearAnalysisCache().catch(() => {});
+
     res.status(200).json({ success: true, client });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -1661,6 +1666,10 @@ const upgradeClientPlan = async (req, res) => {
     );
 
     const updatedClient = await ClientModel.findOne({ email: emailLower }).lean();
+
+    // Plan drives the daily target and the plan-cap columns of the analysis rows.
+    clearAnalysisCache();
+    pClearAnalysisCache().catch(() => {});
 
     res.status(200).json({
       success: true,
@@ -3943,10 +3952,16 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     // Re-apply time-sensitive formatting to cached rows before serving: operator
     // display name + "paused days" (grows with wall-clock time, so must be recomputed).
-    const freshenForResponse = (result) => {
+    const freshenForResponse = (result, servedFrom) => {
       if (!result || !Array.isArray(result.rows)) return result;
+      // cacheAgeMs is derived from generatedAt NOW, never read from the stored
+      // payload: the stored copy was written at compute time, so its age would
+      // be frozen at ~0 and every cached answer would claim to be live.
+      const genMs = Date.parse(result.generatedAt);
       return {
         ...result,
+        servedFrom,
+        cacheAgeMs: Number.isFinite(genMs) ? Math.max(0, Date.now() - genMs) : null,
         rows: result.rows.map((row) => ({
           ...row,
           lastAppliedOperatorName: formatLastAppliedOperatorDisplayName(row.lastAppliedOperatorName || '', { keepUser: true }),
@@ -3954,9 +3969,12 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         }))
       };
     };
-    const serve = (result, freshen) => {
-      const out = freshen ? freshenForResponse(result) : result;
-      if (out && Array.isArray(out.rows)) {
+    const serve = (result, servedFrom) => {
+      const out = freshenForResponse(result, servedFrom);
+      // Only when the numbers were just computed. The notice is idempotent, but it
+      // costs sequential Mongo reads per qualifying row, and with 60s polling from
+      // several tabs every cache hit would repeat them for data that has not moved.
+      if (servedFrom === 'compute' && out && Array.isArray(out.rows)) {
         runHighAppliedJobsNotifications(out.rows).catch((err) =>
           console.error('[client-job-analysis] runHighAppliedJobsNotifications:', err?.message || err)
         );
@@ -3966,6 +3984,12 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     // Heavy compute (cold path). Closes over date/cacheKey; stores to both cache layers.
     const computeFull = async () => {
+    // Snapshot time and cache generation at the START. generatedAt must describe
+    // when the data was read, not when the referral lookup finished seconds later,
+    // and a cache clear that lands mid-compute (an operator edit) must stop this
+    // run from storing its now-outdated payload.
+    const startedAt = new Date();
+    const genAtStart = analysisCacheGeneration();
     // Build multi-format date regex if provided (for appliedDate)
     let multiFormatDateRegex = null;
     if (date && typeof date === 'string' && /^(\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2})$/.test(date)) {
@@ -4011,14 +4035,17 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     // ── Phase 1: Run ALL aggregations + client query in parallel ──
     // The last-applied aggregation does a $sort over every applied job (the
-    // heaviest stage), so it gets its own 5-min cache, backed cross-instance.
+    // heaviest stage), so it gets its own longer-lived cache, backed cross-instance.
     // Version is IN THE KEY, not compared after the read: this entry is a bare
     // array with nowhere to hang a stamp, and a deploy that changes what the
     // aggregation returns must not keep serving the previous shape for the rest
     // of the TTL.
     const lastAppliedKey = `__lastAppliedOperator__v${ANALYSIS_PAYLOAD_VERSION}`;
-    let cachedLastApplied = getAnalysisCache(lastAppliedKey);
-    if (!cachedLastApplied) {
+    // A forced Refresh skips this cache entirely (and rewrites it below), or the
+    // "last applied operator" column would lag by up to LAST_APPLIED_CACHE_TTL
+    // behind a button that promises live data.
+    let cachedLastApplied = forceFresh ? null : getAnalysisCache(lastAppliedKey);
+    if (!cachedLastApplied && !forceFresh) {
       const pLA = await pGetAnalysisCache(lastAppliedKey);
       if (pLA && pLA.fresh) cachedLastApplied = pLA.val;
     }
@@ -4188,7 +4215,9 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
           // Never let the new columns take down an endpoint the CRM depends on.
           // An empty map degrades to dashes in the UI, not a 500.
           console.error('[client-job-analysis] computeClientAddStats:', err?.message || err);
-          return new Map();
+          // null, not an empty Map: an empty Map reads as "nobody ever had a job
+          // added" and would raise a critical NO_ADDS on every active client.
+          return null;
         }),
       // 9) APPLY RECENCY per client. Powers the "saved but nothing applied"
       //    alert. Deliberately independent of the date picker: the alert asks
@@ -4197,17 +4226,33 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       computeClientApplyStats({ JobModel })
         .catch((err) => {
           console.error('[client-job-analysis] computeClientApplyStats:', err?.message || err);
-          return new Map();
+          // null for the same reason: an empty Map would read as "nothing applied
+          // today" for every client with a saved column.
+          return null;
         })
     ]);
 
-    // Cache last-applied operator separately with longer TTL (5 min)
+    // Cache last-applied operator separately with a longer TTL than the payload (see LAST_APPLIED_CACHE_TTL)
     if (!cachedLastApplied) {
       setAnalysisCache(lastAppliedKey, lastAppliedAgg, LAST_APPLIED_CACHE_TTL);
       pSetAnalysisCache(lastAppliedKey, lastAppliedAgg, LAST_APPLIED_CACHE_TTL).catch(() => {});
     }
 
-    const appliedMap = new Map(appliedOnDate.map(r => [r.userID, r.count]));
+    // JobModel.userID is free text and is not lowercased on write, while
+    // ClientModel.email is. Keying job-side counts on the raw value split a client
+    // whose jobs sit under "Foo@Gmail.com" into a ghost row carrying the jobs and
+    // a real row showing saved: 0, which hid NOT_APPLIED. Fold on trim+lower, the
+    // same key the add and apply stats already use, and SUM on collision.
+    const normId = (v) => String(v ?? '').trim().toLowerCase();
+    const sumByEmail = (list) => {
+      const m = new Map();
+      for (const r of list || []) {
+        const k = normId(r.userID);
+        if (k) m.set(k, (m.get(k) || 0) + (r.count || 0));
+      }
+      return m;
+    };
+    const appliedMap = sumByEmail(appliedOnDate);
     // email -> { at: Date, days: number } for the client's FIRST application.
     // Days are whole IST calendar days elapsed, floored, so an application made
     // earlier today reads as 0 rather than rounding up to 1.
@@ -4242,7 +4287,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     const firstAppliedMap = new Map();
     let futureRejected = 0;
     for (const r of (firstAppliedAgg || [])) {
-      const email = String(r.userID || '').toLowerCase();
+      const email = normId(r.userID);
       if (!email) continue;
       // Prefer the stamped appliedDate; otherwise use when the job doc itself
       // was created. dateAdded is NOT used as a fallback — it is written in
@@ -4258,22 +4303,28 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       }
       if (!at) continue;
       const days = Math.max(0, Math.floor((nowMs - at.getTime()) / MS_PER_DAY));
-      firstAppliedMap.set(email, { at, days });
+      // Case variants of one email group separately upstream; the earliest wins.
+      const prevFirst = firstAppliedMap.get(email);
+      if (!prevFirst || at.getTime() < prevFirst.at.getTime()) firstAppliedMap.set(email, { at, days });
     }
     console.log(
       `[client-job-analysis] first-apply resolved for ${firstAppliedMap.size}/${(firstAppliedAgg || []).length} client(s)` +
       (futureRejected ? ` — ${futureRejected} had a future appliedDate and fell back to the job's creation time` : '')
     );
-    const removedMap = new Map(removedOnDate.map(r => [r.userID, r.count]));
-    const removedByAiMap = new Map(removedByAiOnDate.map(r => [r.userID, r.count]));
-    const aiRemovedMap = new Map(
-      (aiRemovedAgg || []).map(r => [r.userID, { count: r.count || 0, todayCount: r.todayCount || 0 }])
-    );
+    const removedMap = sumByEmail(removedOnDate);
+    const removedByAiMap = sumByEmail(removedByAiOnDate);
+    const aiRemovedMap = new Map();
+    for (const r of aiRemovedAgg || []) {
+      const k = normId(r.userID);
+      if (!k) continue;
+      const prev = aiRemovedMap.get(k) || { count: 0, todayCount: 0 };
+      aiRemovedMap.set(k, { count: prev.count + (r.count || 0), todayCount: prev.todayCount + (r.todayCount || 0) });
+    }
     // Fold raw {userID,status} groups into per-user bucket counts (JS, cheap).
     const overallMap = new Map();
     for (const g of overall) {
-      const userID = g._id?.userID;
-      if (userID == null) continue;
+      const userID = normId(g._id?.userID);
+      if (!userID) continue;
       const bucket = classifyStatus(g._id?.status);
       let counts = overallMap.get(userID);
       if (!counts) { counts = {}; overallMap.set(userID, counts); }
@@ -4287,7 +4338,7 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     }
     const lastAppliedOperatorMap = new Map(
       lastAppliedAgg.map((r) => [
-        (r.userID || '').toLowerCase(),
+        normId(r.userID),
         resolveLastAppliedOperatorDisplayName(r, { keepUser: true })
       ])
     );
@@ -4378,10 +4429,10 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
       // A client with no add row at all added nothing in seven days, which is
       // the loudest signal on this screen — fall back to a zeroed stat rather
       // than leaving the columns undefined.
-      const addStat = addStats.get(email.toLowerCase()) || emptyAddStat();
+      const addStat = addStats?.get(email.toLowerCase()) || emptyAddStat();
       // No entry means no application in the lookback window at all, which is
       // exactly what the alert needs to know — not an error case.
-      const applyStat = applyStats.get(email.toLowerCase()) || emptyApplyStat();
+      const applyStat = applyStats?.get(email.toLowerCase()) || emptyApplyStat();
       // Mirrors clientFilterActiveUnpaused(), the filter the reminder crons use,
       // so "under target" means the same thing on the screen and in Discord.
       const owesWork = (client.status || '') === 'active'
@@ -4464,7 +4515,11 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
         appliedToday: applyStat.appliedToday,
         daysSinceLastApply: applyStat.daysSinceLastApply,
         lastAppliedYmd: applyStat.lastAppliedYmd,
-        applyLookbackDays: APPLY_LOOKBACK_DAYS
+        applyLookbackDays: APPLY_LOOKBACK_DAYS,
+        // True when the stats query failed and the figures above are zero
+        // placeholders, not data. deriveClientAlerts stays silent on them.
+        addStatsUnavailable: !addStats,
+        applyStatsUnavailable: !applyStats
       };
     });
 
@@ -4503,17 +4558,31 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
     // cache readers below refuse an entry from a different day.
     // payloadVersion stamps the row SHAPE. Without it a deploy that adds a field
     // is invisible to anyone holding a cached entry until the next day boundary.
-    const result = { success: true, date: date || null, istDay, addWindowDay, payloadVersion: ANALYSIS_PAYLOAD_VERSION, rows, summary };
-    setAnalysisCache(cacheKey, result);
-    pSetAnalysisCache(cacheKey, result, ANALYSIS_CACHE_TTL).catch(() => {});
+    const result = { success: true, date: date || null, istDay, addWindowDay, payloadVersion: ANALYSIS_PAYLOAD_VERSION, generatedAt: startedAt.toISOString(), rows, summary };
+    // A payload built while a stats query failed carries zero placeholders. Serve
+    // it once, but never store it: the next request should retry the query instead
+    // of replaying the gap for the whole TTL.
+    if (addStats && applyStats && analysisCacheGeneration() === genAtStart) {
+      setAnalysisCache(cacheKey, result);
+      pSetAnalysisCache(cacheKey, result, ANALYSIS_CACHE_TTL).catch(() => {});
+    }
     return result;
     }; // end computeFull
 
+    // A forced Refresh must never join a compute that a non-forced request
+    // started: that run read the DB (and the last-applied cache) before whatever
+    // the operator just changed, so joining it would hand back pre-edit rows
+    // labelled as live. A forced request starts its own run instead; it takes the
+    // in-flight slot, and a non-forced run finishing later leaves the slot alone.
     const computeWithLock = () => {
-      if (_analysisInFlight.has(cacheKey)) return _analysisInFlight.get(cacheKey);
-      const p = computeFull().finally(() => _analysisInFlight.delete(cacheKey));
-      _analysisInFlight.set(cacheKey, p);
-      return p;
+      const cur = _analysisInFlight.get(cacheKey);
+      if (cur && (!forceFresh || cur.forced)) return cur.p;
+      const slot = { forced: forceFresh };
+      slot.p = computeFull().finally(() => {
+        if (_analysisInFlight.get(cacheKey) === slot) _analysisInFlight.delete(cacheKey);
+      });
+      _analysisInFlight.set(cacheKey, slot);
+      return slot.p;
     };
 
     // L1: in-memory cache (dev / single-instance prod; disabled in multi-instance
@@ -4523,27 +4592,33 @@ app.post('/api/analytics/client-job-analysis', async (req, res) => {
 
     switch (decideAnalysisCacheAction({ forceFresh, memHit, entry, istDay, addWindowDay, payloadVersion: ANALYSIS_PAYLOAD_VERSION })) {
       case 'l1':
-        return serve(memHit, true);
+        return serve(memHit, 'l1');
 
       case 'l2-fresh':
         setAnalysisCache(cacheKey, entry.val); // warm L1 (no-op when memory cache disabled)
-        return serve(entry.val, true);
+        return serve(entry.val, 'l2-fresh');
 
       case 'l2-stale':
         // Stale-while-revalidate: answer instantly, recompute in the background.
-        setAnalysisCache(cacheKey, entry.val);
+        // Deliberately NOT warmed into L1: L1 would give this up-to-60s-old
+        // payload a fresh TTL and serve it past MAX_STALE_MS.
         if (!_analysisInFlight.has(cacheKey)) {
-          computeWithLock().catch((err) =>
+          computeWithLock().then((fresh) => {
+            // This recompute is never passed to serve(), which only notifies on a
+            // compute it answers with, so notify from here.
+            if (fresh && Array.isArray(fresh.rows)) return runHighAppliedJobsNotifications(fresh.rows);
+          }).catch((err) =>
             console.error('[client-job-analysis] background refresh:', err?.message || err)
           );
         }
-        return serve(entry.val, true);
+        return serve(entry.val, 'l2-stale');
 
       default: {
-        // Cold miss, an entry from another IST day, or a forced Refresh of a
-        // stale entry: compute now (deduped across concurrent requests here).
+        // Cold miss, an entry from another IST day, an entry too old to serve
+        // stale (MAX_STALE_MS), or a forced Refresh of a stale entry: compute
+        // now (deduped across concurrent requests here).
         const result = await computeWithLock();
-        return serve(result, false);
+        return serve(result, 'compute');
       }
     }
   } catch (e) {
@@ -6056,6 +6131,10 @@ app.get('/scripts/jobrightsync', async (req, res) => {
 app.get('/scripts/autounpause', async (req, res) => {
   try {
     const summary = await runAutoUnpauseSweep({ trigger: 'manual' });
+    // The sweep flips isPaused/onboardingPhase on clients, which the analysis
+    // rows and the "paused" alert read.
+    clearAnalysisCache();
+    pClearAnalysisCache().catch(() => {});
     res.json({ ok: true, threshold: AUTO_UNPAUSE_MIN_JOB_CARDS, ...summary });
   } catch (e) {
     console.error('[auto-unpause] manual run failed:', e?.message || e);

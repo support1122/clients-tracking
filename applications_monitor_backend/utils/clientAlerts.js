@@ -18,6 +18,8 @@
  * "needs attention" means.
  */
 
+import { DEFAULT_DAILY_TARGET } from './addWindow.js';
+
 /** Alert codes. Stable strings — the UI groups and filters on these. */
 export const ALERT = {
   NO_ADDS: 'no_adds',
@@ -63,11 +65,18 @@ export function deriveClientAlerts(row) {
   if (!owesWork(row)) return alerts;
 
   // ── Nothing added ────────────────────────────────────────────────────────
-  // daysSinceLastAdd is measured in whole 22:00 IST operator windows, so 1 means
-  // "nothing at all in the window that just closed" — the 24-hour question.
+  // daysSinceLastAdd is measured in 22:00 IST operator windows back from the
+  // OPEN one: 0 = something was added in the open window, 1 = the last add was in
+  // the previous window, so the open window is still empty. That means this
+  // fires from 22:00 IST for everyone, until the first add lands, and "N days"
+  // counts the open window as one of the N.
   // null means no job card has EVER been added, which is worse than any number.
+  //
+  // addStatsUnavailable: the add-stats query failed and the route fell back to a
+  // zeroed stat, which reads as "never added" for every client. Stay silent
+  // rather than raise a false critical on the whole book.
   const sinceAdd = row?.daysSinceLastAdd;
-  if (sinceAdd == null || sinceAdd >= 1) {
+  if (!row?.addStatsUnavailable && (sinceAdd == null || sinceAdd >= 1)) {
     const never = sinceAdd == null;
     alerts.push({
       code: ALERT.NO_ADDS,
@@ -81,7 +90,7 @@ export function deriveClientAlerts(row) {
           : `No jobs added for ${sinceAdd} days`,
       detail: never
         ? 'This active client has never had a job card added.'
-        : `Last job card added ${sinceAdd} day${sinceAdd === 1 ? '' : 's'} ago. Target is ${row?.dailyTarget ?? 30}/day.`,
+        : `Last job card added ${sinceAdd} day${sinceAdd === 1 ? '' : 's'} ago. Target is ${row?.dailyTarget ?? DEFAULT_DAILY_TARGET}/day.`,
     });
   }
 
@@ -90,7 +99,8 @@ export function deriveClientAlerts(row) {
   // saved has nothing to apply to, and that is the NO_ADDS problem, not this one.
   const saved = Number(row?.saved || 0);
   const appliedToday = Number(row?.appliedToday || 0);
-  if (saved > 0 && appliedToday === 0) {
+  // applyStatsUnavailable: same failure mode, appliedToday would read 0 for all.
+  if (!row?.applyStatsUnavailable && saved > 0 && appliedToday === 0) {
     const sinceApply = row?.daysSinceLastApply;
     const stale = sinceApply == null || sinceApply >= 2;
     alerts.push({
