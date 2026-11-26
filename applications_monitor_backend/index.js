@@ -549,13 +549,27 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
   const email = (session.client_reference_id || session.customer_details?.email || '').toLowerCase();
   const stripePhone = session.customer_details?.phone || '';
   const stripeName  = session.customer_details?.name  || '';
+  const stripeCountry = session.customer_details?.address?.country || '';
   const metadata = session.metadata || {};
-  const type = metadata.type; // 'upgrade' or 'addon'
-  const planTarget = metadata.plan; // e.g. 'professional', 'executive'
+  const type = metadata.type || 'upgrade';
   const addonApps = metadata.addon; // e.g. '250', '500', '1000'
   const currency = (session.currency || 'usd').toUpperCase();
   const amountPaid = ((session.amount_total || 0) / 100).toFixed(2);
   const currentDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+
+  // Read plan from metadata, or fall back to Stripe line items (e.g. "Prime Plan" → "prime")
+  let planTarget = metadata.plan || null;
+  let lineItemDescription = '';
+  if (!planTarget) {
+    try {
+      const lineItems = await stripe.checkout.sessions.listLineItems(session.id, { limit: 1 });
+      lineItemDescription = lineItems.data?.[0]?.description || '';
+      planTarget = normalisePlanType(lineItemDescription.replace(/\s+plan$/i, '').trim());
+    } catch (e) {
+      console.warn('Stripe webhook: could not fetch line items:', e.message);
+    }
+  }
+  console.log(`💳 Stripe webhook: email=${email} name=${stripeName} plan=${planTarget} type=${type} amount=${currency} ${amountPaid} country=${stripeCountry} lineItem="${lineItemDescription}"`);
 
   if (!email) {
     console.error('Stripe webhook: no email in client_reference_id or customer_details');
